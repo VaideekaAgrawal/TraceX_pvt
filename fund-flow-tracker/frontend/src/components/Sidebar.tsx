@@ -10,6 +10,7 @@ const navItems = [
   { href: "/anomaly", label: "Anomaly Detection", icon: "⚠️" },
   { href: "/rl-queue", label: "RL Adaptive Queue", icon: "🤖" },
   { href: "/patterns", label: "Pattern Detector", icon: "🔄" },
+  { href: "/rules", label: "Rule Engine", icon: "⚙️" },
   { href: "/profile", label: "Profile Analyzer", icon: "👤" },
   { href: "/channels", label: "Channel Analytics", icon: "📡" },
   { href: "/evidence", label: "FIU Evidence", icon: "📋" },

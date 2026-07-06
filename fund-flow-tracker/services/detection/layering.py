@@ -7,7 +7,8 @@ Detection method:
 - Flag chains with high hop count + short time window
 """
 import logging
-from typing import Any, Dict, List
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -20,8 +21,19 @@ logger = logging.getLogger(__name__)
 class LayeringDetector:
     """Detect layering: A→B→C→D with decreasing amounts in short time."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` (used by the Rule Engine's `chain` primitive) overrides
+        individual thresholds without touching the global config singleton —
+        omit it (the default) to get today's exact configured behavior."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            layering_min_hops=p.get("min_hops", base.layering_min_hops),
+            layering_time_window_minutes=p.get("time_window_minutes", base.layering_time_window_minutes),
+            layering_extended_min_hops=p.get("extended_min_hops", base.layering_extended_min_hops),
+            layering_extended_window_minutes=p.get("extended_window_minutes", base.layering_extended_window_minutes),
+            layering_decay_ratio_threshold=p.get("decay_ratio_threshold", 0.5),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame) -> List[DetectionResult]:
         # Pass 1: tight window (same-day / intra-day chains, min 3 hops)
@@ -73,7 +85,7 @@ class LayeringDetector:
             is_extended = (time_span <= self.cfg.layering_extended_window_minutes and
                            len(chain) >= self.cfg.layering_extended_min_hops)
 
-            passes_tight = is_tight and decay_ratio >= 0.5
+            passes_tight = is_tight and decay_ratio >= self.cfg.layering_decay_ratio_threshold
             passes_extended = is_extended  # depth + time window are sufficient signal for STACK
 
             if not (passes_tight or passes_extended):

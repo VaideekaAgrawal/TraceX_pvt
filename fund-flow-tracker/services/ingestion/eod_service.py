@@ -23,6 +23,7 @@ import pandas as pd
 
 from infrastructure.config import config
 from infrastructure.database import get_database, compute_file_hash, DB_BACKEND, NEO4J_URI
+from services.ingestion.service import IngestionService
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,12 @@ _SMALL_BATCH_ROW_CAP = 300
 
 
 def _make_alert_id(account_id: str, pattern: str, date_str: str) -> str:
-    """Deterministic alert ID — same account+pattern+date always produces same ID."""
-    content_key = f"{account_id}-{pattern}-{date_str}"
-    return f"ALT-{hashlib.sha256(content_key.encode()).hexdigest()[:12].upper()}"
+    """Deterministic alert ID for a single-account alert — see
+    make_deterministic_alert_id for the shared multi-account scheme both
+    this (realtime lightweight) path and the full pipeline path write into
+    the same `alerts` table with."""
+    from services.common.models import make_deterministic_alert_id
+    return make_deterministic_alert_id([account_id], pattern, date_str)
 
 
 class EODIngestionService:
@@ -63,6 +67,7 @@ class EODIngestionService:
 
     def __init__(self):
         self._db = None
+        self._ingestion_svc = IngestionService()
         # Tracks alert_ids already raised in this process, so re-detecting the same
         # (account, pattern, date) — which is expected as more incremental evidence
         # streams in — refreshes the existing alert instead of being reported/
@@ -144,15 +149,19 @@ class EODIngestionService:
         self._persist_data(txns_df, accounts_df, date)
         logger.info("└─ Step 4: ✅ Data persisted")
 
-        # 7. Incremental analysis
-        logger.info("┌─ Step 5: Running incremental analysis...")
-        analysis_results = self._run_incremental_analysis(
-            txns_df, new_accounts, existing_accounts, date
-        )
-        logger.info("└─ Step 5: ✅ Analysis complete — %d alerts generated",
-                    analysis_results.get("alerts_generated", 0))
-
-        # 8. Record ingestion
+        # 7. Record ingestion. Detection itself does NOT happen here — the
+        # caller (api/server.py's /api/ingest routes) runs the full
+        # pipeline once over the cumulative DB dataset after this returns
+        # (via AnalysisPipeline.run_from_db()). This used to also call
+        # _run_incremental_analysis() here, running the 7 lightweight
+        # inline detectors over just this file, followed immediately by a
+        # second, full 6-detector+ML pass over the whole DB — duplicated
+        # work whose deterministic alert IDs silently overwrote each
+        # other. _run_incremental_analysis() (and the lightweight
+        # detectors it calls) is NOT dead code: ingest_transaction_rows()
+        # below still uses it for the real-time streaming demo, which
+        # needs a genuinely fast per-row path rather than the full
+        # pipeline. It must stay reachable only from that path.
         self.db.record_ingestion(
             file_hash=file_hash,
             filename=os.path.basename(filepath),
@@ -171,15 +180,13 @@ class EODIngestionService:
             "total_accounts": len(accounts_df),
             "new_accounts": len(new_accounts),
             "existing_accounts": len(existing_accounts),
-            "alerts_generated": analysis_results.get("alerts_generated", 0),
-            "patterns_detected": analysis_results.get("patterns_detected", {}),
             "processing_time_sec": round(elapsed, 2),
         }
 
         logger.info("=" * 60)
         logger.info("EOD INGESTION COMPLETE — %.1fs", elapsed)
-        logger.info("  Transactions: %d | New accounts: %d | Alerts: %d",
-                    len(txns_df), len(new_accounts), analysis_results.get("alerts_generated", 0))
+        logger.info("  Transactions: %d | New accounts: %d — detection runs next via AnalysisPipeline",
+                    len(txns_df), len(new_accounts))
         logger.info("=" * 60)
 
         return summary
@@ -397,38 +404,14 @@ class EODIngestionService:
         return new_accounts, existing_accounts
 
     def _persist_data(self, txns_df: pd.DataFrame, accounts_df: pd.DataFrame, date: str):
-        """Store transactions and accounts in database."""
-        # Store accounts
-        account_dicts = accounts_df.to_dict("records")
-        self.db.upsert_accounts(account_dicts)
-
-        # Store transactions
-        txn_dicts = []
-        for _, row in txns_df.iterrows():
-            txn_dicts.append({
-                "txn_id": row["txn_id"],
-                "timestamp": str(row["timestamp"]),
-                "source_account": row["source_account"],
-                "dest_account": row["dest_account"],
-                "amount": float(row["amount"]),
-                "channel": row.get("channel", "unknown"),
-                "txn_type": row.get("txn_type", "transfer"),
-                "is_laundering": int(row.get("is_laundering", 0)),
-                "ingestion_date": date,
-            })
-
-        # Batch insert
-        batch_size = 5000
-        total_inserted = 0
-        for i in range(0, len(txn_dicts), batch_size):
-            batch = txn_dicts[i:i + batch_size]
-            inserted = self.db.insert_transactions(batch)
-            total_inserted += inserted
-            if (i // batch_size) % 10 == 0:
-                logger.info("  Persisted %d/%d transactions...", total_inserted, len(txn_dicts))
-
+        """Store transactions and accounts in database (delegates to the shared
+        IngestionService.persist_to_db so every ingestion path — init/upload/EOD —
+        writes through the same code)."""
+        txns_df = txns_df.copy()
+        txns_df["ingestion_date"] = date
+        result = self._ingestion_svc.persist_to_db(accounts_df, txns_df, ingestion_date=date)
         logger.info("  Total persisted: %d transactions, %d accounts",
-                    total_inserted, len(account_dicts))
+                    result["transactions_persisted"], result["accounts_persisted"])
 
     def _run_incremental_analysis(
         self,
@@ -545,6 +528,10 @@ class EODIngestionService:
         new_alerts = []
         for alert_info in alert_list:
             alert_id = alert_info.get("alert_id")
+            # Tag distinctly from the full-pipeline path (AnalysisPipeline /
+            # CaseManager) so it's always clear which detector produced a
+            # given alert row, even though both write into the same table.
+            alert_info.setdefault("source", "realtime_lightweight")
             self.db.upsert_alert(alert_info)
             if alert_id and alert_id not in self._raised_alert_ids:
                 self._raised_alert_ids.add(alert_id)

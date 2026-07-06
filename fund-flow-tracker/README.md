@@ -34,7 +34,11 @@ npm run dev          # http://localhost:3000
 ```
 
 ### Test Data
-`data/tracex_test_day1.csv` (8,000 transactions, 312 accounts) ships in the repo — upload it via `/ingest` to try the system immediately.
+The backend auto-seeds a small curated dataset on first run if the database is empty
+(covers every detection rule plus a structuring control case) — the dashboard won't be
+blank on a fresh install. For a larger demo, `data/tracex_test_day1.csv` (8,000
+transactions, 312 accounts) ships in the repo — upload it via `/ingest` to layer on
+more data.
 
 To generate the incremental/demo variants (not tracked in git):
 ```bash
@@ -67,11 +71,15 @@ Everything else works without this.
 │  /api/init │ /api/graph │ /api/anomaly │ /api/patterns │ /api/ingest │
 │  /api/dashboard/live │ /api/explain │ /api/realtime (SSE)             │
 ├─────────────────────────────────────────────────────────────────────┤
+│         Orchestration (AnalysisPipeline: persist → graph → detect →  │
+│                         alert, one path for every ingestion route)   │
+├─────────────────────────────────────────────────────────────────────┤
 │                    Microservice Layer                                 │
-│  Ingestion │ Graph (NetworkX) │ Detection (5 detectors + ML) │ Inv.  │
+│  Ingestion │ Graph (NetworkX) │ Detection (Rule Engine + ML) │ Inv.  │
 ├─────────────────────────────────────────────────────────────────────┤
 │                    Infrastructure                                     │
-│  Event Bus │ Health Monitor │ Config │ SQLite DB                      │
+│  Event Bus │ Health Monitor │ Config │ SQLite DB (always-on, the     │
+│  single source of truth — survives restarts, auto-seeds if empty)    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -79,14 +87,22 @@ Everything else works without this.
 
 ## Features
 
-### 5 Fraud Detectors
-| Detector | What It Finds |
+### Detection — Rule Engine (DB-backed, no code deploy to edit)
+Every pattern below is a **rule** in the `/rules` UI, not a hardcoded detector — edit
+any threshold (e.g. round-trip's 85% return ratio) or compose new patterns from
+primitives with AND/OR, and it takes effect on the next refresh/ingest.
+
+| Rule | What It Finds |
 |----------|--------------|
 | **Layering** | Multi-hop chains (A→B→C→D) with amount decay |
-| **Round-Trip** | Circular flows (A→B→A) with ≥85% amount return |
-| **Structuring** | Amounts just below ₹10L CTR threshold |
+| **Round-Trip** | Circular flows (A→B→A) with a configurable amount-return ratio |
+| **Structuring** (2 rules) | Amounts just below ₹10L CTR threshold — classic + split-daily-total |
 | **Dormancy** | Accounts inactive 6+ months, suddenly active |
-| **Profile Mismatch** | Income vs. actual volume anomalies |
+| **Profile Mismatch** (3 rules) | Income vs. volume ratio, peer-group z-score deviation, sudden behavioural shift |
+| **Fan-Out / Fan-In / Bipartite** | Hub-and-spoke dispersal, consolidation, and scatter-gather structures |
+
+Plus a `generic_group_aggregate` primitive as an escape hatch for ad-hoc new rules
+(group-by-account aggregation over a threshold) with no new Python at all.
 
 ### ML Pipeline
 - **Isolation Forest** — unsupervised anomaly detection (no labels needed)
@@ -109,6 +125,16 @@ Everything else works without this.
 - **FIU-IND Evidence Packs** — one-click STR report (PDF + JSON)
 - **Case Management** — create/track/escalate investigations, status workflow
 - **Investigation Priority Queue** — P1-P4 ranking
+
+### Persistence & Operations
+- **Always-on SQLite** — every ingestion path (init/upload/EOD) persists to the DB; a
+  server restart or browser refresh rebuilds in-memory state from it automatically
+- **Auto-seed on first run** — a fresh install seeds a small curated dataset covering
+  every rule (plus a structuring control case) instead of starting blank
+- **Today's Activity** — the dashboard distinguishes patterns flagged for the first
+  time today from ones still active/re-detected, backed by a per-day run summary
+- **Single detection run per EOD ingest** — the full rule set runs once over the
+  cumulative dataset per ingest, not a lightweight pass followed by a duplicate full pass
 
 ---
 
@@ -142,8 +168,14 @@ Everything else works without this.
 | `/api/realtime/start` / `/api/realtime/stream` | POST / GET (SSE) | Real-time detection demo |
 | `/api/transactions/filtered` | GET | Filtered, paginated transactions |
 | `/api/evidence/generate` | POST | Generate FIU STR report |
+| `/api/daily-summary` | GET | New-vs-reactivated alerts as of the latest pipeline run |
+| `/api/rules` | GET/POST | List / create detection rules |
+| `/api/rules/{id}` | GET/PUT/DELETE | Get / edit / delete a rule (built-ins can't be deleted) |
+| `/api/rules/{id}/enable` / `/disable` | POST | Toggle a rule |
+| `/api/rules/primitives` | GET | Primitive catalog + param schemas (drives the `/rules` UI) |
+| `/api/rules/dry-run` | POST | Preview a draft rule's impact with no side effects |
 
-*(45+ endpoints total — see `api/server.py` for the full list.)*
+*(50+ endpoints total — see `api/server.py` for the full list.)*
 
 ---
 
@@ -154,28 +186,30 @@ fund-flow-tracker/
 ├── api/
 │   └── server.py             # FastAPI server (all endpoints)
 ├── services/
-│   ├── ingestion/             # Data parsing (IBM AML, CSV, EOD)
-│   ├── graph/                 # NetworkX graph engine
-│   ├── detection/             # 5 detectors + ensemble ML
-│   ├── investigation/         # Cases, alerts, evidence
-│   ├── monitoring/            # System metrics
-│   ├── validation/            # Data contracts
-│   └── common/                # Shared models & constants
+│   ├── pipeline/               # AnalysisPipeline — persist → graph → detect → alert
+│   ├── ingestion/              # Data parsing (IBM AML, CSV, EOD)
+│   ├── graph/                  # NetworkX graph engine
+│   ├── detection/              # Detectors + Rule Engine (rule_engine.py) + ensemble ML
+│   ├── investigation/          # Cases, alerts (DB-backed), evidence, RL queue
+│   ├── monitoring/             # System metrics
+│   ├── validation/             # Data contracts + rule_validator.py
+│   └── common/                 # Shared models & constants
 ├── infrastructure/
-│   ├── config.py              # System configuration
-│   ├── database.py            # SQLite adapter
-│   ├── event_bus.py           # Pub/sub event bus
-│   └── health.py              # Health checkpoints
+│   ├── config.py               # System configuration (legacy defaults; rules now DB-backed)
+│   ├── database.py             # SQLite adapter (accounts/txns/alerts/rules/daily summaries)
+│   ├── event_bus.py            # Pub/sub event bus
+│   └── health.py                # Health checkpoints
 ├── frontend/
 │   └── src/
-│       ├── app/               # Next.js pages (dashboard, graph, etc.)
-│       ├── components/        # UI components (CytoscapeGraph, etc.)
-│       └── lib/               # API client, utilities
+│       ├── app/                # Next.js pages (dashboard, graph, rules, etc.)
+│       ├── components/         # UI components (CytoscapeGraph, etc.)
+│       └── lib/                # API client, utilities
 ├── scripts/
-│   ├── generate_test_pair.py  # Generate Day1 + Day2 test CSVs
-│   ├── download_data.py       # Download IBM AML dataset
-│   ├── ingest_eod.py          # CLI ingestion tool
-│   └── init_system.py         # Initialize system from CLI
+│   ├── seed_demo_data.py       # Small curated seed dataset (auto-run if DB is empty)
+│   ├── generate_test_pair.py   # Generate Day1 + Day2 test CSVs
+│   ├── download_data.py        # Download IBM AML dataset
+│   ├── ingest_eod.py           # CLI ingestion tool
+│   └── init_system.py          # Initialize system from CLI
 ├── data/                      # tracex_test_day1.csv tracked; other CSVs gitignored (regenerate locally)
 ├── tests/                     # Pytest test suite
 ├── utils/                     # Domain constants

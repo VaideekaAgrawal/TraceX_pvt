@@ -9,7 +9,8 @@ Detection method:
 - Also: income-vs-volume ratio check and peer group comparison
 """
 import logging
-from typing import Dict, List
+from types import SimpleNamespace
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -24,8 +25,23 @@ logger = logging.getLogger(__name__)
 class ProfileMismatchDetector:
     """Detect accounts whose behaviour doesn't match their declared profile."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` overrides individual thresholds without touching the
+        global config singleton — omit it (the default) to get today's
+        exact configured behavior. Used by the Rule Engine's
+        `volume_vs_declared_income_ratio`, `peer_zscore_deviation`, and
+        `behavioural_shift` primitives, which each map to one of this
+        detector's three internal checks."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            profile_mismatch_z_threshold=p.get("z_threshold", base.profile_mismatch_z_threshold),
+            income_mismatch_ratio_threshold=p.get("ratio_threshold", 10),
+            peer_min_group_size=p.get("min_peer_group_size", 5),
+            behavioural_shift_z_threshold=p.get("shift_z_threshold", 3),
+            behavioural_shift_min_txn_count=p.get("min_txn_count", 15),
+            behavioural_shift_rolling_window=p.get("rolling_window", 20),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame,
                accounts_df: pd.DataFrame) -> List[DetectionResult]:
@@ -57,7 +73,7 @@ class ProfileMismatchDetector:
         accs = accs.join(vol, how="left")
         accs["volume"] = accs["volume"].fillna(0)
         accs["ratio"] = accs["volume"] / accs["declared_annual_income"].clip(lower=1)
-        flagged = accs[accs["ratio"] > 10]
+        flagged = accs[accs["ratio"] > self.cfg.income_mismatch_ratio_threshold]
 
         for acc_id, row in flagged.iterrows():
             ratio = float(row["ratio"])
@@ -106,7 +122,7 @@ class ProfileMismatchDetector:
         peer_stats = accs.groupby(["occupation", "income_bracket"])["volume"].agg(
             mean="mean", std="std", count="count"
         ).reset_index()
-        peer_stats = peer_stats[peer_stats["count"] >= 5]
+        peer_stats = peer_stats[peer_stats["count"] >= self.cfg.peer_min_group_size]
 
         accs = accs.reset_index().merge(peer_stats, on=["occupation", "income_bracket"], how="inner")
         accs["z_score"] = (accs["volume"] - accs["mean"]) / accs["std"].clip(lower=1)
@@ -153,24 +169,25 @@ class ProfileMismatchDetector:
         acc_txns = pd.concat([src, dst], ignore_index=True)
         acc_txns = acc_txns.sort_values(["account_id", "timestamp"]).reset_index(drop=True)
 
-        # Only keep accounts with ≥15 transactions
+        # Only keep accounts with enough transactions for a meaningful rolling baseline
         counts = acc_txns.groupby("account_id").size()
-        valid = counts[counts >= 15].index
+        valid = counts[counts >= self.cfg.behavioural_shift_min_txn_count].index
         acc_txns = acc_txns[acc_txns["account_id"].isin(valid)].copy()
 
         # Vectorised rolling z-score per account
+        window = self.cfg.behavioural_shift_rolling_window
         acc_txns["rolling_mean"] = (
             acc_txns.groupby("account_id")["amount"]
-            .transform(lambda x: x.rolling(window=20, min_periods=5).mean())
+            .transform(lambda x: x.rolling(window=window, min_periods=5).mean())
         )
         acc_txns["rolling_std"] = (
             acc_txns.groupby("account_id")["amount"]
-            .transform(lambda x: x.rolling(window=20, min_periods=5).std().clip(lower=1))
+            .transform(lambda x: x.rolling(window=window, min_periods=5).std().clip(lower=1))
         )
         acc_txns["z_score"] = (acc_txns["amount"] - acc_txns["rolling_mean"]) / acc_txns["rolling_std"]
 
         # Pick most anomalous spike per account (highest z_score, not earliest)
-        spikes = acc_txns[acc_txns["z_score"] > 3]
+        spikes = acc_txns[acc_txns["z_score"] > self.cfg.behavioural_shift_z_threshold]
         first_spikes = (
             spikes.sort_values("z_score", ascending=False)
                   .groupby("account_id")

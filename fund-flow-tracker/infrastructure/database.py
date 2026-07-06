@@ -78,6 +78,12 @@ class DatabaseAdapter:
                    limit: int = 100, offset: int = 0) -> List[Dict]:
         raise NotImplementedError
 
+    def get_alert(self, alert_id: str) -> Optional[Dict]:
+        raise NotImplementedError
+
+    def close_stale_alerts(self, active_ids: List[str]) -> List[str]:
+        raise NotImplementedError
+
     # ── Ingestion metadata ──
     def record_ingestion(self, file_hash: str, filename: str, date: str,
                          num_transactions: int, num_accounts: int) -> None:
@@ -118,6 +124,35 @@ class DatabaseAdapter:
         raise NotImplementedError
 
     def update_case_status(self, case_id: str, status: str, notes: str) -> Optional[Dict]:
+        raise NotImplementedError
+
+    # ── Daily run summary ──
+    def record_daily_run_summary(self, summary: Dict) -> None:
+        raise NotImplementedError
+
+    def get_daily_run_summary(self, run_date: Optional[str] = None) -> Optional[Dict]:
+        raise NotImplementedError
+
+    def get_recent_run_summaries(self, limit: int = 14) -> List[Dict]:
+        raise NotImplementedError
+
+    # ── Detection rules ──
+    def list_rules(self, enabled_only: bool = False) -> List[Dict]:
+        raise NotImplementedError
+
+    def get_rule(self, rule_id: str) -> Optional[Dict]:
+        raise NotImplementedError
+
+    def create_rule(self, rule: Dict) -> Dict:
+        raise NotImplementedError
+
+    def update_rule(self, rule_id: str, updates: Dict) -> Optional[Dict]:
+        raise NotImplementedError
+
+    def delete_rule(self, rule_id: str) -> bool:
+        raise NotImplementedError
+
+    def set_rule_enabled(self, rule_id: str, enabled: bool) -> Optional[Dict]:
         raise NotImplementedError
 
 
@@ -183,7 +218,15 @@ class SQLiteAdapter(DatabaseAdapter):
                     pattern_type TEXT,
                     status TEXT DEFAULT 'open',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    account_ids TEXT DEFAULT '[]',
+                    detected_at TEXT,
+                    last_seen_at TEXT,
+                    severity TEXT DEFAULT 'MEDIUM',
+                    details_json TEXT DEFAULT '',
+                    source TEXT DEFAULT 'pipeline',
+                    assigned_to TEXT DEFAULT '',
+                    notes TEXT DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS ingestion_log (
@@ -223,9 +266,151 @@ class SQLiteAdapter(DatabaseAdapter):
 
                 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
                 CREATE INDEX IF NOT EXISTS idx_cases_created_at ON cases(created_at);
+
+                CREATE TABLE IF NOT EXISTS daily_run_summary (
+                    run_date TEXT PRIMARY KEY,
+                    run_at TEXT NOT NULL,
+                    new_alert_ids TEXT NOT NULL,
+                    reactivated_alert_ids TEXT NOT NULL,
+                    stale_alert_ids TEXT NOT NULL,
+                    total_accounts_flagged INTEGER DEFAULT 0,
+                    total_alerts_open INTEGER DEFAULT 0,
+                    accounts_ingested INTEGER DEFAULT 0,
+                    transactions_ingested INTEGER DEFAULT 0,
+                    pipeline_summary_json TEXT DEFAULT ''
+                );
+
+                CREATE TABLE IF NOT EXISTS detection_rules (
+                    rule_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    detection_type TEXT NOT NULL,
+                    severity TEXT DEFAULT 'MEDIUM',
+                    rule_json TEXT NOT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    is_builtin INTEGER DEFAULT 0,
+                    version INTEGER DEFAULT 1,
+                    created_by TEXT DEFAULT 'system',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS detection_rule_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    rule_json TEXT NOT NULL,
+                    changed_by TEXT DEFAULT '',
+                    changed_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_rules_enabled ON detection_rules(enabled);
+                CREATE INDEX IF NOT EXISTS idx_rule_history_rule_id ON detection_rule_history(rule_id);
             """)
             conn.commit()
+            self._migrate_alerts_table(conn)
+            self._seed_builtin_rules_if_missing(conn)
         logger.info("SQLite database initialized at %s", self.db_path)
+
+    def _seed_builtin_rules_if_missing(self, conn):
+        """One-time, idempotent seed of the built-in detection rules — one
+        per existing detector sub-check, with rule_json params equal to
+        today's exact config defaults (or, for thresholds that were
+        previously hardcoded literals rather than config fields, today's
+        exact literal value). Behavior is byte-identical to the pre-Rule-
+        Engine hardcoded detectors until someone edits a rule. Uses
+        INSERT OR IGNORE on rule_id so re-running is always safe."""
+        from infrastructure.config import config as _cfg
+        import json as _json
+
+        d = _cfg.detection
+        builtin = [
+            ("builtin_round_trip", "Round-Trip Circular Flow", "round_trip", "HIGH",
+             "cycle", {"max_length": d.round_trip_max_cycle_length, "max_cycles": d.round_trip_max_cycles,
+                       "min_return_ratio": d.round_trip_amount_return_ratio}),
+            ("builtin_layering", "Multi-Hop Layering Chain", "layering", "HIGH",
+             "chain", {"min_hops": d.layering_min_hops, "time_window_minutes": d.layering_time_window_minutes,
+                       "extended_min_hops": d.layering_extended_min_hops,
+                       "extended_window_minutes": d.layering_extended_window_minutes,
+                       "decay_ratio_threshold": 0.5}),
+            ("builtin_structuring_classic", "Structuring — Near-Threshold Amounts", "structuring", "HIGH",
+             "amount_band_count", {"lower": d.structuring_lower, "upper": d.ctr_threshold,
+                                    "min_count": d.structuring_min_count, "window_days": 30}),
+            ("builtin_structuring_split", "Structuring — Split Daily Total", "structuring", "HIGH",
+             "split_sum_threshold", {"lower": d.structuring_lower, "upper": d.ctr_threshold, "min_count": 2}),
+            ("builtin_dormancy", "Dormant Account Reactivation", "dormancy", "MEDIUM",
+             "inactivity_then_burst", {"threshold_days": d.dormancy_threshold_days,
+                                       "min_burst_txns": d.dormancy_burst_min_txns,
+                                       "multiplier": d.dormancy_multiplier}),
+            ("builtin_fan_out", "Fan-Out Dispersal", "fan_out", "MEDIUM",
+             "fan_degree", {"direction": "fan_out", "min_degree": d.fan_out_min_degree,
+                            "window_days": d.fan_out_time_window_days}),
+            ("builtin_fan_in", "Fan-In Consolidation", "fan_in", "MEDIUM",
+             "fan_degree", {"direction": "fan_in", "min_degree": d.fan_out_min_degree,
+                            "window_days": d.fan_out_time_window_days}),
+            ("builtin_bipartite", "Bipartite Scatter-Gather", "fan_out", "MEDIUM",
+             "bipartite_scatter_gather", {"min_side": 3, "window_days": d.fan_out_time_window_days}),
+            ("builtin_income_mismatch", "Income vs. Volume Mismatch", "profile_mismatch", "MEDIUM",
+             "volume_vs_declared_income_ratio", {"ratio_threshold": 10}),
+            ("builtin_peer_deviation", "Peer Group Volume Deviation", "profile_mismatch", "MEDIUM",
+             "peer_zscore_deviation", {"z_threshold": d.profile_mismatch_z_threshold, "min_peer_group_size": 5}),
+            ("builtin_behavioural_shift", "Sudden Behavioural Shift", "profile_mismatch", "MEDIUM",
+             "behavioural_shift", {"shift_z_threshold": 3, "min_txn_count": 15, "rolling_window": 20}),
+        ]
+
+        for rule_id, name, det_type, severity, primitive, params in builtin:
+            rule_json = _json.dumps({
+                "combinator": "AND",
+                "conditions": [{"primitive": primitive, "params": params, "negate": False}],
+            })
+            conn.execute("""
+                INSERT OR IGNORE INTO detection_rules
+                    (rule_id, name, description, detection_type, severity, rule_json,
+                     enabled, is_builtin, version, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 1, 1, 'system')
+            """, (rule_id, name, f"Built-in rule mirroring the original {det_type} detector.",
+                  det_type, severity, rule_json))
+        conn.commit()
+
+    def _migrate_alerts_table(self, conn):
+        """Additive-only migration for DBs created before the unified alert
+        store (Phase 2): adds the columns needed to make SQLite the single
+        source of truth for alerts, without ever dropping/recreating the
+        table (safe to run against an already-populated tracex.db)."""
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(alerts)").fetchall()}
+        is_first_migration = "account_ids" not in existing_cols
+        new_columns = {
+            "account_ids": "TEXT DEFAULT '[]'",
+            "detected_at": "TEXT",
+            "last_seen_at": "TEXT",
+            "severity": "TEXT DEFAULT 'MEDIUM'",
+            "details_json": "TEXT DEFAULT ''",
+            "source": "TEXT DEFAULT 'pipeline'",
+            "assigned_to": "TEXT DEFAULT ''",
+            "notes": "TEXT DEFAULT ''",
+        }
+        for col, ddl in new_columns.items():
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE alerts ADD COLUMN {col} {ddl}")
+        conn.commit()
+
+        if is_first_migration:
+            # Backfill legacy rows so they don't silently lose their account
+            # linkage/creation time — ALTER TABLE ADD COLUMN only applies the
+            # DEFAULT going forward, existing rows would otherwise end up
+            # with account_ids='[]' and detected_at=NULL despite having a
+            # perfectly good account_id/created_at already on the row.
+            rows = conn.execute(
+                "SELECT alert_id, account_id, created_at FROM alerts WHERE account_ids = '[]' OR account_ids IS NULL"
+            ).fetchall()
+            for row in rows:
+                if not row["account_id"]:
+                    continue
+                conn.execute(
+                    "UPDATE alerts SET account_ids = ?, detected_at = ?, last_seen_at = ? WHERE alert_id = ?",
+                    (json.dumps([row["account_id"]]), row["created_at"], row["created_at"], row["alert_id"]),
+                )
+            conn.commit()
 
     def close(self):
         pass  # connections are created and closed per-request in _get_conn
@@ -326,23 +511,53 @@ class SQLiteAdapter(DatabaseAdapter):
 
     # ── Alerts ──
     def upsert_alert(self, alert: Dict) -> None:
+        """Insert or refresh an alert. `account_ids` (list) is the canonical
+        field; single-account callers (the realtime lightweight detectors)
+        may pass `account_id` instead and it's normalised to a 1-item list.
+        `detected_at` is set only on first insert and never overwritten, so
+        it reliably answers "when was this first flagged" across repeated
+        upserts of the same alert_id — `last_seen_at` tracks "still active,
+        seen again" instead."""
+        account_ids = alert.get("account_ids") or ([alert["account_id"]] if alert.get("account_id") else [])
+        account_id = account_ids[0] if account_ids else alert.get("account_id", "")
+        now = datetime.now().isoformat()
         with self._get_conn() as conn:
             conn.execute("""
-                INSERT INTO alerts (alert_id, account_id, risk_score, risk_level, pattern_type, status)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO alerts (alert_id, account_id, account_ids, risk_score, risk_level,
+                                     pattern_type, status, severity, details_json, source,
+                                     detected_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(alert_id) DO UPDATE SET
                     risk_score = excluded.risk_score,
                     risk_level = excluded.risk_level,
+                    severity = excluded.severity,
+                    details_json = excluded.details_json,
+                    status = excluded.status,
+                    last_seen_at = excluded.last_seen_at,
                     updated_at = CURRENT_TIMESTAMP
             """, (
                 alert.get("alert_id", ""),
-                alert.get("account_id", ""),
+                account_id,
+                json.dumps(account_ids),
                 alert.get("risk_score", 0),
                 alert.get("risk_level", "LOW"),
                 alert.get("pattern_type", ""),
                 alert.get("status", "open"),
+                alert.get("severity", "MEDIUM"),
+                alert.get("details_json", ""),
+                alert.get("source", "pipeline"),
+                now,
+                now,
             ))
             conn.commit()
+
+    def _deserialize_alert(self, row: sqlite3.Row) -> Dict:
+        d = dict(row)
+        try:
+            d["account_ids"] = json.loads(d.get("account_ids") or "[]")
+        except (TypeError, ValueError):
+            d["account_ids"] = [d["account_id"]] if d.get("account_id") else []
+        return d
 
     def get_alerts(self, status: Optional[str] = None, risk_level: Optional[str] = None,
                    limit: int = 100, offset: int = 0) -> List[Dict]:
@@ -358,7 +573,30 @@ class SQLiteAdapter(DatabaseAdapter):
             query += " ORDER BY risk_score DESC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
             rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
+            return [self._deserialize_alert(r) for r in rows]
+
+    def get_alert(self, alert_id: str) -> Optional[Dict]:
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM alerts WHERE alert_id = ?", (alert_id,)).fetchone()
+            return self._deserialize_alert(row) if row else None
+
+    def close_stale_alerts(self, active_ids: List[str]) -> List[str]:
+        """Mark any currently-open alert whose id isn't in `active_ids` as
+        'stale' (its underlying pattern no longer re-detected on the latest
+        run). Returns the alert_ids that changed."""
+        with self._get_conn() as conn:
+            open_rows = conn.execute(
+                "SELECT alert_id FROM alerts WHERE status = 'open'"
+            ).fetchall()
+            active_set = set(active_ids)
+            to_close = [r["alert_id"] for r in open_rows if r["alert_id"] not in active_set]
+            for alert_id in to_close:
+                conn.execute(
+                    "UPDATE alerts SET status = 'stale', updated_at = CURRENT_TIMESTAMP WHERE alert_id = ?",
+                    (alert_id,),
+                )
+            conn.commit()
+            return to_close
 
     # ── Ingestion metadata ──
     def record_ingestion(self, file_hash: str, filename: str, date: str,
@@ -557,6 +795,157 @@ class SQLiteAdapter(DatabaseAdapter):
             conn.commit()
         return self.get_case(case_id)
 
+    # ── Daily run summary ──
+
+    def record_daily_run_summary(self, summary: Dict) -> None:
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO daily_run_summary
+                    (run_date, run_at, new_alert_ids, reactivated_alert_ids, stale_alert_ids,
+                     total_accounts_flagged, total_alerts_open, accounts_ingested,
+                     transactions_ingested, pipeline_summary_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_date) DO UPDATE SET
+                    run_at = excluded.run_at,
+                    new_alert_ids = excluded.new_alert_ids,
+                    reactivated_alert_ids = excluded.reactivated_alert_ids,
+                    stale_alert_ids = excluded.stale_alert_ids,
+                    total_accounts_flagged = excluded.total_accounts_flagged,
+                    total_alerts_open = excluded.total_alerts_open,
+                    accounts_ingested = excluded.accounts_ingested,
+                    transactions_ingested = excluded.transactions_ingested,
+                    pipeline_summary_json = excluded.pipeline_summary_json
+            """, (
+                summary["run_date"],
+                summary.get("run_at", datetime.now().isoformat()),
+                json.dumps(summary.get("new_alert_ids", [])),
+                json.dumps(summary.get("reactivated_alert_ids", [])),
+                json.dumps(summary.get("stale_alert_ids", [])),
+                summary.get("total_accounts_flagged", 0),
+                summary.get("total_alerts_open", 0),
+                summary.get("accounts_ingested", 0),
+                summary.get("transactions_ingested", 0),
+                json.dumps(summary.get("pipeline_summary", {}), default=str),
+            ))
+            conn.commit()
+
+    def _deserialize_run_summary(self, row: sqlite3.Row) -> Dict:
+        d = dict(row)
+        for key in ("new_alert_ids", "reactivated_alert_ids", "stale_alert_ids"):
+            try:
+                d[key] = json.loads(d.get(key) or "[]")
+            except (TypeError, ValueError):
+                d[key] = []
+        try:
+            d["pipeline_summary"] = json.loads(d.pop("pipeline_summary_json", "") or "{}")
+        except (TypeError, ValueError):
+            d["pipeline_summary"] = {}
+        return d
+
+    def get_daily_run_summary(self, run_date: Optional[str] = None) -> Optional[Dict]:
+        run_date = run_date or datetime.now().strftime("%Y-%m-%d")
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM daily_run_summary WHERE run_date = ?", (run_date,)
+            ).fetchone()
+            return self._deserialize_run_summary(row) if row else None
+
+    def get_recent_run_summaries(self, limit: int = 14) -> List[Dict]:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM daily_run_summary ORDER BY run_date DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [self._deserialize_run_summary(r) for r in rows]
+
+    # ── Detection rules ──
+
+    @staticmethod
+    def _deserialize_rule(row: sqlite3.Row) -> Dict:
+        d = dict(row)
+        try:
+            d["rule_json"] = json.loads(d["rule_json"])
+        except (TypeError, ValueError):
+            d["rule_json"] = {"combinator": "AND", "conditions": []}
+        d["enabled"] = bool(d["enabled"])
+        d["is_builtin"] = bool(d["is_builtin"])
+        return d
+
+    def list_rules(self, enabled_only: bool = False) -> List[Dict]:
+        query = "SELECT * FROM detection_rules"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        query += " ORDER BY is_builtin DESC, name"
+        with self._get_conn() as conn:
+            rows = conn.execute(query).fetchall()
+            return [self._deserialize_rule(r) for r in rows]
+
+    def get_rule(self, rule_id: str) -> Optional[Dict]:
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM detection_rules WHERE rule_id = ?", (rule_id,)).fetchone()
+            return self._deserialize_rule(row) if row else None
+
+    def create_rule(self, rule: Dict) -> Dict:
+        now = datetime.now().isoformat()
+        rule_json = json.dumps(rule["rule_json"])
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO detection_rules
+                    (rule_id, name, description, detection_type, severity, rule_json,
+                     enabled, is_builtin, version, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+            """, (
+                rule["rule_id"], rule["name"], rule.get("description", ""), rule["detection_type"],
+                rule.get("severity", "MEDIUM"), rule_json,
+                int(rule.get("enabled", True)), rule.get("created_by", "user"), now, now,
+            ))
+            conn.execute("""
+                INSERT INTO detection_rule_history (rule_id, version, rule_json, changed_by)
+                VALUES (?, 1, ?, ?)
+            """, (rule["rule_id"], rule_json, rule.get("created_by", "user")))
+            conn.commit()
+        return self.get_rule(rule["rule_id"])
+
+    def update_rule(self, rule_id: str, updates: Dict) -> Optional[Dict]:
+        existing = self.get_rule(rule_id)
+        if not existing:
+            return None
+        new_version = existing["version"] + 1
+        now = datetime.now().isoformat()
+        name = updates.get("name", existing["name"])
+        description = updates.get("description", existing["description"])
+        severity = updates.get("severity", existing["severity"])
+        rule_json = updates.get("rule_json", existing["rule_json"])
+        enabled = updates.get("enabled", existing["enabled"])
+        rule_json_str = json.dumps(rule_json)
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE detection_rules SET name=?, description=?, severity=?, rule_json=?,
+                    enabled=?, version=?, updated_at=? WHERE rule_id=?
+            """, (name, description, severity, rule_json_str, int(enabled), new_version, now, rule_id))
+            conn.execute("""
+                INSERT INTO detection_rule_history (rule_id, version, rule_json, changed_by)
+                VALUES (?, ?, ?, ?)
+            """, (rule_id, new_version, rule_json_str, updates.get("changed_by", "user")))
+            conn.commit()
+        return self.get_rule(rule_id)
+
+    def delete_rule(self, rule_id: str) -> bool:
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM detection_rules WHERE rule_id = ? AND is_builtin = 0", (rule_id,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def set_rule_enabled(self, rule_id: str, enabled: bool) -> Optional[Dict]:
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE detection_rules SET enabled=?, updated_at=? WHERE rule_id=?",
+                (int(enabled), datetime.now().isoformat(), rule_id),
+            )
+            conn.commit()
+        return self.get_rule(rule_id)
+
 
 # ─── Neo4j Implementation ────────────────────────────────────────────────
 
@@ -664,11 +1053,17 @@ class Neo4jAdapter(DatabaseAdapter):
             return [dict(record["t"]) for record in result]
 
     def upsert_alert(self, alert: Dict) -> None:
+        account_ids = alert.get("account_ids") or ([alert["account_id"]] if alert.get("account_id") else [])
+        props = dict(alert)
+        props["account_ids"] = json.dumps(account_ids)
+        props["account_id"] = account_ids[0] if account_ids else alert.get("account_id", "")
+        now = datetime.now().isoformat()
         with self._driver.session() as session:
             session.run("""
                 MERGE (al:Alert {alert_id: $alert_id})
-                SET al += $props
-            """, alert_id=alert.get("alert_id"), props=alert)
+                ON CREATE SET al.detected_at = $now
+                SET al += $props, al.last_seen_at = $now
+            """, alert_id=alert.get("alert_id"), props=props, now=now)
 
     def get_alerts(self, status: Optional[str] = None, risk_level: Optional[str] = None,
                    limit: int = 100, offset: int = 0) -> List[Dict]:
@@ -683,7 +1078,32 @@ class Neo4jAdapter(DatabaseAdapter):
                 params["risk_level"] = risk_level
             query += " RETURN al ORDER BY al.risk_score DESC SKIP $offset LIMIT $limit"
             result = session.run(query, **params)
-            return [dict(record["al"]) for record in result]
+            return [self._deserialize_alert_node(record["al"]) for record in result]
+
+    def get_alert(self, alert_id: str) -> Optional[Dict]:
+        with self._driver.session() as session:
+            result = session.run("MATCH (al:Alert {alert_id: $id}) RETURN al", id=alert_id)
+            record = result.single()
+            return self._deserialize_alert_node(record["al"]) if record else None
+
+    def close_stale_alerts(self, active_ids: List[str]) -> List[str]:
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (al:Alert {status: 'open'})
+                WHERE NOT al.alert_id IN $active_ids
+                SET al.status = 'stale'
+                RETURN al.alert_id AS alert_id
+            """, active_ids=active_ids)
+            return [record["alert_id"] for record in result]
+
+    @staticmethod
+    def _deserialize_alert_node(node) -> Dict:
+        d = dict(node)
+        try:
+            d["account_ids"] = json.loads(d.get("account_ids") or "[]")
+        except (TypeError, ValueError):
+            d["account_ids"] = [d["account_id"]] if d.get("account_id") else []
+        return d
 
     def record_ingestion(self, file_hash: str, filename: str, date: str,
                          num_transactions: int, num_accounts: int) -> None:

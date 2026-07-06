@@ -8,7 +8,8 @@ Detection method:
 """
 import logging
 from collections import defaultdict
-from typing import Dict, List
+from types import SimpleNamespace
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -21,8 +22,17 @@ logger = logging.getLogger(__name__)
 class RoundTripDetector:
     """Detect circular transaction flows (A→B→C→A) using Johnson's algorithm."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` (used by the Rule Engine's `cycle` primitive) overrides
+        individual thresholds without touching the global config singleton —
+        omit it (the default) to get today's exact configured behavior."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            round_trip_max_cycle_length=p.get("max_length", base.round_trip_max_cycle_length),
+            round_trip_max_cycles=p.get("max_cycles", base.round_trip_max_cycles),
+            round_trip_amount_return_ratio=p.get("min_return_ratio", base.round_trip_amount_return_ratio),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame) -> List[DetectionResult]:
         cycles = graph_engine.detect_cycles(

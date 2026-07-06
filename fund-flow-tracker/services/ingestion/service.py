@@ -8,6 +8,7 @@ Responsibilities:
 - Route malformed records to DLQ (CP-02)
 """
 import logging
+from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
@@ -116,6 +117,63 @@ class IngestionService:
         except Exception as exc:
             health.record_error(_SERVICE, str(exc))
             raise
+
+    def load_from_db(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Load persisted accounts/transactions back out and normalize them
+        into the shape the graph/detection services expect — the inverse of
+        persist_to_db(). Used by AnalysisPipeline.run_from_db() so a server
+        restart or /api/refresh rebuilds from the same DB read path instead
+        of each call site re-implementing it. Raises ValueError if the DB
+        has no data yet (the caller decides how to surface that — e.g. an
+        HTTP 400 — since this layer doesn't know about HTTP)."""
+        db = get_database()
+        with db._get_conn() as conn:
+            acc_rows = conn.execute("SELECT * FROM accounts").fetchall()
+            txn_rows = conn.execute("SELECT * FROM transactions LIMIT 200000").fetchall()
+
+        if not acc_rows or not txn_rows:
+            raise ValueError("No data in database.")
+
+        accounts_df = pd.DataFrame([dict(r) for r in acc_rows])
+        txns_df = pd.DataFrame([dict(r) for r in txn_rows])
+        txns_df["timestamp"] = pd.to_datetime(txns_df["timestamp"], errors="coerce")
+
+        for col in ["account_id", "account_type", "branch_city", "occupation",
+                    "income_bracket", "declared_annual_income", "risk_score", "risk_level", "role"]:
+            if col not in accounts_df.columns:
+                accounts_df[col] = "" if col not in ("risk_score", "declared_annual_income") else 0.0
+
+        return accounts_df, txns_df
+
+    def persist_to_db(self, accounts_df: pd.DataFrame, transactions_df: pd.DataFrame,
+                       ingestion_date: Optional[str] = None) -> Dict[str, int]:
+        """
+        Write ingested accounts/transactions to the database so they survive
+        server restarts and page refreshes instead of living only in the
+        caller's in-memory DataFrames. This is the same batched-upsert
+        approach EODIngestionService._persist_data uses for the EOD path —
+        every ingestion entry point (init/upload/EOD) should call this so
+        SQLite is always the source of truth, not just the EOD path.
+        """
+        ingestion_date = ingestion_date or datetime.now().strftime("%Y-%m-%d")
+        db = get_database()
+
+        account_dicts = accounts_df.to_dict("records")
+        db.upsert_accounts(account_dicts)
+
+        txn_dicts = transactions_df.to_dict("records")
+        for t in txn_dicts:
+            t["timestamp"] = str(t.get("timestamp", ""))
+            t["ingestion_date"] = t.get("ingestion_date") or ingestion_date
+
+        batch_size = 5000
+        total_inserted = 0
+        for i in range(0, len(txn_dicts), batch_size):
+            total_inserted += db.insert_transactions(txn_dicts[i:i + batch_size])
+
+        logger.info("Persisted to DB: %d accounts, %d/%d transactions",
+                    len(account_dicts), total_inserted, len(txn_dicts))
+        return {"accounts_persisted": len(account_dicts), "transactions_persisted": total_inserted}
 
     @staticmethod
     def _validate(df: pd.DataFrame) -> Tuple[int, int]:

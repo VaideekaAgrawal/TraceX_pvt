@@ -7,7 +7,8 @@ Detection method:
 - Scoring: counterparty risk, channel (cash-heavy = higher), geography mismatch
 """
 import logging
-from typing import List
+from types import SimpleNamespace
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,8 +22,18 @@ logger = logging.getLogger(__name__)
 class DormancyDetector:
     """Detect dormant accounts that suddenly become active with high-value transactions."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` (used by the Rule Engine's `inactivity_then_burst`
+        primitive) overrides individual thresholds without touching the
+        global config singleton — omit it (the default) to get today's
+        exact configured behavior."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            dormancy_threshold_days=p.get("threshold_days", base.dormancy_threshold_days),
+            dormancy_burst_min_txns=p.get("min_burst_txns", base.dormancy_burst_min_txns),
+            dormancy_multiplier=p.get("multiplier", base.dormancy_multiplier),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame) -> List[DetectionResult]:
         """Vectorised dormancy detection using pandas groupby — no Python account loop."""

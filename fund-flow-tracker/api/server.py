@@ -60,7 +60,9 @@ from services.detection import DetectionService
 from services.investigation import InvestigationService
 from services.monitoring import monitor
 from services.realtime.stream_service import RealtimeStreamService, AlreadyRunningError
-from services.rl.bandit import LinUCBAgent
+from services.pipeline import AnalysisPipeline
+from services.detection.rule_engine import PrimitiveRegistry
+from services.validation.rule_validator import RuleValidator
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,8 @@ graph_svc = GraphService()
 detection_svc = DetectionService()
 investigation_svc = InvestigationService()
 realtime_svc = RealtimeStreamService()
-_rl_agent = LinUCBAgent(alpha=1.0, state_path="data/rl_state.json")
+pipeline = AnalysisPipeline(ingestion_svc, graph_svc, detection_svc, investigation_svc)
+rule_validator = RuleValidator()
 
 # ── Realtime SSE connection tracking ─────────────────────────────────────
 # Known limitation: bus.subscribe() has no unsubscribe, so queues from closed
@@ -133,9 +136,33 @@ def _call_openrouter(prompt: str, max_tokens: int = 250) -> str:
 
 @app.on_event("startup")
 async def _startup():
-    """Ensure the database schema (including the cases table) is created on boot."""
+    """Ensure the database schema is created on boot, then bring the in-memory
+    graph/detection state back up to date with whatever is already persisted —
+    so a server restart or redeploy doesn't present an empty dashboard. If the
+    DB is genuinely empty (first run), seed it with a small curated demo
+    dataset instead of starting blank."""
+    global _state
     from infrastructure.database import get_database as _get_db
-    _get_db()
+
+    db = _get_db()
+
+    if db.get_account_count() == 0 or db.get_transaction_count() == 0:
+        try:
+            from scripts.seed_demo_data import seed_if_empty
+            seed_if_empty(db)
+        except Exception:
+            logger.exception("Demo data seeding failed — starting with an empty system")
+            return
+
+    if db.get_account_count() > 0 and db.get_transaction_count() > 0:
+        try:
+            result = pipeline.run_from_db()
+            _state["accounts_df"] = result["accounts_df"]
+            _state["transactions_df"] = result["transactions_df"]
+            logger.info("Startup: rebuilt in-memory state from %d accounts / %d transactions in DB",
+                        len(result["accounts_df"]), len(result["transactions_df"]))
+        except Exception:
+            logger.exception("Startup rebuild from DB failed — system will require /api/refresh")
 
 
 def _require_ready():
@@ -212,6 +239,41 @@ class RLSimulateRequest(BaseModel):
     scenario: str = "balanced"
 
 
+class RuleCondition(BaseModel):
+    primitive: str
+    params: Dict[str, Any] = {}
+    negate: bool = False
+
+
+class RuleJson(BaseModel):
+    combinator: str = "AND"
+    conditions: List[RuleCondition]
+
+
+class RuleCreateRequest(BaseModel):
+    rule_id: str
+    name: str
+    description: str = ""
+    detection_type: str
+    severity: str = "MEDIUM"
+    rule_json: RuleJson
+    enabled: bool = True
+
+
+class RuleUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    severity: Optional[str] = None
+    rule_json: Optional[RuleJson] = None
+    enabled: Optional[bool] = None
+
+
+class RuleDryRunRequest(BaseModel):
+    detection_type: str = "custom"
+    severity: str = "MEDIUM"
+    rule_json: RuleJson
+
+
 # ── Utility ──────────────────────────────────────────────────────────────
 
 def _ts(val):
@@ -278,20 +340,17 @@ async def init_system(req: InitRequest):
     accounts_df, txns_df = ingestion_svc.ingest(
         source=req.source, filepath=filepath, max_rows=req.max_rows,
     )
+    result = pipeline.run(accounts_df, txns_df)
 
-    graph_svc.build(accounts_df, txns_df)
-    summary = detection_svc.run_full_pipeline(graph_svc, accounts_df, txns_df)
-    investigation_svc.create_alerts_from_detections(detection_svc.detection_results)
-
-    _state["accounts_df"] = accounts_df
-    _state["transactions_df"] = txns_df
+    _state["accounts_df"] = result["accounts_df"]
+    _state["transactions_df"] = result["transactions_df"]
     _response_cache.clear()
 
     return {
         "status": "ok",
         "accounts": len(accounts_df),
         "transactions": len(txns_df),
-        "pipeline_summary": summary,
+        "pipeline_summary": result["pipeline_summary"],
     }
 
 
@@ -299,55 +358,21 @@ async def init_system(req: InitRequest):
 async def refresh_from_db():
     """Rebuild the in-memory graph and run detection from existing DB data (no file needed)."""
     global _state
-    from infrastructure.database import get_database
-    import sqlite3
 
-    db = get_database()
+    try:
+        result = pipeline.run_from_db()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
-    # Load all accounts from DB
-    with db._get_conn() as conn:
-        acc_rows = conn.execute("SELECT * FROM accounts").fetchall()
-        txn_rows = conn.execute("SELECT * FROM transactions LIMIT 200000").fetchall()
-
-    if not acc_rows or not txn_rows:
-        raise HTTPException(400, "No data in database. Upload a CSV first.")
-
-    accounts_df = pd.DataFrame([dict(r) for r in acc_rows])
-    txns_df = pd.DataFrame([dict(r) for r in txn_rows])
-
-    # Convert timestamp strings to datetime (required by detection services)
-    txns_df["timestamp"] = pd.to_datetime(txns_df["timestamp"], errors="coerce")
-
-    # Ensure required column names match what the services expect
-    col_map = {
-        "account_id": "account_id",
-        "account_type": "account_type",
-        "branch_city": "branch_city",
-        "occupation": "occupation",
-        "income_bracket": "income_bracket",
-        "declared_annual_income": "declared_annual_income",
-        "risk_score": "risk_score",
-        "risk_level": "risk_level",
-        "role": "role",
-    }
-    for col in ["account_id", "account_type", "branch_city", "occupation",
-                "income_bracket", "declared_annual_income", "risk_score", "risk_level", "role"]:
-        if col not in accounts_df.columns:
-            accounts_df[col] = "" if col not in ("risk_score", "declared_annual_income") else 0.0
-
-    graph_svc.build(accounts_df, txns_df)
-    summary = detection_svc.run_full_pipeline(graph_svc, accounts_df, txns_df)
-    investigation_svc.create_alerts_from_detections(detection_svc.detection_results)
-
-    _state["accounts_df"] = accounts_df
-    _state["transactions_df"] = txns_df
+    _state["accounts_df"] = result["accounts_df"]
+    _state["transactions_df"] = result["transactions_df"]
     _response_cache.clear()
 
     return {
         "status": "ok",
-        "accounts": len(accounts_df),
-        "transactions": len(txns_df),
-        "pipeline_summary": summary,
+        "accounts": len(result["accounts_df"]),
+        "transactions": len(result["transactions_df"]),
+        "pipeline_summary": result["pipeline_summary"],
     }
 
 
@@ -360,19 +385,17 @@ async def upload_csv(file: UploadFile = File(...), max_rows: Optional[int] = Non
     accounts_df, txns_df = ingestion_svc.ingest(
         source="csv", dataframe=df, max_rows=max_rows,
     )
+    result = pipeline.run(accounts_df, txns_df)
 
-    graph_svc.build(accounts_df, txns_df)
-    summary = detection_svc.run_full_pipeline(graph_svc, accounts_df, txns_df)
-    investigation_svc.create_alerts_from_detections(detection_svc.detection_results)
-
-    _state["accounts_df"] = accounts_df
-    _state["transactions_df"] = txns_df
+    _state["accounts_df"] = result["accounts_df"]
+    _state["transactions_df"] = result["transactions_df"]
+    _response_cache.clear()
 
     return {
         "status": "ok",
         "accounts": len(accounts_df),
         "transactions": len(txns_df),
-        "pipeline_summary": summary,
+        "pipeline_summary": result["pipeline_summary"],
     }
 
 
@@ -530,6 +553,39 @@ async def dashboard_live():
     }
 
 
+@app.get("/api/daily-summary")
+async def daily_summary(date: Optional[str] = None):
+    """What's new as of the most recent pipeline run for `date` (defaults to
+    today): alerts flagged for the first time vs. still-active ones seen
+    again, resolved to full Alert objects. Powers the dashboard's "Today's
+    Activity" panel. 404s if no pipeline run has recorded a summary yet for
+    that date."""
+    db = get_database()
+    row = db.get_daily_run_summary(date)
+    if row is None:
+        raise HTTPException(404, f"No run summary recorded for {date or 'today'} yet.")
+
+    def _resolve(alert_ids: List[str]) -> List[Dict]:
+        resolved = []
+        for aid in alert_ids:
+            a = db.get_alert(aid)
+            if a:
+                resolved.append(a)
+        return resolved
+
+    return {
+        "run_date": row["run_date"],
+        "run_at": row["run_at"],
+        "new_alerts": _resolve(row["new_alert_ids"]),
+        "reactivated_alerts": _resolve(row["reactivated_alert_ids"]),
+        "stale_alert_ids": row["stale_alert_ids"],
+        "total_accounts_flagged": row["total_accounts_flagged"],
+        "total_alerts_open": row["total_alerts_open"],
+        "accounts_ingested": row["accounts_ingested"],
+        "transactions_ingested": row["transactions_ingested"],
+    }
+
+
 # ── Accounts ─────────────────────────────────────────────────────────────
 
 @app.get("/api/accounts")
@@ -592,48 +648,20 @@ async def get_account(account_id: str):
     _require_ready()
     accounts = _state["accounts_df"]
     txns = _state["transactions_df"]
-    risk = detection_svc.risk_scores
-    roles = detection_svc.roles
-    features = detection_svc.features_df
-    anomaly = detection_svc.anomaly_results
-    fraud = detection_svc.fraud_results
 
     row = accounts[accounts["account_id"] == account_id]
     if len(row) == 0:
         raise HTTPException(404, f"Account {account_id} not found")
-
     acc = {k: _safe(v) for k, v in row.iloc[0].to_dict().items()}
-    score = risk.get(account_id, 0)
-    role_info = roles.get(account_id, {"role": "UNKNOWN", "confidence": 0})
 
+    detail = detection_svc.get_account_detail(account_id, accounts, txns, graph_svc)
+
+    features = detection_svc.features_df
     feat = {}
     if features is not None and account_id in features.index:
         feat = {k: round(float(v), 4) for k, v in features.loc[account_id].items()}
 
-    anom_score = 0
-    if anomaly is not None:
-        ar = anomaly[anomaly["account_id"] == account_id]
-        anom_score = float(ar["anomaly_score"].iloc[0]) if len(ar) > 0 else 0
-
-    fraud_prob = 0
-    if fraud is not None:
-        fr = fraud[fraud["account_id"] == account_id]
-        fraud_prob = float(fr["fraud_prob"].iloc[0]) if len(fr) > 0 else 0
-
-    # Confidence
-    centrality = graph_svc.compute_centrality()
-    det_flags = detection_svc.ensemble._build_flags(detection_svc.detection_results).get(account_id, {})
-    conf_level, conf_count, indicators = detection_svc.ensemble.compute_confidence(
-        account_id, det_flags, anom_score, fraud_prob,
-        centrality["pagerank"].get(account_id, 0),
-        centrality["betweenness"].get(account_id, 0),
-    )
-
     acc_txns = txns[(txns["source_account"] == account_id) | (txns["dest_account"] == account_id)]
-    total_amount = float(acc_txns["amount"].sum())
-    n_cp = len(set(acc_txns["source_account"]) | set(acc_txns["dest_account"])) - 1
-    priority = detection_svc.ensemble.compute_priority(score, conf_level, total_amount, max(n_cp, 1))
-
     recent = acc_txns.sort_values("timestamp", ascending=False).head(20)
     txn_list = [{
         "txn_id": t["txn_id"], "timestamp": _ts(t["timestamp"]),
@@ -645,17 +673,17 @@ async def get_account(account_id: str):
 
     return {
         "account": acc,
-        "risk_score": round(score, 1),
-        "risk_level": _risk_level(score),
-        "role": role_info["role"],
-        "role_confidence": round(role_info.get("confidence", 0), 2),
-        "anomaly_score": round(anom_score, 1),
-        "fraud_probability": round(fraud_prob, 4),
+        "risk_score": round(detail["risk_score"], 1),
+        "risk_level": _risk_level(detail["risk_score"]),
+        "role": detail["role"],
+        "role_confidence": round(detail["role_confidence"], 2),
+        "anomaly_score": round(detail["anomaly_score"], 1),
+        "fraud_probability": round(detail["fraud_probability"], 4),
         "features": feat,
-        "confidence": {"level": conf_level, "count": conf_count, "indicators": indicators},
-        "priority": priority,
-        "total_amount": total_amount,
-        "counterparties": n_cp,
+        "confidence": detail["confidence"],
+        "priority": detail["priority"],
+        "total_amount": detail["total_amount"],
+        "counterparties": detail["counterparties"],
         "recent_transactions": txn_list,
     }
 
@@ -1161,8 +1189,7 @@ async def generate_evidence(req: EvidenceRequest):
     _require_ready()
     pack = investigation_svc.generate_evidence(
         req.case_id, req.account_ids,
-        graph_svc.graph, detection_svc.risk_scores,
-        detection_svc.detection_results,
+        detection_svc.get_summary(graph_svc),
         _state["transactions_df"], _state["accounts_df"],
         req.case_notes,
     )
@@ -1239,10 +1266,6 @@ async def get_anomaly():
     """Anomaly detection data for the frontend dashboard."""
     _require_ready()
     anomaly = detection_svc.anomaly_results
-    features = detection_svc.features_df
-    fraud = detection_svc.fraud_results
-    risk = detection_svc.risk_scores
-    roles = detection_svc.roles
 
     # Anomaly scores
     anomaly_scores = []
@@ -1256,65 +1279,25 @@ async def get_anomaly():
     # Feature importance from XGBoost
     feature_importance = detection_svc.fraud_classifier.get_feature_importance()
 
-    # Pre-build O(1) lookup maps — avoids O(n²) DataFrame scans inside the loop
-    anom_score_map = (
-        anomaly.set_index("account_id")["anomaly_score"].to_dict()
-        if anomaly is not None and not anomaly.empty else {}
-    )
-    fraud_prob_map = (
-        fraud.set_index("account_id")["fraud_prob"].to_dict()
-        if fraud is not None and not fraud.empty else {}
-    )
-
-    # Compute centrality once for all accounts — not per-account
-    centrality = graph_svc.compute_centrality()
-    all_det_flags = detection_svc.ensemble._build_flags(detection_svc.detection_results)
-
     # Investigation queue — merge risk, anomaly, fraud, roles
-    queue = []
     accounts_df = _state.get("accounts_df")
     txns_df = _state.get("transactions_df")
-    branch_city_map = (
-        dict(zip(accounts_df["account_id"], accounts_df.get("branch_city", "")))
-        if accounts_df is not None else {}
-    )
-    for acc_id, score in sorted(risk.items(), key=lambda x: x[1], reverse=True):
-        role_info = roles.get(acc_id, {"role": "NORMAL", "confidence": 0})
-        anom_score = anom_score_map.get(acc_id, 0.0)
-        fraud_prob = fraud_prob_map.get(acc_id, 0.0)
-
-        # Confidence
-        det_flags = all_det_flags.get(acc_id, {})
-        conf_level, conf_count, indicators = detection_svc.ensemble.compute_confidence(
-            acc_id, det_flags, anom_score, fraud_prob,
-            centrality["pagerank"].get(acc_id, 0),
-            centrality["betweenness"].get(acc_id, 0),
-        )
-        # Total amount
-        total_amount = 0.0
-        if txns_df is not None:
-            acc_txns = txns_df[(txns_df["source_account"] == acc_id) | (txns_df["dest_account"] == acc_id)]
-            total_amount = float(acc_txns["amount"].sum())
-        n_cp = 1
-        priority = detection_svc.ensemble.compute_priority(score, conf_level, total_amount, n_cp)
-
-        branch_city = branch_city_map.get(acc_id, "")
-
-        queue.append({
-            "account_id": acc_id,
-            "risk_score": round(score, 1),
-            "risk_level": _risk_level(score),
-            "risk_color": _risk_color(score),
-            "role": role_info["role"],
-            "priority": priority,
-            "confidence_level": conf_level,
-            "confidence_count": conf_count,
-            "indicators": indicators,
-            "anomaly_score": round(anom_score, 1),
-            "fraud_probability": round(fraud_prob, 4),
-            "total_amount": round(total_amount, 2),
-            "branch_city": branch_city,
-        })
+    summaries = detection_svc.get_all_account_summaries(accounts_df, txns_df, graph_svc)
+    queue = [{
+        "account_id": s["account_id"],
+        "risk_score": round(s["risk_score"], 1),
+        "risk_level": _risk_level(s["risk_score"]),
+        "risk_color": _risk_color(s["risk_score"]),
+        "role": s["role"],
+        "priority": s["priority"],
+        "confidence_level": s["confidence_level"],
+        "confidence_count": s["confidence_count"],
+        "indicators": s["indicators"],
+        "anomaly_score": round(s["anomaly_score"], 1),
+        "fraud_probability": round(s["fraud_probability"], 4),
+        "total_amount": round(s["total_amount"], 2),
+        "branch_city": s["branch_city"],
+    } for s in summaries]
 
     # Speed alerts — derive from layering detections (rapid multi-hop chains)
     speed_alerts = []
@@ -1622,8 +1605,7 @@ async def generate_evidence_v2(req: EvidenceGenerateRequest):
     _require_ready()
     pack = investigation_svc.generate_evidence(
         req.case_id, req.account_ids,
-        graph_svc.graph, detection_svc.risk_scores,
-        detection_svc.detection_results,
+        detection_svc.get_summary(graph_svc),
         _state["transactions_df"], _state["accounts_df"],
         req.case_notes,
     )
@@ -1724,6 +1706,16 @@ async def ingest_eod(req: IngestRequest):
             max_rows=req.max_rows,
             force=req.force,
         )
+        if result.get("status") in ("completed", "skipped"):
+            try:
+                pipeline_result = pipeline.run_from_db()
+                _state["accounts_df"] = pipeline_result["accounts_df"]
+                _state["transactions_df"] = pipeline_result["transactions_df"]
+                _response_cache.clear()
+                result["pipeline_summary"] = pipeline_result["pipeline_summary"]
+                result["alert_diff"] = {k: v for k, v in pipeline_result["alert_diff"].items() if k != "alerts"}
+            except ValueError as e:
+                result["pipeline_warning"] = str(e)
         return result
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
@@ -1875,26 +1867,21 @@ async def ingest_upload(
                     for acc, row in combined.iterrows()
                 ]
 
-                # --- Rebuild in-memory state from ALL cumulative DB data ---
-                _db = get_database()
-                with _db._get_conn() as conn:
-                    acc_rows = conn.execute("SELECT * FROM accounts").fetchall()
-                    txn_rows = conn.execute("SELECT * FROM transactions LIMIT 200000").fetchall()
-                accounts_df = pd.DataFrame([dict(r) for r in acc_rows])
-                txns_df = pd.DataFrame([dict(r) for r in txn_rows])
-                txns_df["timestamp"] = pd.to_datetime(txns_df["timestamp"], errors="coerce")
-                for col in ["account_id", "account_type", "branch_city", "occupation",
-                            "income_bracket", "declared_annual_income", "risk_score", "risk_level", "role"]:
-                    if col not in accounts_df.columns:
-                        accounts_df[col] = "" if col not in ("risk_score", "declared_annual_income") else 0.0
-
-                graph_svc.build(accounts_df, txns_df)
-                detection_svc.run_full_pipeline(graph_svc, accounts_df, txns_df)
-                investigation_svc.create_alerts_from_detections(detection_svc.detection_results)
+                # --- Run the full pipeline once over the cumulative DB dataset ---
+                # (previously this rebuilt the graph/detection inline here, AFTER
+                # ingest_daily_file() had already run its own lightweight 7-detector
+                # pass over just this file — i.e. detection ran twice per upload,
+                # with this second pass silently overwriting the first pass's
+                # alerts. AnalysisPipeline.run_from_db() is now the only place
+                # detection runs for an EOD ingest.)
+                pipeline_result = pipeline.run_from_db()
+                accounts_df = pipeline_result["accounts_df"]
+                txns_df = pipeline_result["transactions_df"]
                 _state["accounts_df"] = accounts_df
                 _state["transactions_df"] = txns_df
                 _response_cache.clear()
                 result["system_refreshed"] = True
+                result["alert_diff"] = {k: v for k, v in pipeline_result["alert_diff"].items() if k != "alerts"}
                 logger.info("System state refreshed from full DB after upload (%d accounts, %d txns)",
                             len(accounts_df), len(txns_df))
 
@@ -1905,6 +1892,7 @@ async def ingest_upload(
 
                     # Use detection_svc.risk_scores (computed in-memory) — NOT accounts_df risk_score (always 0 in DB)
                     _rs_map = detection_svc.risk_scores  # {account_id: float}
+                    _anom_map = detection_svc.get_summary().anomaly_scores  # {account_id: float}
                     _role_map = {str(r["account_id"]): str(r.get("role", "NORMAL"))
                                  for _, r in _cum_acc.iterrows()} if _cum_acc is not None and len(_cum_acc) > 0 else {}
                     _income_map = {str(r["account_id"]): float(r.get("declared_annual_income", 0) or 0)
@@ -1976,7 +1964,7 @@ async def ingest_upload(
                         elif _ps >= 28: _prio = "P3"
                         else: _prio = "P4"
                         _pats = _account_patterns.get(_aid, [])
-                        _anom = float(detection_svc.anomaly_scores.get(_aid, 0)) if hasattr(detection_svc, "anomaly_scores") else 0.0
+                        _anom = float(_anom_map.get(_aid, 0))
                         _priority_accounts.append({
                             "account_id": _aid, "risk_score": round(_rs, 1), "risk_level": _rl,
                             "priority": _prio, "role": _role, "patterns": _pats,
@@ -2356,95 +2344,18 @@ def explain_all_metrics():
 # agent re-ranks accounts by UCB score, and every investigator TP/FP verdict
 # updates it in O(d^2) time. See services/rl/bandit.py for the algorithm.
 
-_RL_CANDIDATE_CAP = 200  # only re-rank the top-N by risk score — keeps /api/rl/queue fast
-
-
-def _rl_txn_maps(txns_df: pd.DataFrame) -> Dict[str, Dict]:
-    """Vectorised per-account aggregates (amounts, counterparties, channels) via groupby."""
-    if txns_df is None or txns_df.empty:
-        return {"total_out": {}, "total_in": {}, "out_partners": {}, "in_partners": {},
-                "out_channels": {}, "in_channels": {}}
-
-    out_grp = txns_df.groupby("source_account")
-    in_grp = txns_df.groupby("dest_account")
-    has_channel = "channel" in txns_df.columns
-
-    return {
-        "total_out": out_grp["amount"].sum().to_dict(),
-        "total_in": in_grp["amount"].sum().to_dict(),
-        "out_partners": out_grp["dest_account"].apply(set).to_dict(),
-        "in_partners": in_grp["source_account"].apply(set).to_dict(),
-        "out_channels": out_grp["channel"].apply(set).to_dict() if has_channel else {},
-        "in_channels": in_grp["channel"].apply(set).to_dict() if has_channel else {},
-    }
-
-
-def _rl_account_features(acc_id: str, maps: Dict[str, Dict], declared_map: Dict[str, float]) -> Dict:
-    """Build the flat feature dict LinUCBAgent.build_context() expects for one account."""
-    risk = detection_svc.risk_scores
-    roles = detection_svc.roles
-    all_det_flags = detection_svc.ensemble._build_flags(detection_svc.detection_results)
-
-    anom_score = 0.0
-    if detection_svc.anomaly_results is not None:
-        ar = detection_svc.anomaly_results
-        row = ar.loc[ar["account_id"] == acc_id, "anomaly_score"]
-        anom_score = float(row.iloc[0]) if len(row) else 0.0
-
-    fraud_prob = 0.0
-    if detection_svc.fraud_results is not None:
-        fr = detection_svc.fraud_results
-        row = fr.loc[fr["account_id"] == acc_id, "fraud_prob"]
-        fraud_prob = float(row.iloc[0]) if len(row) else 0.0
-
-    total_out = maps["total_out"].get(acc_id, 0.0)
-    total_in = maps["total_in"].get(acc_id, 0.0)
-    counterparties = len(maps["out_partners"].get(acc_id, set()) | maps["in_partners"].get(acc_id, set()))
-    channels = maps["out_channels"].get(acc_id, set()) | maps["in_channels"].get(acc_id, set())
-
-    return {
-        "account_id": acc_id,
-        "risk_score": risk.get(acc_id, 0.0),
-        "role": roles.get(acc_id, {}).get("role", "NORMAL"),
-        "patterns": list(all_det_flags.get(acc_id, {}).keys()),
-        "anomaly_score": anom_score,
-        "fraud_probability": fraud_prob,
-        "total_in_flow": total_in,
-        "total_out_flow": total_out,
-        "total_amount": total_in + total_out,
-        "counterparties": counterparties,
-        "declared_annual_income": declared_map.get(acc_id, 0.0),
-        "channel_diversity": len(channels) or 1,
-    }
-
-
 @app.get("/api/rl/queue")
 async def rl_investigation_queue():
     """RL-ranked investigation queue — accounts sorted by UCB score (exploration + exploitation)."""
     _require_ready()
     accounts_df = _state.get("accounts_df")
     txns_df = _state.get("transactions_df")
-    risk = detection_svc.risk_scores
 
-    maps = _rl_txn_maps(txns_df)
-    declared_map = (
-        accounts_df.set_index("account_id")["declared_annual_income"].to_dict()
-        if accounts_df is not None and "declared_annual_income" in accounts_df.columns else {}
-    )
-
-    candidates = []
-    for acc_id, score in sorted(risk.items(), key=lambda x: x[1], reverse=True):
-        if score < 26:
-            break  # risk dict isn't sorted by insertion, but this list is now sorted desc
-        candidates.append(_rl_account_features(acc_id, maps, declared_map))
-        if len(candidates) >= _RL_CANDIDATE_CAP:
-            break
-
-    ranked = _rl_agent.rank_accounts(candidates)
-    for r in ranked:
+    result = investigation_svc.get_prioritized_queue(accounts_df, txns_df, detection_svc.get_summary())
+    for r in result["queue"]:
         r["risk_level"] = _risk_level(r["risk_score"])
 
-    return {"queue": ranked[:50], "agent_stats": _rl_agent.get_stats()}
+    return {"queue": result["queue"][:50], "agent_stats": result["agent_stats"]}
 
 
 @app.post("/api/rl/feedback")
@@ -2454,84 +2365,142 @@ async def rl_feedback(body: RLFeedbackRequest):
     txns_df = _state.get("transactions_df")
     accounts_df = _state.get("accounts_df")
 
-    if body.account_id not in detection_svc.risk_scores:
+    result = investigation_svc.submit_feedback(
+        body.account_id, body.is_true_positive, accounts_df, txns_df, detection_svc.get_summary()
+    )
+    if result is None:
         raise HTTPException(404, f"Account {body.account_id} not found")
 
-    maps = _rl_txn_maps(txns_df)
-    declared_map = (
-        accounts_df.set_index("account_id")["declared_annual_income"].to_dict()
-        if accounts_df is not None and "declared_annual_income" in accounts_df.columns else {}
-    )
-    acc_dict = _rl_account_features(body.account_id, maps, declared_map)
-    ctx = _rl_agent.build_context(acc_dict)
-    result = _rl_agent.receive_feedback(body.account_id, ctx, body.is_true_positive)
-
-    return {
-        "status": "updated",
-        "reward_applied": result["reward"],
-        "agent_stats": _rl_agent.get_stats(),
-        "top_learned_features": result["learned_weights_snapshot"],
-    }
+    return {"status": "updated", **result}
 
 
 @app.get("/api/rl/weights")
 async def rl_learned_weights():
     """Current learned feature weights — full interpretability for compliance review."""
-    return {
-        "weights": _rl_agent.get_learned_weights(),
-        "stats": _rl_agent.get_stats(),
-        "interpretation": "Positive weight = feature increases investigation priority. "
-                          "Negative weight = feature reduces priority (learned false-positive signal).",
-    }
-
-
-# Pre-defined synthetic feedback sequences for the live judge demo — replaces real
-# investigator history with a scripted one so weight evolution can be shown in seconds.
-_RL_SCENARIOS: Dict[str, List[Tuple[Dict[str, float], bool]]] = {
-    "layering_dominant": [
-        ({"has_layering": 1, "risk_score_norm": 0.85, "fraud_prob": 0.7}, True),
-        ({"has_round_trip": 1, "risk_score_norm": 0.6, "fraud_prob": 0.3}, False),
-        ({"has_layering": 1, "has_round_trip": 1, "risk_score_norm": 0.9}, True),
-        ({"has_structuring": 1, "risk_score_norm": 0.5}, False),
-        ({"has_layering": 1, "is_mule_role": 1, "risk_score_norm": 0.8}, True),
-    ] * 20,
-    "balanced": [
-        ({"has_layering": 1, "risk_score_norm": 0.8}, True),
-        ({"has_structuring": 1, "risk_score_norm": 0.55}, False),
-        ({"has_round_trip": 1, "risk_score_norm": 0.7, "fraud_prob": 0.65}, True),
-        ({"has_dormancy": 1, "risk_score_norm": 0.45}, False),
-        ({"has_profile_mismatch": 1, "is_source_role": 1, "risk_score_norm": 0.75}, True),
-    ] * 20,
-}
+    return investigation_svc.get_rl_weights()
 
 
 @app.post("/api/rl/simulate")
 async def rl_simulate(body: RLSimulateRequest):
     """Demo endpoint: replay N synthetic feedback events to show the agent learning live,
     without needing real investigator history."""
-    sequence = _RL_SCENARIOS.get(body.scenario, _RL_SCENARIOS["balanced"])[:body.steps]
-    feature_map = {name: j for j, name in enumerate(_rl_agent.FEATURE_NAMES)}
-    snapshots = []
+    return investigation_svc.simulate_rl_feedback(body.scenario, body.steps)
 
-    for i, (features, is_tp) in enumerate(sequence):
-        ctx = np.zeros(_rl_agent.d)
-        for k, v in features.items():
-            if k in feature_map:
-                ctx[feature_map[k]] = v
-        ctx[-1] = 1.0  # bias
-        _rl_agent.update(ctx, 1.0 if is_tp else -0.3)
 
-        if i % 5 == 0 or i == len(sequence) - 1:
-            snapshots.append({
-                "step": i + 1,
-                "weights": _rl_agent._get_top_weights(5),
-                "precision": _rl_agent.get_stats()["learned_precision"],
-            })
+# ── Rule Engine ──────────────────────────────────────────────────────────
+# Lets an analyst edit any existing detector's thresholds (e.g. round-trip's
+# return ratio 0.85 -> 0.70) or define genuinely new patterns — all DB-backed,
+# no code deploy. See services/detection/rule_engine.py for the primitive
+# catalog and Tier 1 (single primitive) / Tier 2 (AND/OR composite) model.
 
-    return {
-        "steps_replayed": len(sequence),
-        "final_stats": _rl_agent.get_stats(),
-        "weight_evolution": snapshots,
-        "message": f"Simulated {len(sequence)} investigator decisions using the "
-                   f"'{body.scenario}' scenario.",
-    }
+@app.get("/api/rules/primitives")
+async def list_rule_primitives():
+    """Every primitive's parameter schema + defaults — drives the frontend's
+    dynamic condition-builder form."""
+    return PrimitiveRegistry.list_primitives()
+
+
+@app.get("/api/rules")
+async def list_rules(enabled_only: bool = False):
+    db = get_database()
+    return db.list_rules(enabled_only=enabled_only)
+
+
+@app.get("/api/rules/{rule_id}")
+async def get_rule(rule_id: str):
+    db = get_database()
+    rule = db.get_rule(rule_id)
+    if rule is None:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+    return rule
+
+
+@app.post("/api/rules")
+async def create_rule(req: RuleCreateRequest):
+    db = get_database()
+    if db.get_rule(req.rule_id) is not None:
+        raise HTTPException(409, f"Rule {req.rule_id} already exists")
+
+    rule_json = req.rule_json.dict()
+    validation = rule_validator.validate(rule_json)
+    if not validation.passed:
+        raise HTTPException(422, {"violations": validation.violations})
+
+    return db.create_rule({
+        "rule_id": req.rule_id, "name": req.name, "description": req.description,
+        "detection_type": req.detection_type, "severity": req.severity,
+        "rule_json": rule_json, "enabled": req.enabled,
+    })
+
+
+@app.put("/api/rules/{rule_id}")
+async def update_rule(rule_id: str, req: RuleUpdateRequest):
+    db = get_database()
+    existing = db.get_rule(rule_id)
+    if existing is None:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+
+    updates: Dict[str, Any] = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.description is not None:
+        updates["description"] = req.description
+    if req.severity is not None:
+        updates["severity"] = req.severity
+    if req.enabled is not None:
+        updates["enabled"] = req.enabled
+    if req.rule_json is not None:
+        rule_json = req.rule_json.dict()
+        validation = rule_validator.validate(rule_json)
+        if not validation.passed:
+            raise HTTPException(422, {"violations": validation.violations})
+        updates["rule_json"] = rule_json
+
+    return db.update_rule(rule_id, updates)
+
+
+@app.delete("/api/rules/{rule_id}")
+async def delete_rule(rule_id: str):
+    db = get_database()
+    existing = db.get_rule(rule_id)
+    if existing is None:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+    if existing["is_builtin"]:
+        raise HTTPException(403, "Built-in rules cannot be deleted — disable it instead.")
+    db.delete_rule(rule_id)
+    return {"status": "deleted", "rule_id": rule_id}
+
+
+@app.post("/api/rules/{rule_id}/enable")
+async def enable_rule(rule_id: str):
+    db = get_database()
+    rule = db.set_rule_enabled(rule_id, True)
+    if rule is None:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+    return rule
+
+
+@app.post("/api/rules/{rule_id}/disable")
+async def disable_rule(rule_id: str):
+    db = get_database()
+    rule = db.set_rule_enabled(rule_id, False)
+    if rule is None:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+    return rule
+
+
+@app.post("/api/rules/dry-run")
+async def dry_run_rule(req: RuleDryRunRequest):
+    """Evaluate a draft rule against the currently-loaded data with no side
+    effects, so an analyst can preview impact before saving/enabling it."""
+    _require_ready()
+    rule_json = req.rule_json.dict()
+    validation = rule_validator.validate(rule_json)
+    if not validation.passed:
+        raise HTTPException(422, {"violations": validation.violations})
+
+    accounts_df = _state.get("accounts_df")
+    txns_df = _state.get("transactions_df")
+    return detection_svc.rule_engine.dry_run(
+        rule_json, req.detection_type, req.severity, graph_svc.graph, accounts_df, txns_df,
+    )

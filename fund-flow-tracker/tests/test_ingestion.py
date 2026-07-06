@@ -161,7 +161,12 @@ class TestEODIngestion:
         assert result["total_transactions"] == 11
         assert result["total_accounts"] > 0
         assert result["new_accounts"] > 0
-        assert "alerts_generated" in result
+        # Detection/alerting no longer happens inside ingest_daily_file() itself —
+        # the caller runs AnalysisPipeline.run_from_db() once afterward instead of
+        # this method's own lightweight pass duplicating that work (see Phase 4:
+        # EOD correctness). So there's no alerts_generated/patterns_detected here
+        # any more; assert the data-persistence contract this method still owns.
+        assert "processing_time_sec" in result
 
     def test_idempotent_ingestion(self, sample_csv, tmp_path, monkeypatch):
         """Test that re-ingesting the same file is skipped."""

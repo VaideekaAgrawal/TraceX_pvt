@@ -7,7 +7,8 @@ Detection method:
 3. Isolation Forest on 30-day rolling windows for novel patterns
 """
 import logging
-from typing import Any, Dict, List
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,8 +22,22 @@ logger = logging.getLogger(__name__)
 class StructuringDetector:
     """Detect structuring/smurfing: transactions designed to avoid CTR threshold."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` overrides individual thresholds without touching the
+        global config singleton — omit it (the default) to get today's
+        exact configured behavior. Used by the Rule Engine's
+        `amount_band_count` (classic) and `split_sum_threshold` (split)
+        primitives, which each map to one of this detector's two internal
+        checks."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            structuring_lower=p.get("lower", base.structuring_lower),
+            ctr_threshold=p.get("upper", base.ctr_threshold),
+            structuring_min_count=p.get("min_count", base.structuring_min_count),
+            structuring_split_min_count=p.get("split_min_count", 2),
+            structuring_window_days=p.get("window_days", 30),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame) -> List[DetectionResult]:
         all_results = []
@@ -50,9 +65,9 @@ class StructuringDetector:
             return []
 
         near["timestamp"] = pd.to_datetime(near["timestamp"])
-        # Group by account + 30-day window so transactions years apart don't combine
+        # Group by account + rolling window so transactions years apart don't combine
         grouped = near.groupby(
-            ["source_account", pd.Grouper(key="timestamp", freq="30D")]
+            ["source_account", pd.Grouper(key="timestamp", freq=f"{self.cfg.structuring_window_days}D")]
         ).agg(
             count=("amount", "size"),
             total=("amount", "sum"),
@@ -81,7 +96,7 @@ class StructuringDetector:
                     "window_start": str(row["timestamp"]),
                 },
                 indicators=[
-                    f"{row['count']} transactions in INR {self.cfg.structuring_lower/1e5:.0f}L-{self.cfg.ctr_threshold/1e5:.0f}L range within 30 days",
+                    f"{row['count']} transactions in INR {self.cfg.structuring_lower/1e5:.0f}L-{self.cfg.ctr_threshold/1e5:.0f}L range within {self.cfg.structuring_window_days} days",
                     f"Total: INR {row['total']:,.0f}",
                     "Classic structuring pattern",
                 ],
@@ -101,7 +116,7 @@ class StructuringDetector:
         split = daily[
             (daily["daily_total"] >= self.cfg.structuring_lower) &
             (daily["daily_total"] < self.cfg.ctr_threshold) &
-            (daily["txn_count"] >= 2)
+            (daily["txn_count"] >= self.cfg.structuring_split_min_count)
         ]
 
         results = []

@@ -9,51 +9,69 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from services.common.models import Alert, Case, CaseStatus, Priority
+from infrastructure.database import get_database
+from services.common.models import Alert, Case, CaseStatus, Priority, make_deterministic_alert_id
 
 logger = logging.getLogger(__name__)
 
 
 class CaseManager:
-    """Manages the lifecycle of investigation cases."""
+    """Manages the lifecycle of investigation cases.
+
+    Alerts are DB-backed (infrastructure/database.py `alerts` table) so
+    they survive a server restart instead of living only in an in-process
+    dict that got wiped on every pipeline re-run. Cases remain in-memory
+    for now — unifying them with the separate DB-backed `cases` table used
+    by the /api/cases routes is a known follow-up, out of scope here.
+    """
 
     def __init__(self):
-        self._alerts: Dict[str, Alert] = {}
         self._cases: Dict[str, Case] = {}
+
+    @property
+    def db(self):
+        return get_database()
+
+    @staticmethod
+    def _row_to_alert(row: Dict) -> Alert:
+        return Alert(
+            alert_id=row["alert_id"],
+            account_ids=row.get("account_ids") or ([row["account_id"]] if row.get("account_id") else []),
+            detection_type=row.get("pattern_type", ""),
+            score=row.get("risk_score", 0.0) or 0.0,
+            severity=row.get("severity", "MEDIUM"),
+            created_at=row.get("detected_at") or row.get("created_at", ""),
+            status=row.get("status", "open"),
+            assigned_to=row.get("assigned_to", ""),
+            notes=row.get("notes", ""),
+        )
 
     # ── Alerts ────────────────────────────────────────────────────────
 
-    def _find_open_alert(self, account_ids: List[str], detection_type: str) -> Optional[str]:
-        """Return alert_id if an open alert exists for these accounts + type, else None."""
-        account_set = set(account_ids)
-        for alert_id, alert in self._alerts.items():
-            if (alert.status in ("open", "under_review") and
-                    alert.detection_type == detection_type and
-                    set(alert.account_ids) == account_set):
-                return alert_id
-        return None
-
     def create_alert(self, account_ids: List[str], detection_type: str,
-                     score: float, severity: str) -> Alert:
-        alert_id = f"ALT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        alert = Alert(
-            alert_id=alert_id,
-            account_ids=account_ids,
-            detection_type=detection_type,
-            score=score,
-            severity=severity,
-        )
-        self._alerts[alert_id] = alert
+                     score: float, severity: str, date_str: Optional[str] = None) -> Alert:
+        date_str = date_str or datetime.now().strftime("%Y-%m-%d")
+        alert_id = make_deterministic_alert_id(account_ids, detection_type, date_str)
+        self.db.upsert_alert({
+            "alert_id": alert_id,
+            "account_ids": account_ids,
+            "pattern_type": detection_type,
+            "risk_score": score,
+            "risk_level": severity,
+            "severity": severity,
+            "status": "open",
+            "source": "pipeline",
+        })
         logger.info("Alert created: %s (%s, score=%.2f)", alert_id, detection_type, score)
-        return alert
+        return self._row_to_alert(self.db.get_alert(alert_id))
 
     def get_alert(self, alert_id: str) -> Optional[Alert]:
-        return self._alerts.get(alert_id)
+        row = self.db.get_alert(alert_id)
+        return self._row_to_alert(row) if row else None
 
     def list_alerts(self, status: Optional[str] = None) -> List[Alert]:
-        alerts = list(self._alerts.values())
-        if status:
-            alerts = [a for a in alerts if a.status == status]
+        rows = self.db.get_alerts(status=status, limit=1000)
+        alerts = [self._row_to_alert(r) for r in rows]
         return sorted(alerts, key=lambda a: a.score, reverse=True)
 
     # ── Cases ─────────────────────────────────────────────────────────
@@ -75,8 +93,10 @@ class CaseManager:
 
         # Link alerts to case
         for aid in case.alert_ids:
-            if aid in self._alerts:
-                self._alerts[aid].status = "ASSIGNED"
+            row = self.db.get_alert(aid)
+            if row:
+                row["status"] = "assigned"
+                self.db.upsert_alert(row)
 
         logger.info("Case created: %s (typology=%s, priority=%s)", case_id, typology, priority)
         return case
@@ -119,7 +139,7 @@ class CaseManager:
 
     def get_stats(self) -> Dict[str, int]:
         return {
-            "total_alerts": len(self._alerts),
+            "total_alerts": len(self.db.get_alerts(limit=100000)),
             "total_cases": len(self._cases),
             "open_cases": sum(1 for c in self._cases.values() if c.status == CaseStatus.OPEN.value),
             "investigating": sum(1 for c in self._cases.values() if c.status == CaseStatus.INVESTIGATING.value),
@@ -128,25 +148,51 @@ class CaseManager:
             "closed_fp": sum(1 for c in self._cases.values() if c.status == CaseStatus.CLOSED_FALSE_POSITIVE.value),
         }
 
-    def auto_create_alerts_from_detections(self, detection_results: Dict) -> List[Alert]:
-        """Automatically create alerts from detection results. Deduplicates open alerts. Capped at 500 total."""
-        # Reset alerts on each pipeline refresh so we don't accumulate stale ones
-        self._alerts = {}
-        alerts = []
+    def auto_create_alerts_from_detections(self, detection_results: Dict,
+                                            date_str: Optional[str] = None) -> Dict[str, List]:
+        """Upsert an alert per detection from this pipeline run (capped at the
+        top 500 by score) and mark any previously-open alert whose pattern
+        didn't re-fire this run as 'stale'. Unlike the old in-memory version,
+        this never wipes the alert store first — DB upsert semantics mean an
+        alert that re-fires keeps its original `detected_at` and only bumps
+        `last_seen_at`, and one that stops firing is closed out rather than
+        silently vanishing.
+
+        Returns a diff — alerts / new_ids / reactivated_ids / stale_ids —
+        so callers can tell "flagged for the first time today" apart from
+        "still active, seen again" (used by the daily run summary)."""
+        date_str = date_str or datetime.now().strftime("%Y-%m-%d")
         _MAX_ALERTS = 500
-        # Collect all (det, det_type) pairs sorted by score desc, then take top 500
+
+        existing_before = {row["alert_id"] for row in self.db.get_alerts(limit=100_000)}
+
         all_dets = []
         for det_type, results in detection_results.items():
-            for det in results:
-                all_dets.append(det)
+            all_dets.extend(results)
         all_dets.sort(key=lambda d: d.score, reverse=True)
+
+        alerts = []
+        current_ids = []
         for det in all_dets[:_MAX_ALERTS]:
             alert = self.create_alert(
                 account_ids=det.account_ids,
                 detection_type=det.detection_type,
                 score=det.score,
                 severity=det.severity,
+                date_str=date_str,
             )
             alerts.append(alert)
-        logger.info("Created %d alerts from detections (capped at %d)", len(alerts), _MAX_ALERTS)
-        return alerts
+            current_ids.append(alert.alert_id)
+
+        stale_ids = self.db.close_stale_alerts(current_ids)
+        new_ids = [aid for aid in current_ids if aid not in existing_before]
+        reactivated_ids = [aid for aid in current_ids if aid in existing_before]
+
+        logger.info("Alerts: %d total (%d new, %d reactivated, %d closed stale)",
+                    len(alerts), len(new_ids), len(reactivated_ids), len(stale_ids))
+        return {
+            "alerts": alerts,
+            "new_ids": new_ids,
+            "reactivated_ids": reactivated_ids,
+            "stale_ids": stale_ids,
+        }

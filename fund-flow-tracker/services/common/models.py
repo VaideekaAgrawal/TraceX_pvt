@@ -137,6 +137,23 @@ class DetectionResult:
 
 
 @dataclass
+class DetectionSummary:
+    """Public snapshot of a completed detection pipeline run — the one
+    object Investigation/Evidence/API code should read instead of reaching
+    into DetectionService's internal attributes (risk_scores,
+    detection_results, ensemble internals) or raw DataFrames directly."""
+    risk_scores: Dict[str, float] = field(default_factory=dict)
+    roles: Dict[str, Any] = field(default_factory=dict)
+    detection_results: Dict[str, List["DetectionResult"]] = field(default_factory=dict)
+    detection_flags: Dict[str, Dict[str, bool]] = field(default_factory=dict)
+    anomaly_scores: Dict[str, float] = field(default_factory=dict)
+    fraud_probabilities: Dict[str, float] = field(default_factory=dict)
+    feature_importance: Dict[str, float] = field(default_factory=dict)
+    centrality: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    pipeline_metrics: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class EnsembleScore:
     """Aggregated risk score from all detectors."""
     account_id: str
@@ -157,6 +174,19 @@ class EnsembleScore:
 # Investigation models
 # ═══════════════════════════════════════════════════════════════════════════
 
+def make_deterministic_alert_id(account_ids: List[str], detection_type: str, date_str: str) -> str:
+    """Same (accounts, pattern, date) always produces the same alert_id, so
+    re-detecting an already-known pattern refreshes its existing DB row
+    (updating last_seen_at/risk_score) instead of creating a duplicate.
+    account_ids is sorted first so the same group in a different order
+    still lands on the same id. Shared by the full-pipeline path and the
+    realtime lightweight-detector path so both can safely write into the
+    same alerts table without id collisions producing nonsensical
+    overwrites of unrelated alerts."""
+    content_key = f"{','.join(sorted(str(a) for a in account_ids))}-{detection_type}-{date_str}"
+    return f"ALT-{hashlib.sha256(content_key.encode()).hexdigest()[:12].upper()}"
+
+
 @dataclass
 class Alert:
     """System-generated alert for investigator review."""
@@ -166,7 +196,7 @@ class Alert:
     score: float
     severity: str
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    status: str = "OPEN"
+    status: str = "open"
     assigned_to: str = ""
     notes: str = ""
 

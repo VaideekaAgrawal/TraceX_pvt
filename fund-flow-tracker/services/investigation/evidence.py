@@ -17,7 +17,7 @@ from fpdf import FPDF
 
 from infrastructure.health import health
 from services.common.constants import SUSPICION_CATEGORIES
-from services.common.models import EvidencePack
+from services.common.models import EvidencePack, DetectionSummary
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +70,14 @@ class EvidenceGenerator:
     """Generate FIU-IND compliant Suspicious Transaction Report evidence packs."""
 
     def generate(self, case_id: str, account_ids: List[str],
-                 graph_engine, risk_scores: Dict[str, float],
-                 detection_results: Dict, transactions_df: pd.DataFrame,
+                 detection_summary: DetectionSummary, transactions_df: pd.DataFrame,
                  accounts_df: pd.DataFrame,
                  case_notes: str = "") -> EvidencePack:
         """Generate complete evidence pack with PDF + JSON + hash."""
 
         case_data = self._assemble(
-            case_id, account_ids, graph_engine, risk_scores,
-            detection_results, transactions_df, accounts_df, case_notes,
+            case_id, account_ids, detection_summary,
+            transactions_df, accounts_df, case_notes,
         )
 
         json_payload = json.dumps(case_data, default=str, indent=2)
@@ -100,8 +99,11 @@ class EvidenceGenerator:
 
         return pack
 
-    def _assemble(self, case_id, account_ids, graph_engine, risk_scores,
-                  detection_results, transactions_df, accounts_df, case_notes) -> Dict:
+    def _assemble(self, case_id, account_ids, detection_summary: DetectionSummary,
+                  transactions_df, accounts_df, case_notes) -> Dict:
+        risk_scores = detection_summary.risk_scores
+        detection_results = detection_summary.detection_results
+
         relevant_txns = transactions_df[
             transactions_df["source_account"].isin(account_ids) |
             transactions_df["dest_account"].isin(account_ids)

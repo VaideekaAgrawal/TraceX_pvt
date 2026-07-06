@@ -377,7 +377,7 @@ class EnsembleScorer:
         bc = centrality["betweenness"]
 
         # Build per-account detection flags
-        det_flags = self._build_flags(detection_results)
+        det_flags = self.build_flags(detection_results)
 
         anomaly_map = dict(zip(anomaly_results["account_id"], anomaly_results["anomaly_score"]))
         fraud_map = dict(zip(fraud_results["account_id"], fraud_results["fraud_prob"]))
@@ -499,7 +499,7 @@ class EnsembleScorer:
         return "P4"
 
     @staticmethod
-    def _build_flags(det_results: Dict[str, List[DetectionResult]]) -> Dict[str, Dict[str, bool]]:
+    def build_flags(det_results: Dict[str, List[DetectionResult]]) -> Dict[str, Dict[str, bool]]:
         flags: Dict[str, Dict[str, bool]] = {}
         for det_type, results in det_results.items():
             for r in results:

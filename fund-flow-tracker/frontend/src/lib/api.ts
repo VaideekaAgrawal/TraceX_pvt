@@ -220,6 +220,80 @@ export interface DashboardLive {
   dlq_depth: number;
 }
 
+export interface DailySummaryAlert {
+  alert_id: string;
+  account_id: string;
+  account_ids: string[];
+  pattern_type: string;
+  risk_score: number;
+  risk_level: string;
+  severity: string;
+  status: string;
+  detected_at: string;
+  last_seen_at: string;
+}
+
+export interface DailySummary {
+  run_date: string;
+  run_at: string;
+  new_alerts: DailySummaryAlert[];
+  reactivated_alerts: DailySummaryAlert[];
+  stale_alert_ids: string[];
+  total_accounts_flagged: number;
+  total_alerts_open: number;
+  accounts_ingested: number;
+  transactions_ingested: number;
+}
+
+// ── Rule Engine ──────────────────────────────────────────────────────────
+
+export interface PrimitiveSpec {
+  params: Record<string, string>; // param name -> type spec, e.g. "int" | "float" | "str" | "enum:a,b"
+  defaults: Record<string, string | number | boolean>;
+  ceilings: Record<string, number>;
+}
+
+export interface RuleConditionDraft {
+  primitive: string;
+  params: Record<string, string | number | boolean>;
+  negate: boolean;
+}
+
+export interface RuleJsonDraft {
+  combinator: "AND" | "OR";
+  conditions: RuleConditionDraft[];
+}
+
+export interface RuleDraft {
+  rule_id: string;
+  name: string;
+  description?: string;
+  detection_type: string;
+  severity: string;
+  rule_json: RuleJsonDraft;
+  enabled?: boolean;
+}
+
+export interface DetectionRule extends RuleDraft {
+  enabled: boolean;
+  is_builtin: boolean;
+  version: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuleDryRunResult {
+  matched_count: number;
+  sample_matches: Array<{
+    account_ids: string[];
+    score: number;
+    severity: string;
+    indicators: string[];
+  }>;
+  newly_flagged_accounts: string[];
+}
+
 export interface GraphValidationStats {
   nodes: number;
   edges: number;
@@ -416,6 +490,25 @@ export const api = {
     fetchApi<GraphValidationResponse>(`/api/graph/validate/${accountId}`),
 
   getDashboardLive: () => fetchApi<DashboardLive>("/api/dashboard/live"),
+  getDailySummary: (date?: string) =>
+    fetchApi<DailySummary>(`/api/daily-summary${date ? `?date=${date}` : ""}`),
+
+  // ── Rule Engine ──
+  getRulePrimitives: () => fetchApi<Record<string, PrimitiveSpec>>("/api/rules/primitives"),
+  getRules: () => fetchApi<DetectionRule[]>("/api/rules"),
+  getRule: (ruleId: string) => fetchApi<DetectionRule>(`/api/rules/${ruleId}`),
+  createRule: (rule: RuleDraft) =>
+    fetchApi<DetectionRule>("/api/rules", { method: "POST", body: JSON.stringify(rule) }),
+  updateRule: (ruleId: string, updates: Partial<RuleDraft>) =>
+    fetchApi<DetectionRule>(`/api/rules/${ruleId}`, { method: "PUT", body: JSON.stringify(updates) }),
+  deleteRule: (ruleId: string) => fetchApi<{ status: string }>(`/api/rules/${ruleId}`, { method: "DELETE" }),
+  enableRule: (ruleId: string) => fetchApi<DetectionRule>(`/api/rules/${ruleId}/enable`, { method: "POST" }),
+  disableRule: (ruleId: string) => fetchApi<DetectionRule>(`/api/rules/${ruleId}/disable`, { method: "POST" }),
+  dryRunRule: (detection_type: string, severity: string, rule_json: RuleJsonDraft) =>
+    fetchApi<RuleDryRunResult>("/api/rules/dry-run", {
+      method: "POST",
+      body: JSON.stringify({ detection_type, severity, rule_json }),
+    }),
 
   // ── Real-Time Fraud Detection Demo ──
   startRealtimeDemo: () =>

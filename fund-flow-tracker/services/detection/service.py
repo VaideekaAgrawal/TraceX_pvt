@@ -18,7 +18,7 @@ import pandas as pd
 from infrastructure.config import config
 from infrastructure.event_bus import bus, Topics
 from infrastructure.health import health
-from services.common.models import DetectionResult
+from services.common.models import DetectionResult, DetectionSummary
 from services.detection.features import FeatureExtractor
 from services.detection.layering import LayeringDetector
 from services.detection.round_trip import RoundTripDetector
@@ -29,6 +29,7 @@ from services.detection.fan_out import FanOutFanInDetector
 from services.detection.ensemble import (
     AnomalyDetector, FraudClassifier, RoleClassifier, EnsembleScorer,
 )
+from services.detection.rule_engine import RuleEngine
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,17 @@ class DetectionService:
     """Orchestrates all detection and scoring pipelines."""
 
     def __init__(self):
+        # Kept for direct unit-testing of individual detectors; the main
+        # pipeline (see run_full_pipeline step 4) goes through
+        # self.rule_engine instead, which sources params from the DB-backed
+        # detection_rules table rather than calling these directly.
         self.layering = LayeringDetector()
         self.round_trip = RoundTripDetector()
         self.structuring = StructuringDetector()
         self.dormancy = DormancyDetector()
         self.profile = ProfileMismatchDetector()
         self.fan_out_detector = FanOutFanInDetector()
+        self.rule_engine = RuleEngine()
 
         self.anomaly_detector = AnomalyDetector()
         self.fraud_classifier = FraudClassifier()
@@ -135,61 +141,23 @@ class DetectionService:
                     "fraud_pred": 0,
                 })
 
-            # ── 4. Pattern detection (5 detectors) ──
+            # ── 4. Pattern detection (Rule Engine — DB-backed rules, replacing
+            #        the hardcoded 6-detector-instance list) ──
             t0 = time.time()
-            logger.info("┌─ STEP 4/6: Pattern Detection (5 detectors)")
+            logger.info("┌─ STEP 4/6: Pattern Detection (Rule Engine)")
+            raw_results = self.rule_engine.run_all(graph_engine, accounts_df, transactions_df)
 
-            logger.info("  ├─ Running Layering detector...")
-            t1 = time.time()
-            layering_results = self.layering.detect(graph_engine, transactions_df)
-            logger.info("  ├─ Layering: %d detections (%.1fs)", len(layering_results), time.time() - t1)
-
-            logger.info("  ├─ Running Round-Trip detector...")
-            t1 = time.time()
-            rt_results = self.round_trip.detect(graph_engine, transactions_df)
-            logger.info("  ├─ Round-Trip: %d detections (%.1fs)", len(rt_results), time.time() - t1)
-
-            logger.info("  ├─ Running Structuring detector...")
-            t1 = time.time()
-            struct_results = self.structuring.detect(graph_engine, transactions_df)
-            logger.info("  ├─ Structuring: %d detections (%.1fs)", len(struct_results), time.time() - t1)
-
-            logger.info("  ├─ Running Dormancy detector...")
-            t1 = time.time()
-            dorm_results = self.dormancy.detect(graph_engine, transactions_df)
-            logger.info("  ├─ Dormancy: %d detections (%.1fs)", len(dorm_results), time.time() - t1)
-
-            logger.info("  ├─ Running Profile Mismatch detector...")
-            t1 = time.time()
-            prof_results = self.profile.detect(graph_engine, transactions_df, accounts_df)
-            logger.info("  ├─ Profile Mismatch: %d detections (%.1fs)", len(prof_results), time.time() - t1)
-
-            logger.info("  ├─ Running Fan-Out/Fan-In detector...")
-            t1 = time.time()
-            fan_results = self.fan_out_detector.detect(graph_engine, transactions_df)
-            fan_out_r = [r for r in fan_results if r.detection_type == "fan_out"]
-            fan_in_r = [r for r in fan_results if r.detection_type == "fan_in"]
-            logger.info("  ├─ Fan-Out/In: %d detections (%.1fs)", len(fan_results), time.time() - t1)
-
-            # Cap each detector at top 200 by score — prevents memory/perf blowup on large datasets
+            # Cap each detection type at top 200 by score — prevents memory/perf blowup on large datasets
             _MAX_PER_TYPE = 200
             def _cap(results: List[DetectionResult]) -> List[DetectionResult]:
                 if len(results) <= _MAX_PER_TYPE:
                     return results
                 return sorted(results, key=lambda r: r.score, reverse=True)[:_MAX_PER_TYPE]
 
-            self.detection_results = {
-                "layering":        _cap(layering_results),
-                "round_trip":      _cap(rt_results),
-                "structuring":     _cap(struct_results),
-                "dormancy":        _cap(dorm_results),
-                "profile_mismatch":_cap(prof_results),
-                "fan_out":         _cap(fan_out_r),
-                "fan_in":          _cap(fan_in_r),
-            }
+            self.detection_results = {det_type: _cap(results) for det_type, results in raw_results.items()}
             total_det = sum(len(v) for v in self.detection_results.values())
-            logger.info("└─ STEP 4/6: ✅ Total %d detections across 6 types (capped at %d each, %.1fs)",
-                        total_det, _MAX_PER_TYPE, time.time() - t0)
+            logger.info("└─ STEP 4/6: ✅ Total %d detections across %d types (capped at %d each, %.1fs)",
+                        total_det, len(self.detection_results), _MAX_PER_TYPE, time.time() - t0)
             health.increment("detections_run")
 
             # ── 5. Role classification ──
@@ -264,6 +232,135 @@ class DetectionService:
             health.record_error(_SERVICE, str(exc))
             logger.error("❌ DETECTION PIPELINE FAILED: %s", exc, exc_info=True)
             raise
+
+    def get_summary(self, graph_service=None) -> DetectionSummary:
+        """Public snapshot of the last completed run_full_pipeline() call —
+        the one object Investigation/Evidence code should consume instead
+        of reaching into risk_scores/detection_results/ensemble directly."""
+        anomaly_scores: Dict[str, float] = {}
+        if self.anomaly_results is not None:
+            anomaly_scores = dict(zip(self.anomaly_results["account_id"], self.anomaly_results["anomaly_score"]))
+        fraud_probs: Dict[str, float] = {}
+        if self.fraud_results is not None:
+            fraud_probs = dict(zip(self.fraud_results["account_id"], self.fraud_results["fraud_prob"]))
+        centrality = graph_service.compute_centrality() if graph_service is not None else {}
+
+        return DetectionSummary(
+            risk_scores=dict(self.risk_scores),
+            roles=dict(self.roles),
+            detection_results=self.detection_results,
+            detection_flags=self.ensemble.build_flags(self.detection_results),
+            anomaly_scores=anomaly_scores,
+            fraud_probabilities=fraud_probs,
+            feature_importance=self.fraud_classifier.get_feature_importance(),
+            centrality=centrality,
+            pipeline_metrics=dict(self.fraud_metrics),
+        )
+
+    def get_account_detail(self, account_id: str, accounts_df: pd.DataFrame,
+                           transactions_df: pd.DataFrame, graph_service) -> Dict[str, Any]:
+        """Consolidates the per-account risk/confidence/priority computation
+        that /api/accounts/{id} and /api/anomaly's queue used to each
+        duplicate inline — including /api/accounts/{id} reaching directly
+        into EnsembleScorer's (formerly private) flag-building method.
+        Returns the raw scored values; the API layer still owns presentation
+        concerns like risk_level bucketing/coloring and rounding."""
+        score = self.risk_scores.get(account_id, 0)
+        role_info = self.roles.get(account_id, {"role": "UNKNOWN", "confidence": 0})
+
+        anom_score = 0.0
+        if self.anomaly_results is not None:
+            ar = self.anomaly_results[self.anomaly_results["account_id"] == account_id]
+            anom_score = float(ar["anomaly_score"].iloc[0]) if len(ar) > 0 else 0.0
+
+        fraud_prob = 0.0
+        if self.fraud_results is not None:
+            fr = self.fraud_results[self.fraud_results["account_id"] == account_id]
+            fraud_prob = float(fr["fraud_prob"].iloc[0]) if len(fr) > 0 else 0.0
+
+        centrality = graph_service.compute_centrality()
+        det_flags = self.ensemble.build_flags(self.detection_results).get(account_id, {})
+        conf_level, conf_count, indicators = self.ensemble.compute_confidence(
+            account_id, det_flags, anom_score, fraud_prob,
+            centrality["pagerank"].get(account_id, 0),
+            centrality["betweenness"].get(account_id, 0),
+        )
+
+        acc_txns = transactions_df[
+            (transactions_df["source_account"] == account_id) | (transactions_df["dest_account"] == account_id)
+        ]
+        total_amount = float(acc_txns["amount"].sum())
+        n_cp = len(set(acc_txns["source_account"]) | set(acc_txns["dest_account"])) - 1
+        priority = self.ensemble.compute_priority(score, conf_level, total_amount, max(n_cp, 1))
+
+        return {
+            "risk_score": score,
+            "role": role_info["role"],
+            "role_confidence": role_info.get("confidence", 0),
+            "anomaly_score": anom_score,
+            "fraud_probability": fraud_prob,
+            "confidence": {"level": conf_level, "count": conf_count, "indicators": indicators},
+            "priority": priority,
+            "total_amount": total_amount,
+            "counterparties": n_cp,
+        }
+
+    def get_all_account_summaries(self, accounts_df: pd.DataFrame,
+                                  transactions_df: pd.DataFrame, graph_service) -> List[Dict[str, Any]]:
+        """Vectorized equivalent of get_account_detail() for every scored
+        account at once, sorted by risk descending — used by /api/anomaly's
+        investigation queue. Computes centrality and detection flags once
+        (not per account), matching the perf discipline the old inline
+        route logic already had."""
+        anom_score_map = (
+            self.anomaly_results.set_index("account_id")["anomaly_score"].to_dict()
+            if self.anomaly_results is not None and not self.anomaly_results.empty else {}
+        )
+        fraud_prob_map = (
+            self.fraud_results.set_index("account_id")["fraud_prob"].to_dict()
+            if self.fraud_results is not None and not self.fraud_results.empty else {}
+        )
+        centrality = graph_service.compute_centrality()
+        all_det_flags = self.ensemble.build_flags(self.detection_results)
+        branch_city_map = (
+            dict(zip(accounts_df["account_id"], accounts_df.get("branch_city", "")))
+            if accounts_df is not None else {}
+        )
+
+        summaries = []
+        for acc_id, score in sorted(self.risk_scores.items(), key=lambda x: x[1], reverse=True):
+            role_info = self.roles.get(acc_id, {"role": "NORMAL", "confidence": 0})
+            anom_score = anom_score_map.get(acc_id, 0.0)
+            fraud_prob = fraud_prob_map.get(acc_id, 0.0)
+
+            det_flags = all_det_flags.get(acc_id, {})
+            conf_level, conf_count, indicators = self.ensemble.compute_confidence(
+                acc_id, det_flags, anom_score, fraud_prob,
+                centrality["pagerank"].get(acc_id, 0),
+                centrality["betweenness"].get(acc_id, 0),
+            )
+            total_amount = 0.0
+            if transactions_df is not None:
+                acc_txns = transactions_df[
+                    (transactions_df["source_account"] == acc_id) | (transactions_df["dest_account"] == acc_id)
+                ]
+                total_amount = float(acc_txns["amount"].sum())
+            priority = self.ensemble.compute_priority(score, conf_level, total_amount, 1)
+
+            summaries.append({
+                "account_id": acc_id,
+                "risk_score": score,
+                "role": role_info["role"],
+                "priority": priority,
+                "confidence_level": conf_level,
+                "confidence_count": conf_count,
+                "indicators": indicators,
+                "anomaly_score": anom_score,
+                "fraud_probability": fraud_prob,
+                "total_amount": total_amount,
+                "branch_city": branch_city_map.get(acc_id, ""),
+            })
+        return summaries
 
     @staticmethod
     def _build_labels(transactions_df: pd.DataFrame, features_df: pd.DataFrame) -> pd.Series:

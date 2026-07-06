@@ -12,7 +12,8 @@ Detection method:
   Flag if max window unique-counterparties ≥ threshold.
 """
 import logging
-from typing import List
+from types import SimpleNamespace
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,8 +27,19 @@ logger = logging.getLogger(__name__)
 class FanOutFanInDetector:
     """Detect high-fan-degree AML patterns: fan-out, fan-in, gather-scatter."""
 
-    def __init__(self):
-        self.cfg = config.detection
+    def __init__(self, params: Optional[Dict] = None):
+        """`params` overrides individual thresholds without touching the
+        global config singleton — omit it (the default) to get today's
+        exact configured behavior. Used by the Rule Engine's `fan_degree`
+        and `bipartite_scatter_gather` primitives, which each map to one of
+        this detector's internal checks."""
+        base = config.detection
+        p = params or {}
+        self.cfg = SimpleNamespace(
+            fan_out_min_degree=p.get("min_degree", base.fan_out_min_degree),
+            fan_out_time_window_days=p.get("window_days", base.fan_out_time_window_days),
+            bipartite_min_side=p.get("min_side", 3),
+        )
 
     def detect(self, graph_engine, transactions_df: pd.DataFrame) -> List[DetectionResult]:
         df = transactions_df.copy()
@@ -45,7 +57,7 @@ class FanOutFanInDetector:
             df, group_col="dest_account", target_col="source_account",
             min_fan=min_fan, window_ns=window_ns, direction="fan_in",
         )
-        bipartite_results = self._detect_bipartite(df, min_side=3, window_ns=window_ns)
+        bipartite_results = self._detect_bipartite(df, min_side=self.cfg.bipartite_min_side, window_ns=window_ns)
 
         results = fan_out_results + fan_in_results + bipartite_results
         results.sort(key=lambda r: r.score, reverse=True)

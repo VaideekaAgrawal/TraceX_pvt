@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { api, OverviewData, DashboardLive } from "@/lib/api";
+import { api, OverviewData, DashboardLive, DailySummary } from "@/lib/api";
 import { Card, StatCard, Loader, SkeletonCard, InfoTooltip } from "@/components/ui";
 import { formatINR, getRiskBg, getRiskDot, getRoleIcon } from "@/lib/utils";
 import {
@@ -63,6 +63,8 @@ export default function DashboardPage() {
   const [notInitialized, setNotInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [liveData, setLiveData] = useState<DashboardLive | null>(null);
+  const [dailySummary, setDailySummary] = useState<DailySummary | null>(null);
+  const [todaysActivityExpanded, setTodaysActivityExpanded] = useState<"new" | "reactivated" | null>(null);
   const ALERTS_PER_PAGE = 10;
 
   const loadDashboard = () => {
@@ -75,6 +77,7 @@ export default function DashboardPage() {
         }
       })
       .finally(() => { setLoading(false); setRefreshing(false); });
+    api.getDailySummary().then(setDailySummary).catch(() => setDailySummary(null));
   };
 
   useEffect(() => {
@@ -212,6 +215,56 @@ export default function DashboardPage() {
           </div>
         </div>
       </Card>
+
+      {/* Today's Activity — distinguishes patterns flagged for the first time
+          today from ones still active/re-detected on the latest pipeline run */}
+      {dailySummary && (
+        <Card className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Today's Activity <InfoTooltip text="New Today = patterns detected for the first time on the most recent pipeline run. Reactivated = still-active alerts whose pattern was detected again (not a new finding)." />
+            </h3>
+            <span className="text-[10px] text-slate-500">as of {new Date(dailySummary.run_at).toLocaleTimeString()}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={() => setTodaysActivityExpanded(todaysActivityExpanded === "new" ? null : "new")}
+              className="text-left rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 hover:bg-emerald-500/10 transition"
+            >
+              <span className="text-slate-400 text-xs block">🆕 New Today</span>
+              <span className="text-emerald-400 font-bold text-xl">{dailySummary.new_alerts.length}</span>
+            </button>
+            <button
+              onClick={() => setTodaysActivityExpanded(todaysActivityExpanded === "reactivated" ? null : "reactivated")}
+              className="text-left rounded-lg border border-slate-700 bg-slate-800/40 p-3 hover:bg-slate-800/70 transition"
+            >
+              <span className="text-slate-400 text-xs block">🔁 Reactivated</span>
+              <span className="text-slate-300 font-bold text-xl">{dailySummary.reactivated_alerts.length}</span>
+            </button>
+          </div>
+          {todaysActivityExpanded && (
+            <div className="mt-3 pt-3 border-t border-slate-800 space-y-1.5 max-h-56 overflow-y-auto">
+              {(todaysActivityExpanded === "new" ? dailySummary.new_alerts : dailySummary.reactivated_alerts).map((a) => (
+                <div key={a.alert_id} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${getRiskBg(a.severity)}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${getRiskDot(a.severity)}`} />
+                      {a.severity}
+                    </span>
+                    <span className="text-slate-300">{a.pattern_type.replace(/_/g, " ")}</span>
+                  </div>
+                  <Link href={`/graph?account=${a.account_id}`} className="font-mono text-blue-400 hover:text-blue-300">
+                    {a.account_id} →
+                  </Link>
+                </div>
+              ))}
+              {(todaysActivityExpanded === "new" ? dailySummary.new_alerts : dailySummary.reactivated_alerts).length === 0 && (
+                <p className="text-slate-600 text-xs">None</p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Stat Cards - Clickable to Expand */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
