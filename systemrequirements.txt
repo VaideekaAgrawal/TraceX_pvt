@@ -1,0 +1,1015 @@
+This is how I would structure it if you were designing an enterprise AML Investigation Layer similar to those used by banks like Oracle FCCM, SAS AML, NICE Actimize, or Quantexa. The workflow progresses naturally from Alert → L1 Investigation → Decision → L2 Investigation → Reporting, with each stage exposing only the information needed at that level.
+
+                                      AML INVESTIGATION LAYER
+                                              │
+                                              ▼
+──────────────────────────────────────────────────────────────────────────────────────────────
+                                   ALERT GENERATED
+──────────────────────────────────────────────────────────────────────────────────────────────
+• Real-time alert received from Detection Engine
+• Alert added to Investigation Dashboard Queue
+• Alert Priority Assigned (Critical / High / Medium / Low)
+• Risk Score Assigned
+• Alert Type Identified
+    - Structuring
+    - Layering
+    - Rapid Movement
+    - Circular Transactions
+    - Sanction Match
+    - Mule Activity
+    - etc.
+• Case ID Generated
+• Timestamp Logged
+                                              │
+                                              ▼
+──────────────────────────────────────────────────────────────────────────────────────────────
+                                 CASE MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────────────────────
+• Case automatically created
+• Assign Investigator
+• Investigation Status
+      New
+        ↓
+   Assigned
+        ↓
+  In Progress
+        ↓
+ Awaiting Review
+        ↓
+ Escalated / Closed
+• SLA Timer Starts
+• Audit Trail Begins
+                                              │
+                                              ▼
+══════════════════════════════════════════════════════════════════════════════════════════════
+                      LEVEL 1 INVESTIGATION (TRIAGE)
+══════════════════════════════════════════════════════════════════════════════════════════════
+Goal:
+Determine whether this alert is a False Positive or requires escalation.
+Estimated Investigation Time:
+15–30 minutes
+────────────────────────────────────────────────────────────────────
+1. Alert Summary
+────────────────────────────────────────────────────────────────────
+• Alert ID
+• Alert Type
+• Detection Rule Triggered
+• Priority
+• Risk Score
+• Trigger Time
+• Account Number
+• Customer Name
+• Transaction Amount
+• Current Status
+────────────────────────────────────────────────────────────────────
+2. Explain WHY the Alert was Triggered
+────────────────────────────────────────────────────────────────────
+AI Generated Explanation
+Example:
+Pattern:
+Rapid Layering
+Reason:
+Funds moved through six accounts within two hours.
+Rules Triggered:
+✓ High Velocity
+✓ Circular Flow
+✓ Structuring
+Confidence:
+94%
+────────────────────────────────────────────────────────────────────
+3. Customer Snapshot
+────────────────────────────────────────────────────────────────────
+Quick Customer Profile
+• Customer Name
+• Customer ID
+• Risk Rating
+• Occupation
+• Account Type
+• Account Age
+• KYC Status
+• CDD / EDD Status
+• PEP Status
+• Sanction Status
+• Products Used
+• Previous Alert Count
+────────────────────────────────────────────────────────────────────
+4. Geographic Risk Assessment
+────────────────────────────────────────────────────────────────────
+• Origin Region
+• Destination Region
+• Countries involved
+• High Risk Jurisdiction?
+• FATF Grey/Black List?
+• Sanctioned Country?
+• Branch Location
+────────────────────────────────────────────────────────────────────
+5. Transaction Summary
+────────────────────────────────────────────────────────────────────
+Instead of showing raw transactions
+Display
+• Total Transaction Value
+• Number of Transactions
+• Counterparty Count
+• Incoming vs Outgoing
+• Channels Used
+• Products Used
+• Velocity
+• Average Amount
+• Largest Transaction
+• Deviation from Customer's Normal Behaviour
+────────────────────────────────────────────────────────────────────
+6. Transaction Purpose
+────────────────────────────────────────────────────────────────────
+• Payment Purpose
+• Narration
+• Merchant Type
+• Customer Declared Purpose
+• Is purpose consistent with profile?
+────────────────────────────────────────────────────────────────────
+7. Graph Visualization (Simplified)
+────────────────────────────────────────────────────────────────────
+Quick Money Flow
+Customer
+    ↓
+ Mule
+    ↓
+ Sink
+or
+Source
+   ↓
+Customer
+   ↓
+5 Beneficiaries
+Automatically identify
+• Source Account
+• Mule Account(s)
+• Sink Account
+• Layering
+• Circular Flow
+• Funnel Pattern
+• Star Pattern
+────────────────────────────────────────────────────────────────────
+8. AI Investigation Summary
+────────────────────────────────────────────────────────────────────
+Automatically Generated Summary
+Example
+"Customer received ₹18 lakh from five unrelated accounts
+within three hours and transferred 96% of funds to one
+beneficiary located in another state. Behaviour deviates
+significantly from historical activity and resembles
+layering."
+────────────────────────────────────────────────────────────────────
+9. Previous Alert Summary
+────────────────────────────────────────────────────────────────────
+Main Account
+• Previous Alerts
+• Previous SAR/STR
+• Previous False Positives
+• Risk Trend
+────────────────────────────────────────────────────────────────────
+10. Investigator Decision
+────────────────────────────────────────────────────────────────────
+Choose one
+✓ Close as False Positive
+✓ Request More Information
+✓ Escalate to Level 2
+Add
+• Investigation Notes
+• Evidence Bookmark
+• Decision Reason
+                                              │
+                                              ▼
+───────────────────────────────
+False Positive?
+───────────────────────────────
+YES
+ │
+ ▼
+Close Case
+Update Audit Trail
+Store Investigation Notes
+OR
+NO
+ │
+ ▼
+══════════════════════════════════════════════════════════════════════════════════════════════
+                    LEVEL 2 INVESTIGATION (DEEP INVESTIGATION)
+══════════════════════════════════════════════════════════════════════════════════════════════
+Goal:
+Perform complete AML investigation and collect evidence.
+────────────────────────────────────────────────────────────────────
+1. Full Network Graph Exploration
+────────────────────────────────────────────────────────────────────
+Interactive Graph
+Expand
+• 1 Hop
+• 2 Hop
+• 3 Hop
+• N Hop
+Features
+• Expand Network
+• Collapse Nodes
+• Timeline Mode
+• Filter by Amount
+• Filter by Date
+• Highlight Suspicious Paths
+────────────────────────────────────────────────────────────────────
+2. Complete Customer Profile
+────────────────────────────────────────────────────────────────────
+• Full KYC
+• Beneficial Owner
+• Linked Accounts
+• Linked Cards
+• Loans
+• Deposits
+• Occupation
+• Employer
+• Income
+• Expected Transaction Behaviour
+• Risk Rating
+• Previous SARs
+• Historical Risk Score
+────────────────────────────────────────────────────────────────────
+3. Complete Transaction Analysis
+────────────────────────────────────────────────────────────────────
+Searchable Transaction Table
+Filters
+• Date
+• Amount
+• Channel
+• Branch
+• Product
+• Account
+• Direction
+• Transaction Type
+Export Available
+────────────────────────────────────────────────────────────────────
+4. Historical Behaviour Analysis
+────────────────────────────────────────────────────────────────────
+Analyse
+• Monthly Spending
+• Cash Deposit Trends
+• Transfer Trends
+• Dormant Account Activation
+• Salary Mismatch
+• Velocity Increase
+• Behaviour Changes
+• Seasonal Trends
+────────────────────────────────────────────────────────────────────
+5. Relationship Analysis
+────────────────────────────────────────────────────────────────────
+Discover hidden relationships
+Shared
+• Phone Number
+• Email
+• PAN
+• Aadhaar
+• Address
+• Device ID
+• IP Address
+• Employer
+• Nominee
+• Introducer
+• Branch
+• Beneficial Owner
+Identify connected entities.
+────────────────────────────────────────────────────────────────────
+6. Explain Suspicious Pattern
+────────────────────────────────────────────────────────────────────
+Example
+Pattern
+Circular Transactions
+Evidence
+A
+↓
+B
+↓
+C
+↓
+A
+Detected
+• Four Cycles
+• Six Hours
+• ₹42 Lakhs
+Confidence
+96%
+────────────────────────────────────────────────────────────────────
+7. AI Investigation Assistant
+────────────────────────────────────────────────────────────────────
+Natural Language Queries
+Examples
+"Why is this account suspicious?"
+"Show all large outgoing transfers."
+"Compare with last month."
+"Explain this layering pattern."
+"Summarize the investigation."
+────────────────────────────────────────────────────────────────────
+8. Previous Alert & Case History
+────────────────────────────────────────────────────────────────────
+Not only the main account
+Also
+Connected Accounts
+Example
+Account A
+5 Alerts
+Account B
+3 Alerts
+Account C
+SAR Filed
+Account D
+Sanction Match
+────────────────────────────────────────────────────────────────────
+9. Timeline Investigation
+────────────────────────────────────────────────────────────────────
+Chronological View
+10:00
+Cash Deposit
+↓
+10:08
+Transfer
+↓
+10:14
+Transfer
+↓
+10:21
+Transfer
+↓
+10:40
+Cash Withdrawal
+Allows reconstruction of fund movement.
+────────────────────────────────────────────────────────────────────
+10. Evidence Management
+────────────────────────────────────────────────────────────────────
+Investigator can
+✓ Bookmark Transactions
+✓ Bookmark Accounts
+✓ Highlight Graph Paths
+✓ Pin Evidence
+✓ Attach Documents
+✓ Save Graph Snapshots
+✓ Add Investigation Notes
+✓ Collaborate with Other Investigators
+────────────────────────────────────────────────────────────────────
+11. AI Investigation Report Generation
+────────────────────────────────────────────────────────────────────
+Automatically Generate
+• Executive Summary
+• Findings
+• Suspicious Activities
+• Supporting Evidence
+• Transactions of Interest
+• Network Analysis
+• Investigator Notes
+• Recommendation
+                                              │
+                                              ▼
+══════════════════════════════════════════════════════════════════════════════════════════════
+                             FINAL DECISION
+══════════════════════════════════════════════════════════════════════════════════════════════
+Investigator Recommendation
+├── False Positive
+│      • Close Case
+│      • Record Reason
+│
+├── Monitoring Required
+│      • Increase Risk Score
+│      • Continue Surveillance
+│
+├── Escalate to Compliance Team
+│      • Senior Review
+│
+└── Generate SAR / STR
+       • Submit to Regulatory Authority
+       • Archive Evidence
+       • Maintain Audit Trail
+                                              │
+                                              ▼
+══════════════════════════════════════════════════════════════════════════════════════════════
+                              CASE CLOSED
+══════════════════════════════════════════════════════════════════════════════════════════════
+• Investigation History Stored
+• Audit Logs Preserved
+• Evidence Archived
+• Timeline Saved
+• Reports Stored
+• Risk Profile Updated
+• Feedback Sent to Detection Engine (to improve future alert accuracy)
+
+This structure closely mirrors the workflow used in commercial AML investigation platforms. It also clearly separates L1 (rapid triage and disposition) from L2 (deep forensic investigation) while incorporating AI assistance, graph analytics, case management, and report generation. For a hackathon or production-style architecture, this is a comprehensive end-to-end investigation flow.
+
+Estimated workflow is provided above 
+these are the features I want in my system and the deatiled plan: 
+
+⸻
+
+1. AI Case Prioritization Queue (AI Triage)
+
+Problem
+
+Banks receive thousands of alerts every day. Investigators often process them in the order they arrive or based on static priority levels, causing genuinely critical cases to be delayed.
+
+Solution
+
+Instead of displaying alerts as a simple queue, the system uses AI to dynamically prioritize them based on multiple risk factors.
+
+AI considers
+
+* Risk score
+* Transaction amount
+* Number of accounts involved
+* Number of suspicious patterns detected
+* Previous SAR history
+* Network risk score
+* Presence of sanctioned/PEP entities
+* Historical behaviour deviation
+* Geographic risk
+* Confidence score of detection model
+
+Output
+
+Instead of
+
+Alert 1
+Alert 2
+Alert 3
+
+display
+
+★★★★★ Critical
+Possible Layering Network
+Risk: 98
+Reason:
+Connected to previously reported mule network
+--------------------------------
+★★★★☆
+Possible Structuring
+Risk: 88
+Reason:
+Cash deposits across five branches
+--------------------------------
+★★★☆☆
+Medium Priority
+
+Benefit
+
+* Reduces investigation backlog
+* Ensures critical cases are handled first
+* Improves analyst productivity
+
+⸻
+
+2. Similar Historical Cases
+
+Problem
+
+Investigators often repeat work that has already been done in previous cases.
+
+Solution
+
+When a new alert is generated, the AI searches previously investigated cases for similar transaction patterns, graph structures, customer behaviours, and investigation outcomes.
+
+The similarity can be based on:
+
+* Accounts involved
+* Transaction flow pattern
+* Typology (layering, structuring, etc.)
+* Network topology
+* Shared entities (devices, IPs, merchants)
+* Similar transaction amounts and timing
+
+Example
+
+Current Case
+↓
+93% Similar
+↓
+Case #2314
+Outcome:
+SAR Filed
+Reason:
+Layering through seven mule accounts
+Recommended Investigation:
+Expand two-hop network
+
+Benefit
+
+* Reuses institutional knowledge
+* Helps junior investigators
+* Standardizes investigations
+
+⸻
+
+3. Timeline + Graph Synchronization
+
+Problem
+
+Most AML tools show the graph and transaction timeline as separate views.
+
+Investigators constantly switch between them.
+
+Solution
+
+Synchronize both components.
+
+Example
+
+Click on
+
+10:42 AM
+₹4,50,000
+Account A → Account B
+
+Automatically
+
+* highlight that edge in the graph
+* zoom to those nodes
+
+Similarly,
+
+clicking a graph edge automatically jumps to the corresponding transaction in the timeline.
+
+Benefit
+
+* Much faster investigation
+* Easier understanding of fund movement
+
+⸻
+
+4. Graph Filters
+
+Problem
+
+Graphs become unusable once hundreds of accounts appear.
+
+Solution
+
+Provide interactive filters.
+
+Examples
+
+Show only
+
+* suspicious accounts
+* high-risk accounts
+* accounts above chosen risk score
+* transactions above ₹50,000
+* transactions in last 24 hours
+* international transfers
+* UPI only
+* cash only
+* incoming only
+* outgoing only
+* source accounts
+* mule accounts
+* sink accounts
+* accounts with previous SAR
+* hide low-risk nodes
+
+Benefit
+
+Investigators only see relevant information.
+
+⸻
+
+5. Network Risk Score
+
+Problem
+
+Traditional AML systems score individual customers.
+
+Money laundering is performed by networks.
+
+Solution
+
+Generate a network-level risk score considering
+
+* number of suspicious nodes
+* previous SARs
+* graph centrality
+* number of mule accounts
+* suspicious typologies
+* sanctioned entities
+* network density
+* money concentration
+* behavioural anomalies
+
+Example
+
+Customer Risk
+64
+Network Risk
+95
+Reason
+8 linked mule accounts
+3 previous SARs
+2 sanctioned entities
+
+Benefit
+
+Better reflects organized financial crime.
+
+⸻
+
+6. AI Investigation Copilot
+
+Problem
+
+Investigators manually search multiple screens.
+
+Solution
+
+Provide a conversational assistant that understands the current case.
+
+Examples
+
+Show the largest outgoing transfers.
+Why was this account flagged?
+Which account is acting as the mule?
+Summarize today's investigation.
+Compare with previous month's behaviour.
+Show only suspicious UPI transfers.
+Expand two-hop neighbours.
+Explain this circular transaction.
+
+Benefit
+
+Reduces navigation time and training requirements.
+
+⸻
+
+7. Auto-generated Investigation Narrative
+
+Problem
+
+Writing investigation reports consumes significant investigator time.
+
+Solution
+
+Generate a narrative summarizing
+
+* suspicious activities
+* evidence
+* graph findings
+* transaction patterns
+* investigator observations
+
+Example
+
+The customer received ₹48 lakh from six unrelated accounts
+within two hours.
+Funds were immediately distributed through four intermediate
+accounts before reaching an international beneficiary.
+Three connected accounts have previously appeared in SARs.
+The overall behaviour strongly matches a layering typology.
+
+Investigators can edit before submission.
+
+Benefit
+
+Reduces reporting effort.
+
+⸻
+
+8. Relationship Explorer
+
+Problem
+
+Relationships are often hidden across different banking systems.
+
+Solution
+
+Automatically discover hidden relationships.
+
+Relationships may include
+
+* shared phone
+* shared email
+* shared PAN
+* shared Aadhaar
+* shared device
+* shared IP
+* shared address
+* common employer
+* nominee
+* introducer
+* common merchant
+* beneficial ownership
+
+Display as an interactive relationship graph.
+
+Benefit
+
+Uncovers hidden criminal networks.
+
+⸻
+
+9. Graph Replay (Time-based Money Trail)
+
+Problem
+
+Static graphs cannot explain how laundering occurred over time.
+
+Solution
+
+Replay transactions chronologically.
+
+Timeline slider
+
+09:00
+↓
+09:10
+↓
+09:20
+↓
+09:30
+
+Graph animates
+
+Deposit
+↓
+Split
+↓
+Layer
+↓
+Merge
+↓
+Withdrawal
+
+Benefit
+
+Investigators visually understand the laundering process.
+
+⸻
+
+10. Watchlist Management
+
+Purpose
+
+Investigators can mark
+
+* customers
+* accounts
+* devices
+* merchants
+* companies
+
+for enhanced future monitoring.
+
+Future alerts involving these entities automatically receive higher priority.
+
+Benefit
+
+Persistent monitoring of risky entities.
+
+⸻
+
+11. Detection Feedback Loop
+
+Problem
+
+False positives remain high because detection systems rarely learn from investigator decisions.
+
+Solution
+
+Every investigation outcome becomes feedback.
+
+Investigator
+↓
+Marked False Positive
+↓
+Detection Engine
+↓
+Update Rule Confidence
+↓
+Reduce Similar Alerts
+
+Similarly
+
+Confirmed SAR
+↓
+Increase rule confidence
+↓
+Improve future detection
+
+Benefit
+
+Continuously improves detection accuracy.
+
+⸻
+
+12. Audit Trail
+
+Every investigator action is logged.
+
+Examples
+
+* alert opened
+* graph expanded
+* evidence bookmarked
+* notes added
+* reports generated
+* decision changed
+* escalation performed
+
+Required for regulatory compliance.
+
+⸻
+
+13. Investigation Path Recommendation
+
+Instead of leaving investigators unsure what to do next, the AI recommends the next investigative action.
+
+Example
+
+Recommended Next Step
+Expand 2-hop network
+Reason
+84% of suspicious funds moved there
+--------------------------------
+Check Device Sharing
+Reason
+Four connected accounts share one device
+--------------------------------
+Review Previous SAR
+Reason
+Destination account already appeared in SAR #1834
+
+Benefit
+
+Guides inexperienced investigators and reduces investigation time.
+
+⸻
+
+14. Continuous Learning Feedback Loop
+
+This goes beyond detection rules.
+
+The platform learns from investigator behaviour.
+
+Examples
+
+* common investigation paths
+* common evidence collected
+* common false positives
+* successful SAR investigations
+
+The system gradually recommends better workflows.
+
+Example
+
+Past investigators usually
+↓
+Checked Device Sharing
+↓
+Expanded Network
+↓
+Reviewed Previous SAR
+↓
+Confirmed Layering
+
+The AI learns these patterns and proactively recommends them.
+
+⸻
+
+Updated Investigation Workflow
+
+Detection Engine
+        │
+        ▼
+Real-Time Alert Generated
+        │
+        ▼
+AI Case Prioritization Queue
+(Prioritized using risk, network score, history, AI confidence)
+        │
+        ▼
+Case Created
+        │
+        ▼
+Assign Investigator
+        │
+        ▼
+══════════════════════════════════════
+LEVEL 1 INVESTIGATION
+══════════════════════════════════════
+│
+├── Alert Summary
+├── AI Explanation of Alert
+├── Customer Snapshot
+├── Geographic Risk
+├── Transaction Summary
+├── Transaction Purpose
+├── Simplified Money Flow Graph
+├── AI Investigation Summary
+├── Previous Alert Summary
+├── Similar Historical Cases
+├── Network Risk Score
+├── Timeline ↔ Graph Synchronization
+├── Graph Filters
+├── AI Copilot
+├── Investigation Path Recommendation
+│
+└── Decision
+      │
+      ├── Close as False Positive
+      │        │
+      │        ├── Feedback to Detection Engine
+      │        ├── Continuous Learning Update
+      │        ├── Audit Trail Updated
+      │        └── Case Closed
+      │
+      └── Escalate to Level 2
+                │
+                ▼
+══════════════════════════════════════
+LEVEL 2 INVESTIGATION
+══════════════════════════════════════
+│
+├── Expand Graph (1/2/N Hops)
+├── Full Customer Profile
+├── Complete Transaction History
+├── Behaviour Analysis
+├── Relationship Explorer
+├── Pattern Explanation
+├── AI Copilot
+├── Previous Case History
+├── Timeline Replay
+├── Graph Replay
+├── Evidence Management
+├── Watchlist Management
+├── Auto-generated Investigation Narrative
+├── Audit Trail
+│
+└── Final Recommendation
+        │
+        ├── False Positive
+        ├── Enhanced Monitoring
+        ├── Escalate to Compliance
+        └── Generate SAR/STR
+                │
+                ▼
+Feedback to Detection Engine
+        │
+Continuous Learning
+        │
+Improved Future Detection Models
+        │
+Case Archived
+
+One suggestion that could become your strongest USP
+
+If I were pitching this product at Global Fintech Fest, I’d combine several of these features into a single capability called an AI Investigation Orchestrator.
+
+Instead of exposing them as separate tools, the platform would actively drive the investigation:
+
+* It prioritizes the alert.
+* It explains why the alert fired.
+* It retrieves similar historical cases.
+* It recommends the next investigative step.
+* It updates the network risk score as new evidence is discovered.
+* It generates the investigation narrative.
+* It learns from the investigator’s final decision to improve future investigations.
+
+Rather than being a passive dashboard, the system becomes an active investigative partner. That’s a much more compelling story for investors and judges because it emphasizes decision support and productivity gains, not just data visualization.
+apart from this, this is the problem for which im making this system for union bank, this is how imk planning to deploy the system : Model 2: On-Premise Software License
+
+Bank runs TraceX inside its own data center.
+
+You provide software.
+
+Bank owns infrastructure.
+
+You charge:
+
+* Setup fee
+* Annual license
+* Support contract
+
+This is how most AML vendors sell.
+
+Example:
+
+* ₹50 lakh setup
+* ₹20 lakh/year support
+
+⸻
+
+Model 3: Private Cloud SaaS
+
+Most realistic today.
+
+TraceX deployed inside:
+
+* Bank AWS account
+* Bank Azure account
+* Bank private cloud
+
+You manage software.
+
+Bank owns data.
+
+Very attractive. to keep the bank daat safe, these are the factors that the system users are concerned with:
+admin/investigator roles, case assignment, graph engine, ml pipeline, scalability, security, ci/cd, ai guardrails, scaling, user friendliness
+this has to be developed to prsent it in the global fintech fest for seed funding so the system has to be developed at that scale. 
+this is the soifteare cycle i want: 
+anomaly detection-> generate alert-> a;ert to case assignemnt-> case management-> L1 investigation-> l2 ivestigation-> resolve case-> report findings-> feedback to detection system-> feeback raised to admin-> admin reviews feedback/new rules/edge cases found-? changes implemented in detection system-> update/improve dtecetion system -> detect anomaly
