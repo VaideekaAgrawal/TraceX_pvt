@@ -74,6 +74,20 @@ Legend: **Status** = not started | in progress | done.
 **Reference:** §2 (two-case-store finding), §5 (scalability, upload validation).
 **Status:** not started
 
+### Phase 1B — Demo & Training Data Studio
+**Goal:** A reproducible generator producing the data that makes every feature demo flawlessly and makes the reuse-driven features actually work — kept strictly separate from the real ingest path.
+**Depends on:** Phase 1 (schema exists)
+**Branch:** phase/1b-demo-data
+**Scope (checklist):**
+- [ ] **Training/reference data:** seed a corpus of historical `cases` + `case_feature_vector` + `resolution` (so Similar Cases retrieval returns real matches), and seed `detection_feedback` events (so the RL queue looks learned, not cold-start).
+- [ ] **KYC/customer mock:** populate `pep_status`, `sanction_status`, `kyc_status`, occupation-vs-income mismatch on demo customers.
+- [ ] **Relationship networks:** generate accounts with **no direct transaction link** but shared `pan`/`phone`/`device`/`employer`/`nominee` → drives the Relationship Explorer "hidden mule network" reveal.
+- [ ] **Golden edge-case scenarios:** one curated network per typology (clean layering, structuring-across-branches, circular/round-trip, dormancy reactivation, profile mismatch, sanction match, funnel mule), each with a **known-correct investigation path** and a written feature-explanation, so the Recommendation Engine + Copilot demo deterministically.
+- [ ] Tag all demo data (reserved `DEMO-` account-id prefix, isolated via `ingestion_log`); make generation seeded/reproducible; document each scenario → feature(s) showcased → expected output → edge case proved.
+**Explicitly out of scope:** retraining the core detection engine (kept as-is, Phase 3); real bank data.
+**Reference:** `docs/DATA_SCHEMA.md` §6; §4.1/§4.2 (Similar Cases, Relationship Explorer).
+**Status:** not started
+
 ### Phase 2 — Auth, RBAC & security baseline
 **Goal:** Two roles wired into every route from the start; secrets done right.
 **Depends on:** Phase 1
@@ -91,7 +105,7 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 1
 **Branch:** phase/3-detection-port
 **Scope (checklist):**
-- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface; persist model + version + metrics per run (`model_runs`). Reconcile the README vs. cross_questions metric discrepancy.
+- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface **by loading the already-trained serialized artifacts into `model_runs`/`artifact_path` — do NOT retrain the core detectors from scratch.** Persist version + metrics per run; reconcile the README vs. cross_questions metric discrepancy.
 - [ ] Port graph algorithms behind the `GraphStore` interface; implement **case-scoped ego-graph extraction** (N-hop, time-windowable) as the only way graphs are built.
 - [ ] Port rule-engine DSL (11 primitives, Tier-2 composition) + dry-run.
 - [ ] Port RL/LinUCB bandit with persistent state.
