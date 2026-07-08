@@ -294,7 +294,7 @@ The existing system is archived (properly stored + documented under `archive/`),
 - **Detection & Intelligence** — ported engine behind clean interfaces (`Scorer`, `GraphStore`, rule DSL, bandit).
 - **Investigation** — unified durable case store, alert→case, L1/L2 state machine, assignment/SLA, evidence, unified audit trail, watchlist, reporting/STR, case-scoped graph service.
 - **AI Orchestration** — shared AI substrate + Recommendation Engine + Copilot; built last.
-- **Platform** — auth/RBAC, DB/persistence, config/secrets, LLM gateway, guardrail middleware.
+- **Platform** — auth/RBAC, DB/persistence, config/secrets, LLM gateway, guardrail middleware. (Code package: `backend/foundation/` — not `platform/`, which is a Python stdlib module name.)
 
 ### 9.3 The two AI agents
 - **Recommendation Engine — deterministic-guarded, tool-using reasoner.** Always-on deterministic rule set (valid next steps, each mapped to a typology + regulatory anchor) + tools that *compute* exact facts (graph metrics, fund-flow %, txn aggregates, prior-SAR/shared-entity lookups) + an LLM that reasons over the full case evidence & ego-graph, bounded by the rules and grounded in tool-computed facts. Investigator can **cross-question**; the engine re-invokes rules/tools and defends with cited facts. Every recommendation is logged with its driving facts (auditable). This is the concrete answer to "not a stupid LLM call."

@@ -24,7 +24,10 @@
 
 ```
 backend/
-  platform/       # auth+RBAC, config, secrets, DB session, LLM gateway, guardrails
+  foundation/     # the "Platform" layer: auth+RBAC, config, secrets, DB session,
+                  # LLM gateway, guardrails. Named `foundation/` not `platform/` in
+                  # code — `platform` is a Python stdlib module name; the layer is
+                  # still called "Platform layer" in all docs/prose.
   detection/      # PORTED: ML ensemble, graph algos, rule-engine DSL, RL bandit
   investigation/  # NEW: case store, alert->case, L1/L2 FSM, evidence, audit,
                   #      watchlist, reporting/STR, case-scoped GraphStore/ego-graph

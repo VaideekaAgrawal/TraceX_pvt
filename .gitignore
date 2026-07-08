@@ -1,21 +1,26 @@
 # Ignore virtual environments and IDE artifacts
-fund-flow-tracker/venv/
+archive/fund-flow-tracker/venv/
+backend/.venv/
+.venv/
 
 # Python cache
 __pycache__/
 *.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+.coverage
 
-# Large data files (keep .gitkeep)
-fund-flow-tracker/data/*.csv
-fund-flow-tracker/data/*.zip
-fund-flow-tracker/data/*.db*
-fund-flow-tracker/data/rl_state.json
-fund-flow-tracker/data/uploads/
-!fund-flow-tracker/data/.gitkeep
+# Local dev/pilot DB file — schema lives in docs/DATA_SCHEMA.md, the DB
+# itself is never committed. Source CSVs under data/ ARE tracked (they're
+# the real ingest input for Phase 1/1B), only the generated .db is not.
+data/tracex.db
+data/uploads/
 
-# Node
-fund-flow-tracker/frontend/node_modules/
-fund-flow-tracker/frontend/.next/
+# Node (archived frontend; the rebuilt frontend gets its own .gitignore later)
+archive/fund-flow-tracker/frontend/node_modules/
+archive/fund-flow-tracker/frontend/.next/
 
 # OS
 .DS_Store
