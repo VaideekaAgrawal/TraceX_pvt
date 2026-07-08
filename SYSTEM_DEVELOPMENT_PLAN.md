@@ -273,10 +273,38 @@ Organized by where each feature sits in the lifecycle above, with description, r
 
 ---
 
-## 8. Open Decisions
+## 8. Open Decisions — RESOLVED (Planning Session, 2026-07-09)
 
-These require a judgment call from the team, not something to guess at:
+All three are now decided. See §9 for the committed architecture they feed into.
 
-- **RBAC granularity:** two roles (Investigator / Admin) as the simplest workable model, or a distinct third role for L1 vs. L2 investigators with a different UI surface?
-- **Copilot investment level:** build it pre-Fest despite its higher effort and distinct guardrail requirements, or pitch it as roadmap alongside the later RL phases in `docs/RL_USP.md`?
-- **Graph engine commitment:** finish the partial Neo4j adapter as a real deliverable before the Fest, or keep NetworkX and present the migration path as a conceptual roadmap item only?
+- **RBAC granularity:** *Resolved — two roles* (Investigator / Admin-Compliance). No distinct third L1/L2 role.
+- **Copilot investment level:** *Resolved — build it now.* It is one of the two headline AI deliverables (the personal workspace agent), built on the shared AI substrate in Phase 8 of `docs/ROADMAP.md`.
+- **Graph engine commitment:** *Resolved — NetworkX for the pilot behind a `GraphStore` adapter; Neo4j is the funded-production swap, pitched via the migration path.* Reinforced by the case-scoped ego-graph decision (§9) which makes NetworkX sufficient at pilot scale.
+
+---
+
+## 9. Committed Architecture & Decisions (Planning Session, 2026-07-09)
+
+This section supersedes the incremental-refactor assumption that framed §2–§7. **The owner's decision is a greenfield rebuild**, not an in-place refactor — the sections above remain valid as *feature reasoning and gap analysis*, but the *build strategy* is now the one below. `docs/ROADMAP.md` is the execution plan derived from this.
+
+### 9.1 Greenfield, not refactor
+The existing system is archived (properly stored + documented under `archive/`), not extended. The current codebase is a strong **detection/intelligence engine wrapped in a dashboard that is not bank-usable** (no wired auth, two parallel case stores, in-memory state lost on restart, partial audit trail, feature-specific rather than layered AI guardrails, data-type-organized UI). We **lift the components worth keeping** — ML ensemble (IsolationForest + XGBoost), graph algorithms, rule-engine DSL, RL/LinUCB bandit — and **design fresh** around them.
+
+### 9.2 Three-layer backend (+ platform)
+- **Detection & Intelligence** — ported engine behind clean interfaces (`Scorer`, `GraphStore`, rule DSL, bandit).
+- **Investigation** — unified durable case store, alert→case, L1/L2 state machine, assignment/SLA, evidence, unified audit trail, watchlist, reporting/STR, case-scoped graph service.
+- **AI Orchestration** — shared AI substrate + Recommendation Engine + Copilot; built last.
+- **Platform** — auth/RBAC, DB/persistence, config/secrets, LLM gateway, guardrail middleware.
+
+### 9.3 The two AI agents
+- **Recommendation Engine — deterministic-guarded, tool-using reasoner.** Always-on deterministic rule set (valid next steps, each mapped to a typology + regulatory anchor) + tools that *compute* exact facts (graph metrics, fund-flow %, txn aggregates, prior-SAR/shared-entity lookups) + an LLM that reasons over the full case evidence & ego-graph, bounded by the rules and grounded in tool-computed facts. Investigator can **cross-question**; the engine re-invokes rules/tools and defends with cited facts. Every recommendation is logged with its driving facts (auditable). This is the concrete answer to "not a stupid LLM call."
+- **Copilot — personal workspace agent.** Cross-case, investigator-personal: find/filter my cases, "what changed since last login" digest, read/write case notes, grounded case Q&A. Fixed tool catalog, RBAC-scoped to the investigator's own cases.
+
+### 9.4 LLM security posture
+External API now (OpenRouter), behind an **LLM gateway with PII redaction/tokenization** — identities (names, account numbers, PAN) pseudonymized before egress and re-hydrated on return, so a third-party model reasons over structure and tokens, not real identities. A self-hosted model swaps in via the same gateway if the bank later mandates fully-on-prem. Default new model choice for reasoning-heavy calls: latest Claude (Opus 4.8 / Sonnet 5).
+
+### 9.5 Case-scoped ego-graphs (core architectural boundary)
+Never render/query the global graph. Every graph is the investigated account + its N-hop connected neighborhood (optionally time-windowed). L1 = simplified 1-hop money-flow read; L2 = expand hops 1/2/3/N anchored on case accounts. This single decision is simultaneously the **security boundary** (no cross-case leakage), the **LLM-context bound** (accuracy), the **scale strategy** (bounded subgraph → NetworkX suffices for pilot, Neo4j serves the same subgraph queries later), and the **usability fix** (the old graph showed every node and was unusable).
+
+### 9.6 Cross-phase invariants
+Durable state only (nothing critical lost on restart); auth on every route from the moment the API exists; the LLM never decides or invents facts (guardrail invariant for both agents); every investigator action and every AI action written to one queryable audit log; all graph access via the case-scoped `GraphStore`.
