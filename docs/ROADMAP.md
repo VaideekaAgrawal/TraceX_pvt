@@ -56,13 +56,13 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** none
 **Branch:** phase/0-archive-scaffold
 **Scope (checklist):**
-- [ ] Move the existing app into `archive/` with a short `archive/README.md` (what it was, what we're keeping, why we left it).
-- [ ] Catalog the components to port (ML ensemble, graph algos, rule DSL, RL bandit) with their file locations — a "salvage list" the later port phases consume.
-- [ ] Create the `backend/` package skeleton (layers above), dependency management, settings/config module, test harness, and a CI skeleton (real, not `|| true`).
-- [ ] Decide and document the DB engine for pilot (SQLite single-node) vs. the prod path (Postgres) behind a repository interface.
+- [x] Move the existing app into `archive/` with a short `archive/README.md` (what it was, what we're keeping, why we left it).
+- [x] Catalog the components to port (ML ensemble, graph algos, rule DSL, RL bandit) with their file locations — a "salvage list" the later port phases consume. See `archive/SALVAGE.md`; also corrects earlier planning language — no serialized model artifact exists, Phase 3 trains once and persists rather than "loading an existing" one.
+- [x] Create the `backend/` package skeleton (layers above), dependency management, settings/config module, test harness, and a CI skeleton (real, not `|| true`). Platform layer implemented as `backend/foundation/` (not `platform/`, a stdlib name). All three CI gates (ruff, mypy, pytest) verified passing locally before commit.
+- [x] Decide and document the DB engine for pilot (SQLite single-node) vs. the prod path (Postgres) behind a repository interface. Documented in `docs/DATA_SCHEMA.md` §0; reflected in `backend/foundation/config.py` default (`sqlite:///./data/tracex.db`). Repository layer itself is built in Phase 1.
 **Explicitly out of scope:** porting any real logic; DB schema tables (Phase 1); auth (Phase 2).
 **Reference:** §1, §7 (greenfield decision), §5 (CI/CD).
-**Status:** not started
+**Status:** done
 
 ### Phase 1 — Data model & persistence foundation
 **Goal:** The durable backbone every other phase writes to. **Detailed schema design is the immediate next planning activity the owner will drive before this phase is built.**
