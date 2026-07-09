@@ -355,6 +355,20 @@ def test_run_full_ingest_aborts_transactions_when_accounts_rejected(
 def test_main_exits_nonzero_when_accounts_ingest_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """`main()` opens its own session via `db.ingest.SessionLocal` rather
+    than the `session` fixture, so it must be pointed at an isolated,
+    schema-created throwaway DB here — not the real configured one (which
+    doesn't exist in CI, and even locally shouldn't be touched by a test)."""
+    from sqlalchemy.orm import sessionmaker
+
+    from db.models import Base
+    from db.session import build_engine
+
+    engine = build_engine(f"sqlite:///{tmp_path / 'main_test.db'}")
+    Base.metadata.create_all(engine)
+    test_session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    monkeypatch.setattr(ing, "SessionLocal", test_session_local)
+
     bad_accounts = tmp_path / "accounts.txt"
     bad_accounts.write_text("Bank Name,Bank ID,Account Number,Entity ID,Entity Name\n")
     txns = tmp_path / "txns.csv"
@@ -364,9 +378,12 @@ def test_main_exits_nonzero_when_accounts_ingest_fails(
         "sys.argv",
         ["ingest", "--accounts-csv", str(bad_accounts), "--transactions-csv", str(txns)],
     )
-    with pytest.raises(SystemExit) as exc_info:
-        ing.main()
-    assert exc_info.value.code == 1
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            ing.main()
+        assert exc_info.value.code == 1
+    finally:
+        engine.dispose()
 
 
 def test_transactions_enrichment_writes_once_per_customer_not_once_per_row(
