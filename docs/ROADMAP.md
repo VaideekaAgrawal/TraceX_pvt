@@ -24,7 +24,10 @@
 
 ```
 backend/
-  platform/       # auth+RBAC, config, secrets, DB session, LLM gateway, guardrails
+  foundation/     # the "Platform" layer: auth+RBAC, config, secrets, DB session,
+                  # LLM gateway, guardrails. Named `foundation/` not `platform/` in
+                  # code — `platform` is a Python stdlib module name; the layer is
+                  # still called "Platform layer" in all docs/prose.
   detection/      # PORTED: ML ensemble, graph algos, rule-engine DSL, RL bandit
   investigation/  # NEW: case store, alert->case, L1/L2 FSM, evidence, audit,
                   #      watchlist, reporting/STR, case-scoped GraphStore/ego-graph
@@ -53,13 +56,13 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** none
 **Branch:** phase/0-archive-scaffold
 **Scope (checklist):**
-- [ ] Move the existing app into `archive/` with a short `archive/README.md` (what it was, what we're keeping, why we left it).
-- [ ] Catalog the components to port (ML ensemble, graph algos, rule DSL, RL bandit) with their file locations — a "salvage list" the later port phases consume.
-- [ ] Create the `backend/` package skeleton (layers above), dependency management, settings/config module, test harness, and a CI skeleton (real, not `|| true`).
-- [ ] Decide and document the DB engine for pilot (SQLite single-node) vs. the prod path (Postgres) behind a repository interface.
+- [x] Move the existing app into `archive/` with a short `archive/README.md` (what it was, what we're keeping, why we left it).
+- [x] Catalog the components to port (ML ensemble, graph algos, rule DSL, RL bandit) with their file locations — a "salvage list" the later port phases consume. See `archive/SALVAGE.md`; also corrects earlier planning language — no serialized model artifact exists, Phase 3 trains once and persists rather than "loading an existing" one.
+- [x] Create the `backend/` package skeleton (layers above), dependency management, settings/config module, test harness, and a CI skeleton (real, not `|| true`). Platform layer implemented as `backend/foundation/` (not `platform/`, a stdlib name). All three CI gates (ruff, mypy, pytest) verified passing locally before commit.
+- [x] Decide and document the DB engine for pilot (SQLite single-node) vs. the prod path (Postgres) behind a repository interface. Documented in `docs/DATA_SCHEMA.md` §0; reflected in `backend/foundation/config.py` default (`sqlite:///./data/tracex.db`). Repository layer itself is built in Phase 1.
 **Explicitly out of scope:** porting any real logic; DB schema tables (Phase 1); auth (Phase 2).
 **Reference:** §1, §7 (greenfield decision), §5 (CI/CD).
-**Status:** not started
+**Status:** done
 
 ### Phase 1 — Data model & persistence foundation
 **Goal:** The durable backbone every other phase writes to. **Detailed schema design is the immediate next planning activity the owner will drive before this phase is built.**
@@ -105,7 +108,7 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 1
 **Branch:** phase/3-detection-port
 **Scope (checklist):**
-- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface **by loading the already-trained serialized artifacts into `model_runs`/`artifact_path` — do NOT retrain the core detectors from scratch.** Persist version + metrics per run; reconcile the README vs. cross_questions metric discrepancy.
+- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface. **Correction (found during Phase 0, see `archive/SALVAGE.md`): no serialized model artifact exists anywhere in the archive — the old system retrained XGBoost from `data/` at every pipeline run, which is the exact "retrains from scratch each boot" landmine this rebuild exists to fix. Do not go looking for an existing artifact to load. Instead: port the detector/feature-engineering/ensemble-weighting *logic* unchanged from `archive/fund-flow-tracker/services/detection/ensemble.py` (reusing the tuned hyperparameters/weights documented in `archive/fund-flow-tracker/infrastructure/config.py` — do not re-derive them from defaults), train once against the root-level `data/` set, and persist the resulting artifact to `model_runs`/`artifact_path` so it is never retrained on boot again.** Persist version + metrics per run; reconcile the README vs. cross_questions metric discrepancy.
 - [ ] Port graph algorithms behind the `GraphStore` interface; implement **case-scoped ego-graph extraction** (N-hop, time-windowable) as the only way graphs are built.
 - [ ] Port rule-engine DSL (11 primitives, Tier-2 composition) + dry-run.
 - [ ] Port RL/LinUCB bandit with persistent state.
