@@ -48,3 +48,19 @@ None of these are allowed to be non-blocking (`|| true`) — see `archive/fund-f
 ## Config
 
 All settings are read from the environment (`backend/foundation/config.py`, `Settings`). Copy `.env.example` (added when the first phase needs real secrets) to `.env` for local dev — never commit `.env`. In any non-`dev` environment, `Settings.validate_secrets()` fails startup loudly if required secrets are missing, rather than falling back to an insecure default — this replaces the old system's hardcoded `JWT_SECRET = "CHANGE_ME_IN_PRODUCTION"` landmine (see `CLAUDE.md`).
+
+## Running the API
+
+```bash
+cd backend
+uvicorn api.app:create_app --factory --reload
+```
+
+Provision a user first (no user-management API yet — see `docs/ROADMAP.md` Phase 2):
+
+```bash
+python scripts/create_user.py --username jdoe --email jdoe@bank.example \
+    --password 'change-me' --full-name "Jane Doe" --role INVESTIGATOR
+```
+
+Then `POST /auth/login` with that username/password to get a bearer token, and send it as `Authorization: Bearer <token>` on `GET /auth/me`. `GET /healthz` needs no auth (health-probe exemption).

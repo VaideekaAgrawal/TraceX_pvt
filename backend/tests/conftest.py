@@ -1,10 +1,10 @@
 """
-Shared fixtures for `tests/db/` — in particular the repository tests under
-`test_repositories_*.py`, which all need a throwaway SQLite schema. Mirrors
-the local `session` fixture already used ad hoc in `test_models.py`
-(kept local there rather than refactored to import from here, since this
-file is new and that one predates it — no behavior change to existing
-tests).
+Root-level shared fixtures — pytest auto-discovers this without an import.
+Promoted from `tests/db/conftest.py` (Phase 2) once a second test subtree
+(`tests/foundation/`, `tests/api/`) needed the same throwaway-SQLite
+`session` fixture; `tests/db/test_repositories_*.py` keep using it unchanged
+via auto-discovery. `tests/db/test_models.py` has its own separate local
+fixture and is untouched (predates this file, no behavior change intended).
 """
 from __future__ import annotations
 
