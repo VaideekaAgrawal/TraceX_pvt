@@ -69,13 +69,13 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 0
 **Branch:** phase/1-data-foundation
 **Scope (checklist):**
-- [ ] Implement the system-level schema (customers, accounts, transactions, alerts, cases, evidence, notes, users/roles, audit_log, watchlist, model_runs, rl_state) — per the dedicated schema-design doc.
-- [ ] Migrations + repository layer (one source of truth; no direct-SQLite-vs-in-memory split ever again).
-- [ ] Seed/ingest path for the synthetic dataset with upload validation (size/MIME/row-count).
-- [ ] Persistence for model artifacts and RL bandit state (no retrain/reset on boot).
+- [x] Implement the system-level schema (customers, accounts, transactions, alerts, cases, evidence, notes, users/roles, audit_log, watchlist, model_runs, rl_state) — per the dedicated schema-design doc. All 20 enums + 21 tables from `docs/DATA_SCHEMA.md` §2-3 as SQLAlchemy 2.0 models under `backend/db/models/`; `backend/db/pii.py` records the 🔒PII column allow-map for Phase 8.
+- [x] Migrations + repository layer (one source of truth; no direct-SQLite-vs-in-memory split ever again). Alembic wired in `backend/alembic/` (initial migration verified up/down against real SQLite); `backend/db/repositories/` has one repo class per table, each enforcing the `audit_log` SHA-256 hash-chain write-through internally (`docs/DATA_SCHEMA.md` §0 audit invariant) — callers never write audit rows themselves.
+- [x] Seed/ingest path for the synthetic dataset with upload validation (size/MIME/row-count). `backend/db/ingest.py` parses `data/HI-Small_accounts.csv` + `data/tracex_test_day1.csv` into customers/accounts/transactions, idempotent via `ingestion_log` (file-hash + per-row deterministic `txn_id`), validates extension/size/columns/row-count before touching the DB. Run against the real files: 166,207 customers, 518,889 accounts, 8,002 transactions, audit chain verified over 693,102 rows.
+- [x] Persistence for model artifacts and RL bandit state (no retrain/reset on boot). `model_runs`/`rl_arm_state` tables + `ModelRunRepository`/`RlArmStateRepository` give a durable path; the actual training/bandit algorithms port in Phase 3.
 **Explicitly out of scope:** business logic over the tables (later phases); UI.
 **Reference:** §2 (two-case-store finding), §5 (scalability, upload validation).
-**Status:** not started
+**Status:** done
 
 ### Phase 1B — Demo & Training Data Studio
 **Goal:** A reproducible generator producing the data that makes every feature demo flawlessly and makes the reuse-driven features actually work — kept strictly separate from the real ingest path.
