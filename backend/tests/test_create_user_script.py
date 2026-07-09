@@ -59,3 +59,25 @@ def test_create_user_refuses_duplicate_username(session: Session) -> None:
             full_name="Someone Else",
             role=UserRole.ADMIN_COMPLIANCE,
         )
+
+
+def test_create_user_refuses_duplicate_user_id(session: Session) -> None:
+    user_id = create_user(
+        session,
+        username="jdoe",
+        email="jdoe@example.com",
+        password="correct-horse",
+        full_name="Jane Doe",
+        role=UserRole.INVESTIGATOR,
+    )
+
+    with pytest.raises(ValueError, match="already exists"):
+        create_user(
+            session,
+            username="someoneelse",
+            email="other@example.com",
+            password="different",
+            full_name="Someone Else",
+            role=UserRole.ADMIN_COMPLIANCE,
+            user_id=user_id,
+        )

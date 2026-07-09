@@ -33,14 +33,20 @@ def create_user(
     role: UserRole,
     user_id: str | None = None,
 ) -> str:
-    """Create-only: raises `ValueError` if `username` already exists.
-    Returns the created `user_id`. Split out from `main()` so tests can call
-    it directly against a throwaway session (see
+    """Create-only: raises `ValueError` if `username` already exists, or if
+    an explicitly-passed `user_id` collides with an existing user (checked
+    the same way as `username` — code review, Phase 2: an unchecked
+    `--user-id` collision used to fall through to `repo.create()` and raise
+    a raw, unhandled IntegrityError on flush instead of this same clean
+    error). Returns the created `user_id`. Split out from `main()` so tests
+    can call it directly against a throwaway session (see
     `tests/test_create_user_script.py`) without going through argparse/CLI
     plumbing."""
     repo = UserRepository(db)
     if repo.get_by_username(username) is not None:
         raise ValueError(f"username {username!r} already exists")
+    if user_id is not None and repo.get(user_id) is not None:
+        raise ValueError(f"user_id {user_id!r} already exists")
 
     resolved_user_id = user_id if user_id is not None else str(uuid.uuid4())
     user = repo.create(

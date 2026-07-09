@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+from db.enums import UserRole
 from foundation.config import Settings, get_settings
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -32,14 +33,16 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 @dataclass(frozen=True)
 class TokenPayload:
-    """Decoded JWT claims — `sub` is the `users.user_id`, `role` is the raw
-    `db.enums.UserRole` string value (not re-validated against the enum
-    here; `foundation/auth.py::get_current_user` re-fetches the real `User`
-    row and treats its `role`/`active` columns as the authorization source
-    of truth, so a stale/forged `role` claim alone can't grant access)."""
+    """Decoded JWT claims — `sub` is the `users.user_id`, `role` is the
+    typed `db.enums.UserRole` (code review, Phase 2: a bare `str` here let a
+    typo'd role string pass mypy silently; `foundation/auth.py::
+    get_current_user` still re-fetches the real `User` row and treats its
+    `role`/`active` columns — not this claim — as the authorization source
+    of truth, so a stale/forged `role` claim alone still can't grant
+    access)."""
 
     sub: str
-    role: str
+    role: UserRole
     iat: datetime
     exp: datetime
 
@@ -47,7 +50,7 @@ class TokenPayload:
 def create_access_token(
     *,
     user_id: str,
-    role: str,
+    role: UserRole,
     settings: Settings | None = None,
     now: datetime | None = None,
 ) -> str:
@@ -60,7 +63,9 @@ def create_access_token(
     expires_at = issued_at + timedelta(minutes=settings.jwt_expiry_minutes)
     claims = {
         "sub": user_id,
-        "role": role,
+        # JWT claims must be JSON-serializable primitives — encode the enum
+        # value, not the member itself.
+        "role": role.value,
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
     }
@@ -82,9 +87,9 @@ def decode_access_token(token: str, *, settings: Settings | None = None) -> Toke
     try:
         return TokenPayload(
             sub=claims["sub"],
-            role=claims["role"],
+            role=UserRole(claims["role"]),
             iat=datetime.fromtimestamp(claims["iat"], tz=UTC),
             exp=datetime.fromtimestamp(claims["exp"], tz=UTC),
         )
-    except KeyError as exc:
-        raise TokenError(f"missing claim: {exc}") from exc
+    except (KeyError, ValueError) as exc:
+        raise TokenError(f"invalid claims: {exc}") from exc

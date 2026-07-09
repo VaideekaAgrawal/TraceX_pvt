@@ -32,6 +32,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="TraceX API", lifespan=lifespan)
+    # Stored so request-scoped dependencies (`foundation.auth.
+    # get_app_settings`) can read back whatever `Settings` was actually
+    # passed to this `create_app` call, instead of routes falling back to
+    # `foundation.security`'s module-level `get_settings()` singleton
+    # (code review, Phase 2: that fallback silently ignored a non-default
+    # `settings=` argument for the real JWT sign/verify path).
+    app.state.settings = settings
     app.include_router(auth_router)
 
     @app.get("/healthz")
