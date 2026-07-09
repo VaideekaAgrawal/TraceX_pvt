@@ -22,6 +22,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # sqlite3.OperationalError when a DB connection was opened from backend/.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SQLITE_PATH = _REPO_ROOT / "data" / "tracex.db"
+# Same reasoning applies to the ML/RL model artifact directory (ROADMAP
+# Phase 3): `train_and_persist()` serializes trained model objects here via
+# joblib, and `model_runs.artifact_path` points into it. Gitignored — these
+# are generated, not source.
+_DEFAULT_MODEL_ARTIFACT_DIR = _REPO_ROOT / "data" / "model_artifacts"
 
 
 class Settings(BaseSettings):
@@ -34,6 +39,12 @@ class Settings(BaseSettings):
     # ── Database ──
     # SQLite for pilot/dev, Postgres DSN for production — see docs/DATA_SCHEMA.md §0.
     database_url: str = Field(default=f"sqlite:///{_DEFAULT_SQLITE_PATH}")
+
+    # ── ML/RL model artifacts (ROADMAP Phase 3) ──
+    # Where trained ensemble artifacts (joblib) are written; model_runs.
+    # artifact_path stores a path under this directory. Trained once by
+    # `scripts/train_detection_model.py`, never retrained on app boot.
+    model_artifact_dir: Path = Field(default=_DEFAULT_MODEL_ARTIFACT_DIR)
 
     # ── Auth (no default in staging/prod — see Settings.validate_secrets) ──
     jwt_secret: str = Field(default="")
