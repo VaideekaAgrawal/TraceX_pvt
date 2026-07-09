@@ -44,12 +44,19 @@ def main(argv: list[str] | None = None) -> None:
             model_name=args.model_name,
             actor_id="train-detection-model-cli",
         )
+        # Read every field the summary below needs *before* the session
+        # closes -- `train_and_persist` commits internally, which expires
+        # ORM attributes; reading them after `session.close()` (in the
+        # `finally` block) raises `DetachedInstanceError` instead of
+        # silently reloading (verified live during Phase 3 checkout).
+        run_id, model_name, active = run.run_id, run.model_name, run.active
+        artifact_path, metrics = run.artifact_path, run.metrics
     finally:
         session.close()
 
-    print(f"trained model_run {run.run_id!r} (model_name={run.model_name!r}, active={run.active})")
-    print(f"artifact_path={run.artifact_path}")
-    print(f"metrics={run.metrics}")
+    print(f"trained model_run {run_id!r} (model_name={model_name!r}, active={active})")
+    print(f"artifact_path={artifact_path}")
+    print(f"metrics={metrics}")
 
 
 if __name__ == "__main__":
