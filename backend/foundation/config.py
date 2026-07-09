@@ -54,13 +54,21 @@ class Settings(BaseSettings):
     def validate_secrets(self) -> None:
         """Fail startup loudly instead of silently running insecure.
         Called explicitly by the app factory, not at import time, so tests
-        can construct Settings() without secrets configured."""
+        can construct Settings() without secrets configured.
+
+        Only checks `jwt_secret` — every phase up to and including Phase 2
+        needs it. `openrouter_api_key` is deliberately NOT checked here: no
+        code calls the LLM gateway yet (it doesn't exist until Phase 8), so
+        requiring it today would make any non-dev boot of the current
+        auth-only API fail for a secret nothing uses. Phase 8 should add its
+        own check at the point the LLM gateway is actually constructed, not
+        here (code review finding, Phase 2: this method was previously never
+        invoked anywhere, so this over-broad requirement was latent until
+        Phase 2 wired it into real app startup)."""
         if self.env != "dev":
             missing = []
             if not self.jwt_secret:
                 missing.append("jwt_secret")
-            if self.llm_provider == "openrouter" and not self.openrouter_api_key:
-                missing.append("openrouter_api_key")
             if missing:
                 raise RuntimeError(
                     f"Missing required secrets for env={self.env}: {', '.join(missing)}"

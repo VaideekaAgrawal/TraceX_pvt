@@ -96,12 +96,12 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 1
 **Branch:** phase/2-auth-rbac
 **Scope (checklist):**
-- [ ] JWT auth + two roles (Investigator; Admin/Compliance) enforced as route dependencies — Investigators triage/escalate, Admin/Compliance closes cases, approves SAR, edits rules.
-- [ ] JWT secret + all secrets from env/secret store (no hardcoded default anywhere).
-- [ ] Data-scoping middleware: an investigator only reaches their own assigned cases (the enforcement point the Copilot later relies on).
+- [x] JWT auth + two roles (Investigator; Admin/Compliance) enforced as route dependencies — Investigators triage/escalate, Admin/Compliance closes cases, approves SAR, edits rules.
+- [x] JWT secret + all secrets from env/secret store (no hardcoded default anywhere).
+- [x] Data-scoping middleware: an investigator only reaches their own assigned cases (the enforcement point the Copilot later relies on).
 **Explicitly out of scope:** a third L1/L2 role (decided against — two roles); SSO/enterprise IdP (roadmap, not pilot).
 **Reference:** §5 (RBAC, Security), landmines in `CLAUDE.md`.
-**Status:** not started
+**Status:** done
 
 ### Phase 3 — Detection & Intelligence layer (port)
 **Goal:** Bring the good engine over, cleanly interfaced and persistent.
