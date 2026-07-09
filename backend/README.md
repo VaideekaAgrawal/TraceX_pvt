@@ -32,10 +32,12 @@ pip install -e ".[dev]"
 ## Running checks (same gates CI runs)
 
 ```bash
-ruff check .            # lint
-mypy .                  # typecheck
-pytest --cov=. --cov-report=term-missing   # tests
+ruff check .                                                          # lint
+mypy foundation detection investigation orchestration api db tests    # typecheck
+pytest --cov=. --cov-report=term-missing                              # tests
 ```
+
+`mypy` is invoked with explicit package names, not `.` — a bare `.` walks whatever venv exists in the working directory and type-checks installed third-party stubs as if they were our own source (hit and debugged during Phase 0). Keep this list in sync with `[tool.mypy] files` in `pyproject.toml` and the `Typecheck` step in `.github/workflows/backend-ci.yml` if a new top-level package is added.
 
 None of these are allowed to be non-blocking (`|| true`) — see `archive/fund-flow-tracker/.github/workflows/ci.yml` for what that looked like and why it was replaced (`.github/workflows/backend-ci.yml` at the repo root is the new one).
 

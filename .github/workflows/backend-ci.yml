@@ -2,7 +2,11 @@ name: backend-ci
 
 on:
   push:
-    branches: [main]
+    # Per CLAUDE.md, development happens on phase/<n>-<slug> branches, not
+    # directly on main — this must actually run there, not just on the PR
+    # that eventually targets main, or a regression can sit on a phase
+    # branch for an entire session unnoticed.
+    branches: [main, "phase/**"]
     paths: ["backend/**", ".github/workflows/backend-ci.yml"]
   pull_request:
     paths: ["backend/**", ".github/workflows/backend-ci.yml"]
@@ -19,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
         run: |
@@ -31,8 +37,12 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      # Explicit package list, not `mypy .` — a bare `.` walks whatever venv
+      # happens to exist in the working directory and type-checks installed
+      # third-party stubs as if they were our own source. See the comment on
+      # [tool.mypy] in pyproject.toml for how this was actually hit.
       - name: Typecheck (mypy)
-        run: mypy .
+        run: mypy foundation detection investigation orchestration api db tests
 
       - name: Test (pytest)
         run: pytest --cov=. --cov-report=term-missing

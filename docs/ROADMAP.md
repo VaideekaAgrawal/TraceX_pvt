@@ -108,7 +108,7 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 1
 **Branch:** phase/3-detection-port
 **Scope (checklist):**
-- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface **by loading the already-trained serialized artifacts into `model_runs`/`artifact_path` — do NOT retrain the core detectors from scratch.** Persist version + metrics per run; reconcile the README vs. cross_questions metric discrepancy.
+- [ ] Port ML ensemble (IsolationForest + XGBoost) behind a `Scorer` interface. **Correction (found during Phase 0, see `archive/SALVAGE.md`): no serialized model artifact exists anywhere in the archive — the old system retrained XGBoost from `data/` at every pipeline run, which is the exact "retrains from scratch each boot" landmine this rebuild exists to fix. Do not go looking for an existing artifact to load. Instead: port the detector/feature-engineering/ensemble-weighting *logic* unchanged from `archive/fund-flow-tracker/services/detection/ensemble.py` (reusing the tuned hyperparameters/weights documented in `archive/fund-flow-tracker/infrastructure/config.py` — do not re-derive them from defaults), train once against the root-level `data/` set, and persist the resulting artifact to `model_runs`/`artifact_path` so it is never retrained on boot again.** Persist version + metrics per run; reconcile the README vs. cross_questions metric discrepancy.
 - [ ] Port graph algorithms behind the `GraphStore` interface; implement **case-scoped ego-graph extraction** (N-hop, time-windowable) as the only way graphs are built.
 - [ ] Port rule-engine DSL (11 primitives, Tier-2 composition) + dry-run.
 - [ ] Port RL/LinUCB bandit with persistent state.

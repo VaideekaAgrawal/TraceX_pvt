@@ -19,6 +19,12 @@ dependencies = [
     "python-multipart>=0.0.9",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    # passlib 1.7.4 (unmaintained since 2020) reads bcrypt.__about__.__version__
+    # to detect its backend; that attribute was removed in bcrypt>=4.1, which
+    # makes CryptContext(schemes=["bcrypt"]).hash() raise AttributeError.
+    # Pinned below 4.1 until passlib is replaced or fixed upstream — verified
+    # this pin actually works (hash+verify round-trip) before committing.
+    "bcrypt<4.1",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +48,14 @@ python_version = "3.11"
 ignore_missing_imports = true
 disallow_untyped_defs = false
 warn_unused_ignores = true
-exclude = ["^\\.venv/", "^build/"]
+# `files` here only applies when mypy is invoked with no path arguments.
+# CI and the README both invoke mypy with explicit package names (not `.`)
+# for the same reason this list exists: an `exclude` regex only protects
+# against a venv named exactly what the regex expects (e.g. `.venv`) — a
+# venv with any other name (`venv/`, `env/`, `.venv311/`) would still get
+# walked and type-checked as if it were our own source, which is what
+# actually happened during this repo's own Phase 0 session.
+files = ["foundation", "detection", "investigation", "orchestration", "api", "db", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

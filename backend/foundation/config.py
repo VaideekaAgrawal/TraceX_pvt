@@ -8,9 +8,20 @@ see CLAUDE.md). If a secret is missing, startup fails loudly instead of
 falling back to an insecure default.
 """
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/foundation/config.py -> foundation/ -> backend/ -> repo root.
+# Computed from this file's location (not cwd) so the default DB path is
+# correct no matter where the process is launched from — CI and the README
+# both run from backend/, where a cwd-relative "./data" would resolve to a
+# nonexistent backend/data/ instead of the real repo-root data/ that Phase 0
+# lifted the source CSVs into. Verified: a cwd-relative default raised
+# sqlite3.OperationalError when a DB connection was opened from backend/.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_SQLITE_PATH = _REPO_ROOT / "data" / "tracex.db"
 
 
 class Settings(BaseSettings):
@@ -22,7 +33,7 @@ class Settings(BaseSettings):
 
     # ── Database ──
     # SQLite for pilot/dev, Postgres DSN for production — see docs/DATA_SCHEMA.md §0.
-    database_url: str = Field(default="sqlite:///./data/tracex.db")
+    database_url: str = Field(default=f"sqlite:///{_DEFAULT_SQLITE_PATH}")
 
     # ── Auth (no default in staging/prod — see Settings.validate_secrets) ──
     jwt_secret: str = Field(default="")

@@ -2,6 +2,12 @@
 archive/fund-flow-tracker/venv/
 backend/.venv/
 .venv/
+.vscode/
+
+# Secrets — never commit. backend/foundation/config.py reads from .env.
+.env
+*.env
+!.env.example
 
 # Python cache
 __pycache__/
@@ -11,6 +17,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .coverage
+*.log
 
 # Local dev/pilot DB file — schema lives in docs/DATA_SCHEMA.md, the DB
 # itself is never committed. Source CSVs under data/ ARE tracked (they're
