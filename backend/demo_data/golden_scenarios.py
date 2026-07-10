@@ -282,15 +282,20 @@ SCENARIOS: list[GoldenScenario] = [
 
 @dataclass
 class GoldenScenarioResult:
-    """Summary of one seeded scenario run -- ids actually written, for
-    `seed.py`'s counts and so `docs/GOLDEN_SCENARIOS.md` can cite real,
-    non-guessed ids."""
+    """Summary of one seeded scenario run -- `key` + the account ids
+    actually written, for `seed.py`'s counts and so `docs/
+    GOLDEN_SCENARIOS.md`/tests can cite real, non-guessed ids. Deliberately
+    just these two fields (code-review finding: an earlier revision also
+    carried `customer_ids`/`transaction_ids`/`watchlist_ids`, computed by
+    every builder but never read by any caller -- `seed.py` and
+    `tests/demo_data/test_golden_scenarios.py` only ever consume `.key`/
+    `.account_ids`). The customer/txn/watchlist ids each builder writes are
+    all still fully deterministic and re-derivable from `identifiers.py`'s
+    builders + the scenario `key` if a future caller needs them -- nothing
+    is lost by not carrying them here."""
 
     key: str
     account_ids: list[str] = field(default_factory=list)
-    customer_ids: list[str] = field(default_factory=list)
-    transaction_ids: list[str] = field(default_factory=list)
-    watchlist_ids: list[str] = field(default_factory=list)
 
 
 def _get_or_create_account(
@@ -384,6 +389,63 @@ def _get_or_create_txn(
     return txn_id
 
 
+def _seed_chain(
+    txn_repo: TransactionRepository,
+    hops: list[tuple[str, str, float]],
+    t0: datetime,
+    step: timedelta,
+    *,
+    actor_type: ActorType,
+    actor_id: str | None,
+) -> list[str]:
+    """Create a sequential chain of transactions from `hops` (each a
+    `(source, dest, amount)` tuple), one `step` apart starting at `t0` --
+    the identical hop-list-to-transaction-chain shape `_build_layering`,
+    `_build_roundtrip`, and `_build_profile_mismatch` all needed
+    (code-review finding: previously duplicated three times, differing only
+    in the hop tuples and the time step). `_build_structuring`/
+    `_build_dormancy`/`_build_sanction_match`/`_build_funnel_mule` keep
+    their own inline logic instead -- their shapes genuinely differ (a
+    varying per-hop channel, a two-phase pre/burst split, a fan-in loop, and
+    irregular per-hop delays respectively), not a case of the same pattern
+    duplicated a fourth time."""
+    return [
+        _get_or_create_txn(
+            txn_repo, source=src, dest=dst, seq=i, amount=amt,
+            timestamp=t0 + step * i,
+            actor_type=actor_type, actor_id=actor_id,
+        )
+        for i, (src, dst, amt) in enumerate(hops)
+    ]
+
+
+def _get_or_create_scenario_watchlist(
+    watchlist_repo: WatchlistRepository,
+    key: str,
+    entity_value: str,
+    reason: str,
+    *,
+    actor_type: ActorType,
+    actor_id: str | None,
+) -> str:
+    """Get-or-create the single `watchlist` entry a scenario needs --
+    shared by `_build_profile_mismatch`/`_build_sanction_match` (code-review
+    finding: previously an identical block duplicated in both, differing
+    only in `entity_value`/`reason`)."""
+    watchlist_id = demo_scenario_watchlist_id(key, 1)
+    if watchlist_repo.get(watchlist_id) is None:
+        watchlist_repo.create(
+            entry_id=watchlist_id,
+            entity_type=WatchEntityType.CUSTOMER,
+            entity_value=entity_value,
+            reason=reason,
+            added_by="demo-data-studio",
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+    return watchlist_id
+
+
 # ---------------------------------------------------------------------------
 # Per-scenario builders
 # ---------------------------------------------------------------------------
@@ -398,15 +460,10 @@ def _build_layering(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenSc
     t0 = _BASE_TIME + timedelta(days=1)
     hops = [(accounts[0], accounts[1], 1_000_000.0), (accounts[1], accounts[2], 700_000.0),
             (accounts[2], accounts[3], 450_000.0), (accounts[3], accounts[4], 250_000.0)]
-    txn_ids = [
-        _get_or_create_txn(
-            txn_repo, source=src, dest=dst, seq=i, amount=amt,
-            timestamp=t0 + timedelta(minutes=15 * i),
-            actor_type=actor_type, actor_id=actor_id,
-        )
-        for i, (src, dst, amt) in enumerate(hops)
-    ]
-    return GoldenScenarioResult(key=key, account_ids=accounts, transaction_ids=txn_ids)
+    _seed_chain(
+        txn_repo, hops, t0, timedelta(minutes=15), actor_type=actor_type, actor_id=actor_id
+    )
+    return GoldenScenarioResult(key=key, account_ids=accounts)
 
 
 def _build_structuring(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenScenarioResult:
@@ -422,15 +479,13 @@ def _build_structuring(account_repo, txn_repo, *, actor_type, actor_id) -> Golde
 
     t0 = _BASE_TIME + timedelta(days=2)
     amounts = [950_000.0, 960_000.0, 940_000.0, 970_000.0]
-    txn_ids = [
+    for i, (dst, amt) in enumerate(zip(dests, amounts, strict=True)):
         _get_or_create_txn(
             txn_repo, source=source, dest=dst, seq=i, amount=amt,
             timestamp=t0 + timedelta(days=7 * i), channel=Channel.branch_cash,
             actor_type=actor_type, actor_id=actor_id,
         )
-        for i, (dst, amt) in enumerate(zip(dests, amounts, strict=True))
-    ]
-    return GoldenScenarioResult(key=key, account_ids=[source, *dests], transaction_ids=txn_ids)
+    return GoldenScenarioResult(key=key, account_ids=[source, *dests])
 
 
 def _build_roundtrip(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenScenarioResult:
@@ -442,15 +497,10 @@ def _build_roundtrip(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenS
     t0 = _BASE_TIME + timedelta(days=3)
     hops = [(accounts[0], accounts[1], 500_000.0), (accounts[1], accounts[2], 490_000.0),
             (accounts[2], accounts[0], 480_000.0)]
-    txn_ids = [
-        _get_or_create_txn(
-            txn_repo, source=src, dest=dst, seq=i, amount=amt,
-            timestamp=t0 + timedelta(minutes=20 * i),
-            actor_type=actor_type, actor_id=actor_id,
-        )
-        for i, (src, dst, amt) in enumerate(hops)
-    ]
-    return GoldenScenarioResult(key=key, account_ids=accounts, transaction_ids=txn_ids)
+    _seed_chain(
+        txn_repo, hops, t0, timedelta(minutes=20), actor_type=actor_type, actor_id=actor_id
+    )
+    return GoldenScenarioResult(key=key, account_ids=accounts)
 
 
 def _build_dormancy(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenScenarioResult:
@@ -462,29 +512,23 @@ def _build_dormancy(account_repo, txn_repo, *, actor_type, actor_id) -> GoldenSc
         _get_or_create_account(account_repo, acc_id, actor_type=actor_type, actor_id=actor_id)
 
     t0 = _BASE_TIME + timedelta(days=5)
-    txn_ids = [
-        _get_or_create_txn(
-            txn_repo, source=pre_counterparties[0], dest=dormant, seq=0, amount=10_000.0,
-            timestamp=t0, actor_type=actor_type, actor_id=actor_id,
-        ),
-        _get_or_create_txn(
-            txn_repo, source=pre_counterparties[1], dest=dormant, seq=1, amount=10_000.0,
-            timestamp=t0 + timedelta(days=5), actor_type=actor_type, actor_id=actor_id,
-        ),
-    ]
+    _get_or_create_txn(
+        txn_repo, source=pre_counterparties[0], dest=dormant, seq=0, amount=10_000.0,
+        timestamp=t0, actor_type=actor_type, actor_id=actor_id,
+    )
+    _get_or_create_txn(
+        txn_repo, source=pre_counterparties[1], dest=dormant, seq=1, amount=10_000.0,
+        timestamp=t0 + timedelta(days=5), actor_type=actor_type, actor_id=actor_id,
+    )
     burst_start = t0 + timedelta(days=5) + timedelta(days=200)
     for i, cp in enumerate(post_counterparties):
-        txn_ids.append(
-            _get_or_create_txn(
-                txn_repo, source=dormant, dest=cp, seq=2 + i, amount=600_000.0,
-                timestamp=burst_start + timedelta(days=i),
-                actor_type=actor_type, actor_id=actor_id,
-            )
+        _get_or_create_txn(
+            txn_repo, source=dormant, dest=cp, seq=2 + i, amount=600_000.0,
+            timestamp=burst_start + timedelta(days=i),
+            actor_type=actor_type, actor_id=actor_id,
         )
     return GoldenScenarioResult(
-        key=key,
-        account_ids=[dormant, *pre_counterparties, *post_counterparties],
-        transaction_ids=txn_ids,
+        key=key, account_ids=[dormant, *pre_counterparties, *post_counterparties]
     )
 
 
@@ -516,31 +560,17 @@ def _build_profile_mismatch(
         (account_id, counterparties[3], 500_000.0),
         (counterparties[4], account_id, 500_000.0),
     ]
-    txn_ids = [
-        _get_or_create_txn(
-            txn_repo, source=src, dest=dst, seq=i, amount=amt,
-            timestamp=t0 + timedelta(days=i),
-            actor_type=actor_type, actor_id=actor_id,
-        )
-        for i, (src, dst, amt) in enumerate(legs)
-    ]
-
-    watchlist_id = demo_scenario_watchlist_id(key, 1)
-    if watchlist_repo.get(watchlist_id) is None:
-        watchlist_repo.create(
-            entry_id=watchlist_id,
-            entity_type=WatchEntityType.CUSTOMER,
-            entity_value=customer.pan or customer_id,
-            reason="Income/volume mismatch -- escalation candidate (demo).",
-            added_by="demo-data-studio",
-            actor_type=actor_type,
-            actor_id=actor_id,
-        )
-
-    return GoldenScenarioResult(
-        key=key, account_ids=[account_id, *counterparties], customer_ids=[customer_id],
-        transaction_ids=txn_ids, watchlist_ids=[watchlist_id],
+    _seed_chain(
+        txn_repo, legs, t0, timedelta(days=1), actor_type=actor_type, actor_id=actor_id
     )
+
+    _get_or_create_scenario_watchlist(
+        watchlist_repo, key, customer.pan or customer_id,
+        "Income/volume mismatch -- escalation candidate (demo).",
+        actor_type=actor_type, actor_id=actor_id,
+    )
+
+    return GoldenScenarioResult(key=key, account_ids=[account_id, *counterparties])
 
 
 def _build_sanction_match(
@@ -584,41 +614,26 @@ def _build_sanction_match(
     )
 
     t0 = _BASE_TIME + timedelta(days=20)
-    txn_ids = []
     for i, peer_account in enumerate(peer_account_ids, start=1):
-        txn_ids.append(
-            _get_or_create_txn(
-                txn_repo, source=peer_account, dest=hub_account_id, seq=i, amount=100_000.0,
-                timestamp=t0 + timedelta(minutes=10 * i), is_laundering=0,
-                actor_type=actor_type, actor_id=actor_id,
-            )
-        )
-    txn_ids.append(
         _get_or_create_txn(
-            txn_repo, source=outlier_account_id, dest=hub_account_id, seq=12,
-            amount=1_000_000_000.0, timestamp=t0 + timedelta(minutes=130),
+            txn_repo, source=peer_account, dest=hub_account_id, seq=i, amount=100_000.0,
+            timestamp=t0 + timedelta(minutes=10 * i), is_laundering=0,
             actor_type=actor_type, actor_id=actor_id,
         )
+    _get_or_create_txn(
+        txn_repo, source=outlier_account_id, dest=hub_account_id, seq=12,
+        amount=1_000_000_000.0, timestamp=t0 + timedelta(minutes=130),
+        actor_type=actor_type, actor_id=actor_id,
     )
 
-    watchlist_id = demo_scenario_watchlist_id(key, 1)
-    if watchlist_repo.get(watchlist_id) is None:
-        watchlist_repo.create(
-            entry_id=watchlist_id,
-            entity_type=WatchEntityType.CUSTOMER,
-            entity_value=outlier_customer.pan or outlier_customer_id,
-            reason="Sanctions list match (mock OFAC/UN) -- demo.",
-            added_by="demo-data-studio",
-            actor_type=actor_type,
-            actor_id=actor_id,
-        )
+    _get_or_create_scenario_watchlist(
+        watchlist_repo, key, outlier_customer.pan or outlier_customer_id,
+        "Sanctions list match (mock OFAC/UN) -- demo.",
+        actor_type=actor_type, actor_id=actor_id,
+    )
 
     return GoldenScenarioResult(
-        key=key,
-        account_ids=[*peer_account_ids, outlier_account_id, hub_account_id],
-        customer_ids=[*peer_customer_ids, outlier_customer_id],
-        transaction_ids=txn_ids,
-        watchlist_ids=[watchlist_id],
+        key=key, account_ids=[*peer_account_ids, outlier_account_id, hub_account_id]
     )
 
 
@@ -639,22 +654,17 @@ def _build_funnel_mule(account_repo, txn_repo, *, actor_type, actor_id) -> Golde
     ]
     outbound = [(mule, hop1, 700_000.0, 10), (hop1, hop2, 400_000.0, 20)]
 
-    txn_ids = [
+    for i, (src, dst, amt, delay) in enumerate([*inbound, *outbound]):
         _get_or_create_txn(
             txn_repo, source=src, dest=dst, seq=i, amount=amt,
             timestamp=t0 + timedelta(minutes=delay),
             actor_type=actor_type, actor_id=actor_id,
         )
-        for i, (src, dst, amt, delay) in enumerate([*inbound, *outbound])
-    ]
-    return GoldenScenarioResult(
-        key=key, account_ids=[*senders, mule, hop1, hop2], transaction_ids=txn_ids
-    )
+    return GoldenScenarioResult(key=key, account_ids=[*senders, mule, hop1, hop2])
 
 
 def seed_golden_scenarios(
     session,
-    cfg,
     rng: random.Random,
     *,
     actor_type: ActorType,

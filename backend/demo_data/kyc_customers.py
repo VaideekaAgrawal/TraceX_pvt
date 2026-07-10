@@ -27,6 +27,7 @@ module docstring).
 from __future__ import annotations
 
 import random
+from typing import TypeVar
 
 from db.enums import AccountStatus, ActorType, EddStatus, EntityType, KycStatus, RiskLevel
 from db.models.reference import Customer
@@ -94,7 +95,17 @@ _KYC_STATUS_WEIGHTS: list[tuple[KycStatus, float]] = [
 ]
 
 
-def _weighted_choice(rng: random.Random, weights: list[tuple[KycStatus, float]]) -> KycStatus:
+_T = TypeVar("_T")
+
+
+def weighted_choice(rng: random.Random, weights: list[tuple[_T, float]]) -> _T:
+    """Pick one value from `weights` (`[(value, probability), ...]`) via
+    `rng.choices(...)`. Generic (not `KycStatus`-specific) and public --
+    the identical weighted-pick pattern recurs 6 times across this package
+    (`kyc_status`/`risk_rating` here, `priority` x3 and `case_level` in
+    `historical_cases.py`) -- code-review finding: previously hand-rolled
+    inline `rng.choices(...)` at 5 of those 6 sites instead of reusing
+    this."""
     values = [v for v, _ in weights]
     probs = [w for _, w in weights]
     return rng.choices(values, weights=probs, k=1)[0]
@@ -158,9 +169,7 @@ def _risk_rating_for(
         return RiskLevel.CRITICAL
     if pep or mismatch:
         return RiskLevel.HIGH
-    return rng.choices(
-        [RiskLevel.LOW, RiskLevel.MEDIUM], weights=[0.8, 0.2], k=1
-    )[0]
+    return weighted_choice(rng, [(RiskLevel.LOW, 0.8), (RiskLevel.MEDIUM, 0.2)])
 
 
 def seed_kyc_customers(
@@ -206,7 +215,7 @@ def seed_kyc_customers(
         sanctioned = i in sanctioned_indices
         mismatch = i in mismatch_indices
         occupation, income, bracket = _pick_occupation_and_income(rng, mismatch=mismatch)
-        kyc_status = _weighted_choice(rng, _KYC_STATUS_WEIGHTS)
+        kyc_status = weighted_choice(rng, _KYC_STATUS_WEIGHTS)
         edd_status = EddStatus.REQUIRED if (pep or sanctioned) else EddStatus.NOT_REQUIRED
 
         customer = customer_repo.create(

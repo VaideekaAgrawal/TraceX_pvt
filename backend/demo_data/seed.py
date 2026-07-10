@@ -152,9 +152,7 @@ def run_demo_data_studio(
         summary.already_seeded.append("golden_scenarios")
     else:
         rng = random.Random(DEMO_SEED + 3)
-        results = seed_golden_scenarios(
-            session, cfg, rng, actor_type=actor_type, actor_id=actor_id
-        )
+        results = seed_golden_scenarios(session, rng, actor_type=actor_type, actor_id=actor_id)
         session.flush()
         _mark_done(
             log_repo, _GOLDEN_SCENARIOS_MARKER, filename="demo_data_studio/golden_scenarios",

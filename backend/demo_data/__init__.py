@@ -20,5 +20,10 @@ Every id this package creates is `demo_data.config.DemoDataConfig.prefix`
 ("DEMO-") -prefixed and every write goes through the normal repository layer
 (`db/repositories/`) with `ActorType.SYSTEM, actor_id="demo-data-studio"` (or
 the CLI's own actor id) -- there is no second, unaudited write path here.
+This is a real invariant, not just a description: `historical_cases.py`'s
+backdated historical rows go through `CaseRepository.create()`'s explicit
+`created_at` parameter (added this phase specifically so this package
+wouldn't need to mutate an ORM object directly after the fact, which would
+have silently skipped the audit_log append every other write here gets).
 """
 from __future__ import annotations

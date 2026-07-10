@@ -13,14 +13,15 @@ Reuses, does not reinvent (`CLAUDE.md` "reuse before rebuild"):
   - `investigation.rl_features.CLOSING_REWARD` (promoted this phase from
     `investigation.cases._CLOSING_REWARD`) for the resolution->reward
     mapping.
-  - `investigation.cases._CLOSING_TRANSITIONS`/`_SETS_CLOSED_AT` (imported
-    directly -- module-private by convention, not by enforced boundary; this
-    is the same "reuse before rebuild" reasoning as the `CLOSING_REWARD`
-    promotion, just for a two-line mapping stable enough not to warrant its
-    own public promotion) for the resolution->terminal-status mapping and
-    "which resolutions set `closed_at`" semantics, so historical cases are
-    internally consistent with what `close_case` would have produced for the
-    same resolution.
+  - `investigation.cases.CLOSING_TRANSITIONS`/`SETS_CLOSED_AT` (promoted this
+    phase from the same module's `_CLOSING_TRANSITIONS`/`_SETS_CLOSED_AT` --
+    this generator is a second real caller that needs the identical
+    resolution->terminal-status mapping and "which resolutions set
+    `closed_at`" semantics `close_case` uses, so historical cases stay
+    internally consistent with what a live close would have produced.
+    Public, but left in `investigation.cases` rather than relocated to
+    `rl_features.py` -- they're FSM-shaped, not RL-shaped, unlike
+    `CLOSING_REWARD`) for the resolution->terminal-status mapping.
 
 These are pre-closed, historical rows -- `Case.status` is set directly at
 `create()` time (legal: the Phase 4 FSM-bypass fix locked down `update()`,
@@ -31,21 +32,15 @@ one `CaseStatusHistory` row is still written per case (via
 it's an append-only log, not an enforcement point) for audit/reporting
 consistency with every other case in the system.
 
-Backdating judgment call: `CaseRepository.create()`/`update()` do not expose
-`created_at` as a settable field anywhere (`CreatedAtMixin`'s Python-side
-`default=utcnow` is the only way that column is normally populated,
-matching every other table in this schema -- `created_at` is bookkeeping,
-not a mutable domain field). A historical training corpus that all shows
-`created_at` = "whenever this generator happened to run" would look
-obviously synthetic in a demo (every case "created" in the same second).
-Narrow, documented exception: after `case_repo.create()` returns the
-already-audited row, this module sets `case.created_at` directly on the ORM
-object + flushes, bypassing `_update()`'s audit-row append -- deliberately,
-because `created_at` isn't a domain-state field the audit invariant's "every
-write a human/AI causes" reasoning is protecting (no investigator/AI ever
-"changes" a creation timestamp as a real action) and every other field this
-module writes (`resolution`/`resolution_reason`/`closed_at`) still goes
-through the normal audited `case_repo.update()` call.
+Backdating: `CaseRepository.create()` now accepts an explicit `created_at`
+(added this phase specifically for this caller) so a historical training
+corpus doesn't show every case "created" in the same second the generator
+happened to run -- backdating goes through the normal, audited `create()`
+call, not a caller-side ORM bypass. `case.updated_at` still reflects real
+generation time after the subsequent `case_repo.update()` call below
+(`UpdatedAtMixin`'s `onupdate=utcnow` has no backdating knob) -- a
+pre-existing, broader gap not unique to this generator, accepted as-is (see
+the comment at that call site).
 """
 from __future__ import annotations
 
@@ -64,8 +59,9 @@ from db.repositories.investigation import (
 )
 from demo_data.config import DemoDataConfig
 from demo_data.identifiers import demo_account_id_for_customer, demo_case_id
+from demo_data.kyc_customers import weighted_choice
 from detection.rl.bandit import LinUCBAgent
-from investigation.cases import _CLOSING_TRANSITIONS, _SETS_CLOSED_AT  # see module docstring
+from investigation.cases import CLOSING_TRANSITIONS, SETS_CLOSED_AT
 from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
 
 _TYPOLOGIES = ["layering", "round_trip", "structuring", "dormancy", "profile_mismatch"]
@@ -108,10 +104,10 @@ def _risk_score_for(resolution: CaseResolution, rng: random.Random) -> float:
 
 def _priority_for(resolution: CaseResolution, rng: random.Random) -> Priority:
     if resolution is CaseResolution.TRUE_POSITIVE_SAR:
-        return rng.choices([Priority.P1, Priority.P2], weights=[0.6, 0.4], k=1)[0]
+        return weighted_choice(rng, [(Priority.P1, 0.6), (Priority.P2, 0.4)])
     if resolution is CaseResolution.FALSE_POSITIVE:
-        return rng.choices([Priority.P3, Priority.P4], weights=[0.5, 0.5], k=1)[0]
-    return rng.choices([Priority.P2, Priority.P3], weights=[0.5, 0.5], k=1)[0]
+        return weighted_choice(rng, [(Priority.P3, 0.5), (Priority.P4, 0.5)])
+    return weighted_choice(rng, [(Priority.P2, 0.5), (Priority.P3, 0.5)])
 
 
 def seed_historical_cases(
@@ -157,15 +153,15 @@ def seed_historical_cases(
 
         typology = rng.choice(_TYPOLOGIES)
         created_at = now - timedelta(days=rng.randint(30, 400))
-        to_status = _CLOSING_TRANSITIONS[resolution]
+        to_status = CLOSING_TRANSITIONS[resolution]
         closed_at = (
             created_at + timedelta(days=rng.randint(1, 30))
-            if resolution in _SETS_CLOSED_AT
+            if resolution in SETS_CLOSED_AT
             else None
         )
         risk_score = _risk_score_for(resolution, rng)
         priority = _priority_for(resolution, rng)
-        level = rng.choices([CaseLevel.L1, CaseLevel.L2], weights=[0.75, 0.25], k=1)[0]
+        level = weighted_choice(rng, [(CaseLevel.L1, 0.75), (CaseLevel.L2, 0.25)])
 
         case = case_repo.create(
             case_id=case_id,
@@ -176,14 +172,18 @@ def seed_historical_cases(
             priority=priority,
             typology=typology,
             risk_score=risk_score,
+            created_at=created_at,
             actor_type=actor_type,
             actor_id=actor_id,
         )
-        # Documented exception -- see module docstring's "Backdating
-        # judgment call".
-        case.created_at = created_at
-        session.flush()
 
+        # `case.updated_at` will still show real generation time after this
+        # call (`UpdatedAtMixin`'s `onupdate=utcnow` has no backdating knob,
+        # unlike `created_at` which `CaseRepository.create()` now accepts
+        # explicitly) -- a pre-existing, broader gap not unique to this
+        # generator, and out of scope to fully fix here. Accepted as-is:
+        # `updated_at` reflects the real moment this write happened, which
+        # is semantically defensible even for backdated historical rows.
         case = case_repo.update(
             case_id,
             actor_type=actor_type,
@@ -231,8 +231,18 @@ def seed_historical_cases(
             actor_id=actor_id,
         )
 
-        agent.receive_feedback(account_id, context, is_true_positive=reward > 0)
+        # `persist=False` -- accumulate every case's feedback into the
+        # agent's in-memory A/b across this whole loop and persist once at
+        # the end (`agent.flush_state()` below), instead of a full
+        # `RlArmStateRepository.upsert()` (flush + audit-chain SELECT)
+        # against the single `arm_id="global"` row on every one of the
+        # `cfg.num_historical_cases` iterations -- only the final
+        # post-loop state is ever consumed.
+        agent.receive_feedback(
+            account_id, context, is_true_positive=reward > 0, persist=False
+        )
 
         cases.append(case)
 
+    agent.flush_state()
     return cases

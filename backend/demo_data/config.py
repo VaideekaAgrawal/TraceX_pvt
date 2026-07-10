@@ -54,5 +54,24 @@ class DemoDataConfig:
     pct_true_positive_sar: float = 0.35
     pct_enhanced_monitoring: float = 0.15
 
+    def __post_init__(self) -> None:
+        """`historical_cases._weighted_resolutions` computes
+        `ENHANCED_MONITORING`'s count as the remainder
+        `n - n_fp - n_tp` rather than `round(n * pct_enhanced_monitoring)`
+        directly, so the three counts always sum to exactly `n` even though
+        each percentage rounds independently. That remainder computation is
+        only safe -- i.e. never silently floors to 0 or produces `n_fp +
+        n_tp > n` -- if the three percentages actually sum to 1.0; this
+        validates that invariant at construction time instead of leaving it
+        an unenforced assumption, which is also what makes
+        `pct_enhanced_monitoring` a real, consumed constraint rather than a
+        dead field."""
+        total = self.pct_false_positive + self.pct_true_positive_sar + self.pct_enhanced_monitoring
+        if abs(total - 1.0) >= 1e-9:
+            raise ValueError(
+                "pct_false_positive + pct_true_positive_sar + pct_enhanced_monitoring "
+                f"must sum to 1.0, got {total!r}"
+            )
+
 
 DEFAULT_DEMO_DATA_CONFIG = DemoDataConfig()

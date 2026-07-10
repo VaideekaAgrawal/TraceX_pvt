@@ -20,12 +20,18 @@ cover PAN/phone/email/address/device/employer/nominee. `device` and
 `nominee` have no columns anywhere on `Customer`/`Account` (confirmed: zero
 references in `backend/db/models/`) -- there is nothing to write a shared
 value into. Per explicit user decision this session, Phase 1B ships
-relationship clusters using only the six shared-attribute columns that
-actually exist: `pan`/`phone`/`email`/`employer`/`income_bracket`
-(`Customer` columns) and `branch_city` (an `Account` column -- the only one
-of the six that isn't on `Customer`). No new columns are added to fill the
-gap; a future phase that adds `device`/`nominee` columns can extend this
-module's `_SHARED_ATTRIBUTES` list without other changes.
+relationship clusters covering every decision-4 attribute that actually has
+a column -- `pan`/`phone`/`email`/`address`/`employer` (all `Customer`
+columns) -- and does NOT add new columns to fill the `device`/`nominee` gap;
+a future phase that adds them can extend this module's `_SHARED_ATTRIBUTES`
+list without other changes.
+
+Beyond decision 4's list, this module also rotates in `income_bracket`
+(`Customer`) and `branch_city` (`Account` -- the only one of the seven that
+isn't on `Customer`) as additional demo variety, not as a correction to
+another undocumented gap -- decision 4 never named these two, so their
+inclusion here is a deliberate extra, called out explicitly rather than
+left to look like scope creep.
 
 Idempotency: this whole generator is gated by its own `ingestion_log` marker
 in `seed.py` (checked/written once) -- it is never invoked a second time
@@ -46,10 +52,14 @@ from db.repositories.reference import AccountRepository, CustomerRepository
 from demo_data.config import DemoDataConfig
 from demo_data.identifiers import demo_account_id_for_customer
 
-#: The six shared-attribute columns that actually exist (see module
-#: docstring's decision-4 deviation note). `branch_city` lives on `Account`,
-#: not `Customer` -- `_apply_shared_value` below routes it there.
-_SHARED_ATTRIBUTES = ["pan", "phone", "email", "employer", "income_bracket", "branch_city"]
+#: The seven shared-attribute columns this module rotates through (see
+#: module docstring's decision-4 deviation note: pan/phone/email/address/
+#: employer are decision 4's list; income_bracket/branch_city are additional
+#: demo variety beyond it). `branch_city` lives on `Account`, not
+#: `Customer` -- `_apply_shared_value` below routes it there.
+_SHARED_ATTRIBUTES = [
+    "pan", "phone", "email", "address", "employer", "income_bracket", "branch_city",
+]
 
 
 @dataclass
@@ -75,6 +85,8 @@ def _shared_value_for(attribute: str, cluster_idx: int) -> str:
         return f"9{800000000 + cluster_idx:09d}"[:10]
     if attribute == "email":
         return f"shared.cluster{cluster_idx:02d}@example-demo.invalid"
+    if attribute == "address":
+        return f"{100 + cluster_idx} Demo Cluster Lane, Shared Colony"
     if attribute == "employer":
         return f"Shell Holdings Group #{cluster_idx:02d}"
     if attribute == "income_bracket":
@@ -115,6 +127,10 @@ def _apply_shared_value(
     elif attribute == "email":
         customer_repo.update(
             customer.customer_id, email=value, actor_type=actor_type, actor_id=actor_id
+        )
+    elif attribute == "address":
+        customer_repo.update(
+            customer.customer_id, address=value, actor_type=actor_type, actor_id=actor_id
         )
     elif attribute == "employer":
         customer_repo.update(

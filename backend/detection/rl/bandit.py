@@ -119,8 +119,18 @@ class LinUCBAgent:
         ucb = expected + self.alpha * uncertainty
         return expected, uncertainty, ucb
 
-    def update(self, context: np.ndarray, reward: float) -> None:
-        """Online update after investigator feedback. O(d^2) -- microseconds."""
+    def update(self, context: np.ndarray, reward: float, *, persist: bool = True) -> None:
+        """Online update after investigator feedback. O(d^2) -- microseconds.
+
+        `persist=False` (default `True`, so every existing caller's
+        behavior is unchanged) skips the `RlArmStateRepository.upsert()`
+        flush + audit-chain append this call would otherwise do, updating
+        only the in-memory `A`/`b` -- for a caller that knows it will call
+        `update()`/`receive_feedback()` many times in a tight loop (e.g.
+        `demo_data.historical_cases`'s per-case feedback loop) and only
+        needs the final state durable, not every intermediate one. Call
+        `flush_state()` once after such a loop to persist the accumulated
+        result."""
         x = context.reshape(-1, 1)
         self.A += x @ x.T
         self.b += reward * x.reshape(-1)
@@ -129,7 +139,8 @@ class LinUCBAgent:
             self.tp_count += 1
         elif reward < 0:
             self.fp_count += 1
-        self._save_state()
+        if persist:
+            self._save_state()
 
     def rank_accounts(self, accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Re-rank account dicts by UCB score (context built from each dict's fields)."""
@@ -147,11 +158,17 @@ class LinUCBAgent:
         return sorted(scored, key=lambda r: r["rl_ucb_score"], reverse=True)
 
     def receive_feedback(
-        self, account_id: str, context: np.ndarray, is_true_positive: bool
+        self,
+        account_id: str,
+        context: np.ndarray,
+        is_true_positive: bool,
+        *,
+        persist: bool = True,
     ) -> dict[str, Any]:
-        """Called when investigator closes a case with a TP/FP verdict."""
+        """Called when investigator closes a case with a TP/FP verdict.
+        `persist` is forwarded to `update()` -- see its docstring."""
         reward = 1.0 if is_true_positive else -0.3
-        self.update(context, reward)
+        self.update(context, reward, persist=persist)
         return {
             "account_id": account_id,
             "is_true_positive": is_true_positive,
@@ -233,6 +250,14 @@ class LinUCBAgent:
         self._save_state()
 
     # -- Persistence (DB-backed, replaces the archive's local JSON file) --------
+
+    def flush_state(self) -> None:
+        """Public wrapper around `_save_state()` -- for a caller that made
+        one or more `update()`/`receive_feedback()` calls with
+        `persist=False` and now wants the accumulated in-memory `A`/`b`
+        written durably in a single upsert, without reaching into the
+        private `_save_state()` method from outside this module."""
+        self._save_state()
 
     def _save_state(self) -> None:
         """Flushes the upsert (via `RlArmStateRepository`, which only

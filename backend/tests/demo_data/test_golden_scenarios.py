@@ -12,7 +12,6 @@ import random
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType
-from demo_data.config import DEFAULT_DEMO_DATA_CONFIG
 from demo_data.golden_scenarios import SCENARIOS, seed_golden_scenarios
 from detection.data import accounts_touched_by, load_accounts_df, load_transactions_df
 from detection.detectors.dormancy import DormancyDetector
@@ -41,7 +40,7 @@ def _fires_on(results: list[DetectionResult], account_ids: set[str]) -> bool:
 def test_every_golden_scenario_triggers_its_expected_detection_type(session: Session) -> None:
     rng = random.Random(1)
     results = seed_golden_scenarios(
-        session, DEFAULT_DEMO_DATA_CONFIG, rng, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID
+        session, rng, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID
     )
     session.commit()
     assert len(results) == len(SCENARIOS) == 7
