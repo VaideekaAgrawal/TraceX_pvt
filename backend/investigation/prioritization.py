@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from db.models.detection import Alert
 from detection.rl.bandit import LinUCBAgent
+from investigation.rl_features import base_rl_feature_dict
 
 #: Mirrors the archive's `InvestigationService._RL_CANDIDATE_CAP` exactly --
 #: only the top N alerts by `risk_score` get re-ranked, keeping the queue
@@ -43,25 +44,22 @@ _RL_CANDIDATE_CAP = 200
 
 def _build_account_features(alerts_for_account: list[Alert]) -> dict[str, Any]:
     """Adapt every `Alert` row for one `primary_account_id` into the flat
-    feature dict `LinUCBAgent.build_context` expects."""
+    feature dict `LinUCBAgent.build_context` expects -- source-specific
+    extraction (grouping by account, unioning `detection_type`s/
+    `account_ids`) stays here; the shared dict-shape/defaulting is
+    `investigation.rl_features.base_rl_feature_dict` (code-review finding,
+    Phase 4: this used to duplicate `investigation.cases._case_rl_features`'s
+    copy of the same defaulting)."""
     patterns = sorted({str(a.detection_type) for a in alerts_for_account})
     related_accounts: set[str] = set()
     for alert in alerts_for_account:
         related_accounts.update(alert.account_ids)
     best_risk_score = max((a.risk_score for a in alerts_for_account), default=0.0)
-    return {
-        "risk_score": best_risk_score,
-        "role": "NORMAL",  # not persisted on `alerts` -- see module docstring
-        "patterns": patterns,
-        "anomaly_score": 0.0,  # not persisted on `alerts` -- see module docstring
-        "fraud_probability": 0.0,  # not persisted on `alerts` -- see module docstring
-        "total_in_flow": 0.0,
-        "total_out_flow": 0.0,
-        "total_amount": 0.0,  # not persisted on `alerts` -- see module docstring
-        "counterparties": max(len(related_accounts) - 1, 0),
-        "declared_annual_income": 0.0,  # not persisted on `alerts` -- see module docstring
-        "channel_diversity": 1,  # not persisted on `alerts` -- see module docstring
-    }
+    return base_rl_feature_dict(
+        risk_score=best_risk_score,
+        patterns=patterns,
+        counterparties=max(len(related_accounts) - 1, 0),
+    )
 
 
 def rank_alert_queue(session: Session, alerts: list[Alert]) -> list[Alert]:

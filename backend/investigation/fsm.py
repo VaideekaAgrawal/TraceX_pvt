@@ -6,17 +6,27 @@ Phase 4: "writing that history row is a second, explicit call to
 
 `transition_case()` is the one place in the codebase that:
   1. validates a status change against `VALID_TRANSITIONS`,
-  2. writes the plain field change via `CaseRepository.update(...,
-     action=<taxonomy verb>)`, and
+  2. writes the plain field change via `CaseRepository.
+     set_status_for_transition(..., action=<taxonomy verb>)` -- the only
+     repository method that may touch `Case.status` (code-review finding,
+     Phase 4: this is now structural, not just conventional -- `CaseRepository
+     .update()` no longer accepts a `status` kwarg at all), and
   3. appends the append-only `case_status_history` row via
      `CaseStatusHistoryRepository.record_transition(...)`.
 
 Every other Phase 4 module that changes case status (`assignment.auto_assign`,
 `cases.close_case`) calls this function rather than writing to `cases.status`
 or `case_status_history` directly, so FSM validity is enforced in exactly one
-place.
+place. `extra_changes` lets those callers bundle their own non-status field
+writes (e.g. `assigned_to`/`sla_due_at`, or `resolution`/`resolution_reason`/
+`closed_at`) into the SAME `CaseRepository` call/audit_log row as the status
+change, instead of a separate `case_repo.update()` call producing a second
+audit row for one logical event (code-review finding, Phase 4: confirmed
+live as `case_assigned` appearing twice per real assignment).
 """
 from __future__ import annotations
+
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -87,11 +97,18 @@ def transition_case(
     actor_type: ActorType,
     actor_id: str | None,
     reason: str | None = None,
+    extra_changes: dict[str, Any] | None = None,
 ) -> Case:
     """Validate and perform one case-status transition, writing both the
     `cases.status` field change and the append-only `case_status_history`
     row. Raises `InvalidTransitionError` if `to_status` is not legal from the
-    case's current status; raises `ValueError` if the case doesn't exist."""
+    case's current status; raises `ValueError` if the case doesn't exist.
+
+    `extra_changes` (e.g. `{"assigned_to": ..., "sla_due_at": ...}`) is
+    forwarded as keyword arguments to `CaseRepository.
+    set_status_for_transition`, bundling those field writes into the same
+    call/audit row as the status change -- any key that method doesn't
+    accept raises `TypeError` (not silently ignored)."""
     case_repo = CaseRepository(session)
     history_repo = CaseStatusHistoryRepository(session)
 
@@ -108,12 +125,13 @@ def transition_case(
         )
 
     action = _TRANSITION_ACTIONS.get(to_status, "case_status_changed")
-    updated = case_repo.update(
+    updated = case_repo.set_status_for_transition(
         case_id,
         status=to_status,
         action=action,
         actor_type=actor_type,
         actor_id=actor_id,
+        **(extra_changes or {}),
     )
     history_repo.record_transition(
         case_id=case_id,

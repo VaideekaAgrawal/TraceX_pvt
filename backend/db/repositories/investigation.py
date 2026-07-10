@@ -98,7 +98,6 @@ class CaseRepository(BaseRepository[Case]):
         actor_type: ActorType,
         actor_id: str | None,
         title: str | None = UNSET,
-        status: CaseStatus = UNSET,
         level: CaseLevel = UNSET,
         priority: Priority = UNSET,
         typology: str | None = UNSET,
@@ -113,23 +112,30 @@ class CaseRepository(BaseRepository[Case]):
         evidence_hash: str | None = UNSET,
         action: str = "case_updated",
     ) -> Case:
-        """Plain field update on the one `cases` row. Does not touch
-        `case_status_history` — see module docstring.
+        """Plain field update on the one `cases` row -- every column
+        *except* `status`. Does not touch `case_status_history` — see
+        module docstring.
+
+        `status` is deliberately NOT a parameter here (code-review finding,
+        Phase 4: it used to be, and nothing structurally stopped a future
+        caller from writing `Case.status` directly, bypassing FSM-legality
+        checks, the `case_status_history` row, and any RL-feedback wiring
+        that a real transition implies). `set_status_for_transition()` is
+        the only method on this repository that can change `status`, and it
+        is documented as callable only from `investigation.fsm.
+        transition_case` — so that module is now structurally, not just
+        conventionally, the sole path to a status change.
 
         `action` defaults to the generic `case_updated` verb but is
-        overridable so Phase 4's case-lifecycle callers (the FSM, evidence/
-        decision flows) can log the taxonomy-specific verbs
-        `docs/DATA_SCHEMA.md` §3.5 names (`case_assigned`, `escalated`,
-        `decision_changed`, ...) instead of a generic one -- this repository
-        still owns the sole write path (via `_update`), it just no longer
-        hardcodes the audit verb.
+        overridable so Phase 4's case-lifecycle callers can log the
+        taxonomy-specific verbs `docs/DATA_SCHEMA.md` §3.5 names (e.g.
+        `evidence_pinned`-adjacent case verbs) instead of a generic one.
         """
         case = self.get(case_id)
         if case is None:
             raise ValueError(f"case {case_id!r} does not exist")
         changes = collect_changes(
             title=title,
-            status=status,
             level=level,
             priority=priority,
             typology=typology,
@@ -142,6 +148,61 @@ class CaseRepository(BaseRepository[Case]):
             resolution=resolution,
             resolution_reason=resolution_reason,
             evidence_hash=evidence_hash,
+        )
+        return self._update(
+            case,
+            changes,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action=action,
+            case_id=case_id,
+        )
+
+    def set_status_for_transition(
+        self,
+        case_id: str,
+        *,
+        status: CaseStatus,
+        action: str,
+        actor_type: ActorType,
+        actor_id: str | None,
+        assigned_to: str | None = UNSET,
+        sla_due_at: datetime | None = UNSET,
+        closed_at: datetime | None = UNSET,
+        resolution: CaseResolution | None = UNSET,
+        resolution_reason: str | None = UNSET,
+    ) -> Case:
+        """The ONLY repository method that may change `Case.status` —
+        intentionally callable exclusively from `investigation.fsm.
+        transition_case`, which owns FSM-legality validation and the
+        `case_status_history` append (Phase 1's module docstring: "the
+        repository deciding *when* a transition is FSM-valid... is
+        lifecycle business logic", out of scope for this repository).
+
+        Also accepts the handful of other plain `cases` fields that
+        realistically change *at the same moment* as a status transition
+        (`assigned_to`/`sla_due_at` for the NEW->ASSIGNED handoff,
+        `resolution`/`resolution_reason`/`closed_at` for a closing
+        transition) so a caller like `investigation.assignment.auto_assign`
+        or `investigation.cases.close_case` writes them in the SAME
+        `_update()` call/audit_log row as the status change, instead of two
+        separate `case_repo` calls producing two audit rows for one logical
+        event (code-review finding, Phase 4: confirmed live as
+        `case_assigned` appearing twice per real assignment). Deliberately
+        narrower than `update()`'s full field list -- extend it if a future
+        caller genuinely needs to bundle another field with a transition,
+        rather than widening this preemptively.
+        """
+        case = self.get(case_id)
+        if case is None:
+            raise ValueError(f"case {case_id!r} does not exist")
+        changes = collect_changes(
+            status=status,
+            assigned_to=assigned_to,
+            sla_due_at=sla_due_at,
+            closed_at=closed_at,
+            resolution=resolution,
+            resolution_reason=resolution_reason,
         )
         return self._update(
             case,

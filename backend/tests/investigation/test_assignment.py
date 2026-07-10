@@ -13,6 +13,7 @@ from db.repositories.reference import AccountRepository
 from investigation.assignment import (
     NoEligibleInvestigatorError,
     auto_assign,
+    compute_workload,
     list_overdue_cases,
 )
 from investigation.config import DEFAULT_SLA_POLICY
@@ -212,3 +213,60 @@ def test_list_overdue_cases_only_returns_open_and_past_due(session: Session) -> 
 
     overdue_ids = {c.case_id for c in list_overdue_cases(session)}
     assert overdue_ids == {"OVERDUE_OPEN"}
+
+
+def test_auto_assign_writes_exactly_one_case_assigned_audit_row(session: Session) -> None:
+    from db.repositories.platform import AuditLogRepository
+
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "NEWCASE")
+    session.commit()
+
+    case = CaseRepository(session).get("NEWCASE")
+    assert case is not None
+    auto_assign(session, case, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+
+    rows = AuditLogRepository(session).list_for_case("NEWCASE")
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    # Code-review finding, Phase 4: previously 2 (a direct case_repo.update()
+    # here plus transition_case's own) -- now bundled into exactly 1.
+    assert len(assigned_rows) == 1
+    details = assigned_rows[0].details
+    assert details is not None
+    assert details["after"].get("assigned_to") == "U1"
+    assert details["after"].get("status") == "ASSIGNED"
+
+
+def test_auto_assign_accepts_precomputed_workload_and_mutates_it(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U2")
+    _seed_case(session, "CASE_A")
+    _seed_case(session, "CASE_B")
+    session.commit()
+
+    workload = compute_workload(session)
+    assert workload == {"U1": 0, "U2": 0}
+
+    case_a = CaseRepository(session).get("CASE_A")
+    assert case_a is not None
+    updated_a = auto_assign(
+        session, case_a, actor_type=ActorType.SYSTEM, actor_id=None, workload=workload
+    )
+    session.commit()
+    assert updated_a.assigned_to == "U1"
+    # The passed-in dict is mutated in place -- no fresh query needed for
+    # the next pick to see U1's incremented count.
+    assert workload["U1"] == 1
+    assert workload["U2"] == 0
+
+    case_b = CaseRepository(session).get("CASE_B")
+    assert case_b is not None
+    updated_b = auto_assign(
+        session, case_b, actor_type=ActorType.SYSTEM, actor_id=None, workload=workload
+    )
+    session.commit()
+    assert updated_b.assigned_to == "U2"
+    assert workload == {"U1": 1, "U2": 1}

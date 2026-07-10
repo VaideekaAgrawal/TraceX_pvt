@@ -8,7 +8,7 @@ import pytest
 from db.models.detection import ModelRun
 from db.repositories.detection import ModelRunRepository
 from detection.scoring.ensemble import AnomalyDetector, FraudClassifier
-from detection.scoring.training import train_and_persist
+from detection.scoring.training import load_active_model, train_and_persist
 
 
 def _get(repo: ModelRunRepository, run_id: str) -> ModelRun:
@@ -122,3 +122,36 @@ def test_train_and_persist_artifact_dir_is_created(
         model_artifact_dir=nested, model_name=model_name,
     )
     assert nested.exists()
+
+
+def test_load_active_model_returns_same_bundle_as_train_and_persist(
+    session, tmp_path: Path, synthetic_dataset
+) -> None:
+    accounts_df, transactions_df = synthetic_dataset
+    run = train_and_persist(
+        session, accounts_df=accounts_df, transactions_df=transactions_df,
+        model_artifact_dir=tmp_path, model_name="ensemble_v1",
+    )
+
+    bundle = load_active_model(run)
+    assert isinstance(bundle["anomaly_detector"], AnomalyDetector)
+    assert isinstance(bundle["fraud_classifier"], FraudClassifier)
+    assert bundle["fraud_classifier"]._fitted is True
+    assert bundle["feature_names"]
+
+
+def test_load_active_model_raises_without_artifact_path() -> None:
+    from db.models.base import utcnow
+
+    run = ModelRun(
+        run_id="RUN-NO-ARTIFACT",
+        model_name="ensemble_v1",
+        model_type="ensemble",
+        version="0.1.0",
+        trained_at=utcnow(),
+        metrics={},
+        artifact_path=None,
+        active=False,
+    )
+    with pytest.raises(ValueError, match="no artifact_path"):
+        load_active_model(run)

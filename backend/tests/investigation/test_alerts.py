@@ -110,6 +110,44 @@ def test_generate_alerts_refreshes_not_duplicates_on_rerun(session: Session) -> 
     assert len(all_alerts) == 1
 
 
+def test_generate_alerts_refresh_updates_risk_score_and_score(session: Session) -> None:
+    _seed_accounts(session, "A")
+    rule_results = {
+        "dormancy": [
+            DetectionResult(
+                detection_type="dormancy", account_ids=["A"], score=0.4, severity="MEDIUM"
+            )
+        ]
+    }
+
+    first = generate_alerts_from_detection(
+        session, {"A": 30.0}, rule_results, "RUN1",
+        actor_type=ActorType.SYSTEM, actor_id=None, date_str="2026-07-09",
+    )
+    session.commit()
+    assert first[0].risk_score == 30.0
+    assert first[0].score == 0.4
+
+    # Re-detected with a freshly recomputed (higher) risk_score/score --
+    # both must refresh, not go stale (code-review finding, Phase 4).
+    rule_results_v2 = {
+        "dormancy": [
+            DetectionResult(
+                detection_type="dormancy", account_ids=["A"], score=0.9, severity="HIGH"
+            )
+        ]
+    }
+    second = generate_alerts_from_detection(
+        session, {"A": 95.0}, rule_results_v2, "RUN2",
+        actor_type=ActorType.SYSTEM, actor_id=None, date_str="2026-07-09",
+    )
+    session.commit()
+
+    assert second[0].alert_id == first[0].alert_id
+    assert second[0].risk_score == 95.0
+    assert second[0].score == 0.9
+
+
 def test_generate_alerts_skips_unknown_detection_type(session: Session) -> None:
     _seed_accounts(session, "A")
     rule_results = {

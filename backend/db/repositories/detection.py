@@ -93,6 +93,8 @@ class AlertRepository(BaseRepository[Alert]):
         actor_type: ActorType,
         actor_id: str | None,
         case_id: str | None = UNSET,
+        score: float = UNSET,
+        risk_score: float = UNSET,
         severity: RiskLevel = UNSET,
         priority: Priority = UNSET,
         confidence: str | None = UNSET,
@@ -103,12 +105,22 @@ class AlertRepository(BaseRepository[Alert]):
     ) -> Alert:
         """Generic field update — covers both status/case-assignment
         changes and "refresh `last_seen_at` on idempotent re-detection"
-        (doc §3.2) as a case of setting that one field."""
+        (doc §3.2) as a case of setting that one field.
+
+        `score`/`risk_score` are accepted here (code-review finding,
+        Phase 4: they weren't, so a re-detected alert's row went stale on
+        those two columns even though both are freshly recomputed for
+        every detection result, including re-detections) so a refresh can
+        actually refresh the composite risk number, not just the metadata
+        around it.
+        """
         alert = self.get(alert_id)
         if alert is None:
             raise ValueError(f"alert {alert_id!r} does not exist")
         changes = collect_changes(
             case_id=case_id,
+            score=score,
+            risk_score=risk_score,
             severity=severity,
             priority=priority,
             confidence=confidence,
@@ -153,7 +165,16 @@ class AlertRepository(BaseRepository[Alert]):
         )
 
     def list_for_case(self, case_id: str) -> list[Alert]:
-        stmt = select(Alert).where(Alert.case_id == case_id)
+        """Ordered by `risk_score` descending (code-review finding,
+        Phase 4: `investigation.cases.close_case` picks `[0]` as the
+        primary alert to attribute a verdict to -- that needs to be the
+        highest-risk alert, not an incidental DB-insertion-order first
+        row)."""
+        stmt = (
+            select(Alert)
+            .where(Alert.case_id == case_id)
+            .order_by(Alert.risk_score.desc())
+        )
         return list(self.session.scalars(stmt))
 
     def list_unassigned(self, *, limit: int = 100) -> list[Alert]:

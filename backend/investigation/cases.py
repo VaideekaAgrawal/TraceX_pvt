@@ -27,6 +27,7 @@ from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from detection.rl.bandit import LinUCBAgent
 from investigation.assignment import auto_assign
 from investigation.fsm import transition_case
+from investigation.rl_features import base_rl_feature_dict
 
 
 def _new_case_id() -> str:
@@ -34,13 +35,23 @@ def _new_case_id() -> str:
 
 
 def create_case_from_alert(
-    session: Session, alert: Alert, *, actor_type: ActorType, actor_id: str | None
+    session: Session,
+    alert: Alert,
+    *,
+    actor_type: ActorType,
+    actor_id: str | None,
+    workload: dict[str, int] | None = None,
 ) -> Case:
     """Create a `Case` (status=NEW, level=L1 -- every case starts at
     triage) from `alert`, link every account in the alert's pattern into
     `case_accounts` (the case-scoping security boundary, doc §3.3), point
     the alert at the new case, then hand off to `auto_assign` for the
-    NEW->ASSIGNED workload assignment + SLA computation."""
+    NEW->ASSIGNED workload assignment + SLA computation.
+
+    `workload` is forwarded unchanged to `auto_assign` (see its docstring)
+    so a batch caller looping over many alerts can pass the same
+    incrementally-maintained dict through every call instead of a fresh
+    aggregate query per case (code-review finding, Phase 4)."""
     case_repo = CaseRepository(session)
     case_account_repo = CaseAccountRepository(session)
     alert_repo = AlertRepository(session)
@@ -75,7 +86,9 @@ def create_case_from_alert(
         actor_id=actor_id,
     )
 
-    return auto_assign(session, case, actor_type=actor_type, actor_id=actor_id)
+    return auto_assign(
+        session, case, actor_type=actor_type, actor_id=actor_id, workload=workload
+    )
 
 
 #: Which `CaseResolution` values `close_case` accepts, and the `CaseStatus`
@@ -102,25 +115,27 @@ _CLOSING_REWARD: dict[CaseResolution, float] = {
 
 def _case_rl_features(case: Case) -> dict:
     """Adapt a `Case` row into the flat feature dict `LinUCBAgent.
-    build_context` expects. Same documented data-availability gap as
-    `investigation.prioritization._build_account_features`: `cases` stores
-    `risk_score`/`typology` but not the raw anomaly/fraud/role/amount
-    signal, so those dims default to their zero/"unknown" value."""
+    build_context` expects -- source-specific extraction (reading
+    `case.typology`/`case.risk_score`) stays here; the shared dict-shape/
+    defaulting is `investigation.rl_features.base_rl_feature_dict`
+    (code-review finding, Phase 4: this used to duplicate
+    `investigation.prioritization._build_account_features`'s copy of the
+    same defaulting)."""
     patterns = [case.typology] if case.typology else []
     return {
         "account_id": case.primary_account_id,
-        "risk_score": case.risk_score or 0.0,
-        "role": "NORMAL",
-        "patterns": patterns,
-        "anomaly_score": 0.0,
-        "fraud_probability": 0.0,
-        "total_in_flow": 0.0,
-        "total_out_flow": 0.0,
-        "total_amount": 0.0,
-        "counterparties": 0,
-        "declared_annual_income": 0.0,
-        "channel_diversity": 1,
+        **base_rl_feature_dict(risk_score=case.risk_score or 0.0, patterns=patterns),
     }
+
+
+#: Resolutions whose closing transition sets `Case.closed_at` -- only the
+#: two genuinely terminal outcomes (CLOSED_TP/CLOSED_FP). `MONITORING`
+#: deliberately does NOT set `closed_at`: enhanced monitoring means the
+#: case is still being actively watched, not finished, so `closed_at`
+#: (which everywhere else in this schema means "stopped being worked")
+#: would be misleading if set here (code-review finding, Phase 4 --
+#: previously set unconditionally for all three with no documented reason).
+_SETS_CLOSED_AT = frozenset({CaseResolution.TRUE_POSITIVE_SAR, CaseResolution.FALSE_POSITIVE})
 
 
 def close_case(
@@ -136,7 +151,9 @@ def close_case(
     terminal `CaseStatus` via the FSM (raises `investigation.fsm.
     InvalidTransitionError` if the case isn't currently in a status the FSM
     allows that transition from -- e.g. a TRUE_POSITIVE_SAR verdict requires
-    the case to be in AWAITING_REVIEW or ESCALATED first), write a
+    the case to be in AWAITING_REVIEW or ESCALATED first; raises
+    `ValueError` if the case doesn't exist -- that check lives solely in
+    `transition_case`, not duplicated here), write a
     `DetectionFeedbackRepository` row, and feed the verdict to the
     already-injected `LinUCBAgent` for the case's primary account/context.
     Does NOT touch `RuleDefinition.confidence` -- that adjustment is
@@ -150,26 +167,29 @@ def close_case(
             "CaseStatus.ESCALATED, ...) directly for that case instead."
         )
 
-    case_repo = CaseRepository(session)
-    existing = case_repo.get(case_id)
-    if existing is None:
-        raise ValueError(f"case {case_id!r} does not exist")
+    to_status = _CLOSING_TRANSITIONS[resolution]
+    extra_changes: dict[str, object] = {"resolution": resolution, "resolution_reason": reason}
+    if resolution in _SETS_CLOSED_AT:
+        extra_changes["closed_at"] = utcnow()
 
-    case_repo.update(
+    # Bundles resolution/resolution_reason/closed_at into the SAME
+    # CaseRepository call/audit row as the status change (code-review
+    # finding, Phase 4: previously a separate `case_repo.update()` here plus
+    # `transition_case`'s own, confirmed live as `decision_changed`
+    # appearing twice per real close).
+    case = transition_case(
+        session,
         case_id,
-        resolution=resolution,
-        resolution_reason=reason,
-        closed_at=utcnow(),
-        action="decision_changed",
+        to_status,
         actor_type=actor_type,
         actor_id=actor_id,
+        reason=reason,
+        extra_changes=extra_changes,
     )
 
-    to_status = _CLOSING_TRANSITIONS[resolution]
-    case = transition_case(
-        session, case_id, to_status, actor_type=actor_type, actor_id=actor_id, reason=reason
-    )
-
+    # Ordered by risk_score descending (`AlertRepository.list_for_case`) so
+    # the highest-risk alert -- not an incidental DB-order first row -- is
+    # the one attributed to this verdict (code-review finding, Phase 4).
     case_alerts = AlertRepository(session).list_for_case(case_id)
     primary_alert_id = case_alerts[0].alert_id if case_alerts else None
     rule_ids = sorted({rid for a in case_alerts for rid in (a.rule_ids or [])}) or None

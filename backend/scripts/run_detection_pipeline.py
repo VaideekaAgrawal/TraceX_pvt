@@ -37,8 +37,6 @@ from __future__ import annotations
 import argparse
 import logging
 
-import joblib
-
 from db.enums import ActorType
 from db.repositories.detection import AlertRepository, ModelRunRepository
 from db.session import SessionLocal
@@ -48,7 +46,9 @@ from detection.graph.networkx_store import NetworkXGraphStore
 from detection.rules.engine import RuleEngine
 from detection.rules.seed import seed_builtin_rules
 from detection.scoring.ensemble import AnomalyDetector, EnsembleScorer
+from detection.scoring.training import load_active_model
 from investigation.alerts import generate_alerts_from_detection
+from investigation.assignment import compute_workload
 from investigation.cases import create_case_from_alert
 from investigation.prioritization import rank_alert_queue
 
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> None:
                 f"no active model_run for model_name={args.model_name!r} -- "
                 "run scripts/train_detection_model.py first"
             )
-        bundle = joblib.load(active_run.artifact_path)
+        bundle = load_active_model(active_run)
         fraud_classifier = bundle["fraud_classifier"]
 
         transactions_df = load_transactions_df(session)
@@ -120,11 +120,21 @@ def main(argv: list[str] | None = None) -> None:
         ranked = rank_alert_queue(session, unassigned)
         print(f"ranked queue: {len(ranked)} unassigned alert(s)")
 
+        # Computed once and maintained in Python across the loop below
+        # (`auto_assign`'s `workload` param, forwarded via
+        # `create_case_from_alert`) instead of re-running the full
+        # investigator-workload aggregate query once per case (code-review
+        # finding, Phase 4: confirmed redundant -- the same query re-ran
+        # `top_n_to_case` times in one real pipeline run when only the
+        # just-assigned investigator's count changed between iterations).
+        workload = compute_workload(session)
+
         created_cases: list[tuple[str, str | None, object]] = []
         for alert in ranked[: args.top_n_to_case]:
             alert_repo.mark_opened(alert.alert_id, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
             case = create_case_from_alert(
-                session, alert, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID
+                session, alert, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID,
+                workload=workload,
             )
             created_cases.append((case.case_id, case.assigned_to, case.sla_due_at))
         session.commit()

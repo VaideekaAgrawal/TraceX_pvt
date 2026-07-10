@@ -7,12 +7,20 @@ run" landmine (`archive/SALVAGE.md`).
 Owns the "exactly one active `model_run` per `model_name`" invariant as a
 promote step on top of `ModelRunRepository`'s plain CRUD — the repository's
 own docstring says this is deliberately not enforced at that layer.
+
+`load_active_model()` is the load-side counterpart to `train_and_persist`'s
+save side (code-review finding, Phase 4: `scripts/run_detection_pipeline.py`
+was inlining `joblib.load(...)` + unpacking the bundle dict directly,
+duplicating knowledge of the artifact's shape that only this module should
+own) -- both functions agree on the joblib bundle's key names in exactly one
+place now.
 """
 from __future__ import annotations
 
 import hashlib
 import uuid
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
@@ -157,3 +165,14 @@ def train_and_persist(
     session.commit()
 
     return run
+
+
+def load_active_model(model_run: ModelRun) -> dict[str, Any]:
+    """Load the joblib artifact `train_and_persist` wrote for `model_run`.
+    Returns the full bundle dict (`anomaly_detector`, `fraud_classifier`,
+    `feature_names`, `trained_at`) exactly as `train_and_persist` wrote it —
+    callers pick the keys they need (e.g. `scripts/run_detection_pipeline.py`
+    only needs `fraud_classifier`, to score without retraining)."""
+    if model_run.artifact_path is None:
+        raise ValueError(f"model_run {model_run.run_id!r} has no artifact_path")
+    return joblib.load(model_run.artifact_path)

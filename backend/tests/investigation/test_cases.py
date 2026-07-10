@@ -236,3 +236,110 @@ def test_close_case_raises_on_unknown_case(session: Session) -> None:
             actor_type=ActorType.SYSTEM,
             actor_id=None,
         )
+
+
+def test_close_case_enhanced_monitoring_does_not_set_closed_at(session: Session) -> None:
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    closed = close_case(
+        session,
+        case.case_id,
+        CaseResolution.ENHANCED_MONITORING,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    assert closed.status == CaseStatus.MONITORING
+    assert closed.resolution == CaseResolution.ENHANCED_MONITORING
+    # Still being watched, not finished -- closed_at must stay unset
+    # (code-review finding, Phase 4).
+    assert closed.closed_at is None
+
+
+def test_close_case_writes_exactly_one_decision_changed_audit_row(session: Session) -> None:
+    from db.repositories.platform import AuditLogRepository
+
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    close_case(
+        session,
+        case.case_id,
+        CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    rows = AuditLogRepository(session).list_for_case(case.case_id)
+    decision_rows = [r for r in rows if r.action == "decision_changed"]
+    # Code-review finding, Phase 4: previously 2 (a direct case_repo.update()
+    # here plus transition_case's own) -- now bundled into exactly 1.
+    assert len(decision_rows) == 1
+    details = decision_rows[0].details
+    assert details is not None
+    assert details["after"].get("resolution") == "TRUE_POSITIVE_SAR"
+    assert details["after"].get("status") == "CLOSED_TP"
+
+
+def test_close_case_attributes_feedback_to_highest_risk_alert(session: Session) -> None:
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    low_risk_alert = _seed_alert(session, "AL_LOW", account_ids=["A", "B"])
+    AlertRepository(session).update(
+        "AL_LOW", risk_score=20.0, actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    case = create_case_from_alert(
+        session, low_risk_alert, actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    high_risk_alert = AlertRepository(session).create(
+        alert_id="AL_HIGH",
+        detection_type=DetectionType.round_trip,
+        primary_account_id="A",
+        account_ids=["A", "B"],
+        score=0.95,
+        risk_score=99.0,
+        severity=RiskLevel.CRITICAL,
+        priority=Priority.P1,
+        status="open",
+        source="pipeline",
+        case_id=case.case_id,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    close_case(
+        session,
+        case.case_id,
+        CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    feedback = DetectionFeedbackRepository(session).list_for_case(case.case_id)
+    assert feedback[0].alert_id == high_risk_alert.alert_id

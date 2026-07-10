@@ -97,6 +97,66 @@ def test_alert_repository_round_trip(session: Session) -> None:
     assert [a.alert_id for a in repo.list_for_case("CASE1")] == ["AL1"]
 
 
+def test_alert_repository_list_for_case_orders_by_risk_score_desc(session: Session) -> None:
+    _seed_account_and_user(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    repo = AlertRepository(session)
+    for alert_id, risk_score in [("AL_LOW", 10.0), ("AL_HIGH", 90.0), ("AL_MID", 50.0)]:
+        repo.create(
+            alert_id=alert_id,
+            detection_type=DetectionType.layering,
+            primary_account_id="A1",
+            account_ids=["A1"],
+            score=0.5,
+            risk_score=risk_score,
+            severity=RiskLevel.MEDIUM,
+            priority=Priority.P3,
+            status="open",
+            source="pipeline",
+            case_id="CASE1",
+            actor_type=ActorType.SYSTEM,
+            actor_id=None,
+        )
+    session.commit()
+
+    assert [a.alert_id for a in repo.list_for_case("CASE1")] == ["AL_HIGH", "AL_MID", "AL_LOW"]
+
+
+def test_alert_repository_update_score_and_risk_score(session: Session) -> None:
+    _seed_account_and_user(session)
+    repo = AlertRepository(session)
+    repo.create(
+        alert_id="AL1",
+        detection_type=DetectionType.layering,
+        primary_account_id="A1",
+        account_ids=["A1"],
+        score=0.5,
+        risk_score=40.0,
+        severity=RiskLevel.MEDIUM,
+        priority=Priority.P3,
+        status="open",
+        source="pipeline",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    updated = repo.update(
+        "AL1", score=0.95, risk_score=88.0, actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+    assert updated.score == 0.95
+    assert updated.risk_score == 88.0
+
+
 def test_alert_repository_mark_opened(session: Session) -> None:
     _seed_account_and_user(session)
     repo = AlertRepository(session)
