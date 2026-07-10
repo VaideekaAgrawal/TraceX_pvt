@@ -27,7 +27,7 @@ from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from detection.rl.bandit import LinUCBAgent
 from investigation.assignment import auto_assign
 from investigation.fsm import transition_case
-from investigation.rl_features import base_rl_feature_dict
+from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
 
 
 def _new_case_id() -> str:
@@ -102,15 +102,9 @@ _CLOSING_TRANSITIONS: dict[CaseResolution, CaseStatus] = {
     CaseResolution.ENHANCED_MONITORING: CaseStatus.MONITORING,
 }
 
-#: RL reward per resolution (`LinUCBAgent.receive_feedback`'s own
-#: convention: +1.0 confirmed-risk / -0.3 false positive).
-#: `ENHANCED_MONITORING` is treated as a TP-like (+1.0) outcome -- it
-#: confirms genuine risk warranting ongoing monitoring, not a cleared alert.
-_CLOSING_REWARD: dict[CaseResolution, float] = {
-    CaseResolution.TRUE_POSITIVE_SAR: 1.0,
-    CaseResolution.FALSE_POSITIVE: -0.3,
-    CaseResolution.ENHANCED_MONITORING: 1.0,
-}
+#: RL reward per resolution -- promoted to `investigation.rl_features.
+#: CLOSING_REWARD` (Phase 1B: a second real caller, the demo-data historical
+#: case generator, needs the identical mapping). Imported, not duplicated.
 
 
 def _case_rl_features(case: Case) -> dict:
@@ -194,7 +188,7 @@ def close_case(
     primary_alert_id = case_alerts[0].alert_id if case_alerts else None
     rule_ids = sorted({rid for a in case_alerts for rid in (a.rule_ids or [])}) or None
 
-    reward = _CLOSING_REWARD[resolution]
+    reward = CLOSING_REWARD[resolution]
     DetectionFeedbackRepository(session).create(
         case_id=case_id,
         alert_id=primary_alert_id,

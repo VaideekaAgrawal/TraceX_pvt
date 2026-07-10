@@ -96,14 +96,14 @@ warn_unused_ignores = true
 # venv with any other name (`venv/`, `env/`, `.venv311/`) would still get
 # walked and type-checked as if it were our own source, which is what
 # actually happened during this repo's own Phase 0 session.
-files = ["foundation", "detection", "investigation", "orchestration", "api", "db", "tests"]
+files = ["foundation", "detection", "investigation", "orchestration", "api", "db", "demo_data", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
-include = ["foundation*", "detection*", "investigation*", "orchestration*", "api*", "db*"]
+include = ["foundation*", "detection*", "investigation*", "orchestration*", "api*", "db*", "demo_data*"]
 
 [build-system]
 requires = ["setuptools>=68.0"]

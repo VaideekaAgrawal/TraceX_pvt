@@ -42,7 +42,7 @@ jobs:
       # third-party stubs as if they were our own source. See the comment on
       # [tool.mypy] in pyproject.toml for how this was actually hit.
       - name: Typecheck (mypy)
-        run: mypy foundation detection investigation orchestration api db tests
+        run: mypy foundation detection investigation orchestration api db demo_data tests
 
       - name: Test (pytest)
         run: pytest --cov=. --cov-report=term-missing
