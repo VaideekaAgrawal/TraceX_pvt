@@ -14,11 +14,15 @@ this port exists to fix): (1) `A`/`b` are no longer written to a local JSON
 file (`data/rl_state.json` -- silently wiped on any non-durable-filesystem
 restart) but to `rl_arm_state` via `RlArmStateRepository.upsert`, called at
 the same point the archive called `_save_state()` (end of every `update()`)
--- loaded via the repository at construction instead of reading a file. (2)
-Single fixed `arm_id="global"` (`docs/RL_USP.md` line 110: "LinUCB
-parameters -- one set per arm context (we treat as single arm, context
-varies)"; true multi-armed-per-pattern-type is a documented "6 months
-later" roadmap item, not this phase).
+-- loaded via the repository at construction instead of reading a file.
+`_save_state()` only flushes (via the repository, same convention every
+repository in this codebase follows -- see `db/repositories/base.py`);
+`self.session` is injected by the caller (same pattern as every repository
+constructor), so the caller of `update()`/`receive_feedback()`/`reset()`
+owns the commit. (2) Single fixed `arm_id="global"` (`docs/RL_USP.md` line
+110: "LinUCB parameters -- one set per arm context (we treat as single arm,
+context varies)"; true multi-armed-per-pattern-type is a documented "6
+months later" roadmap item, not this phase).
 
 Judgment call: `total_feedback`/`tp_count`/`fp_count` (interpretability-only
 counters, not part of the actual learned model — `RlArmState`'s own
@@ -36,13 +40,13 @@ summary built from ensemble *outputs*.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType
+from db.models.base import utcnow
 from db.repositories.detection import RlArmStateRepository
 
 GLOBAL_ARM_ID = "global"
@@ -152,7 +156,7 @@ class LinUCBAgent:
             "account_id": account_id,
             "is_true_positive": is_true_positive,
             "reward": reward,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": utcnow().isoformat(),
             "learned_weights_snapshot": self._get_top_weights(),
         }
 
@@ -231,6 +235,13 @@ class LinUCBAgent:
     # -- Persistence (DB-backed, replaces the archive's local JSON file) --------
 
     def _save_state(self) -> None:
+        """Flushes the upsert (via `RlArmStateRepository`, which only
+        flushes internally like every repository in this codebase) but does
+        NOT commit — `self.session` is injected by the caller (same
+        convention as every repository constructor: callees flush, the
+        caller owns the transaction boundary, see `db/repositories/base.py`).
+        Callers of `update()`/`receive_feedback()`/`reset()` must commit
+        `self.session` themselves once they're done with the unit of work."""
         self.repo.upsert(
             arm_id=self.arm_id,
             a_matrix=self.A.tolist(),
@@ -238,7 +249,6 @@ class LinUCBAgent:
             actor_type=self.actor_type,
             actor_id=self.actor_id,
         )
-        self.session.commit()
 
     def _load_state(self) -> None:
         state = self.repo.get(self.arm_id)

@@ -131,6 +131,13 @@ def test_safe_ratio_zero_denominator() -> None:
     assert safe_ratio(10, 2) == 5.0
 
 
+def test_safe_ratio_nan_denominator() -> None:
+    import numpy as np
+
+    assert safe_ratio(5, float("nan")) == 0.0
+    assert safe_ratio(5, np.nan, default=-1.0) == -1.0
+
+
 def test_channel_entropy_single_channel_is_zero() -> None:
     assert channel_entropy({"UPI": 10}) == 0.0
 

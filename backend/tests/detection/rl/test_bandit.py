@@ -62,6 +62,9 @@ def test_update_persists_to_rl_arm_state(session) -> None:
     agent = LinUCBAgent(session)
     ctx = agent.build_context(_account())
     agent.update(ctx, reward=1.0)
+    # update()/_save_state() only flush -- callers own the commit (same
+    # convention as every repository in this codebase).
+    session.commit()
 
     repo = RlArmStateRepository(session)
     state = repo.get(GLOBAL_ARM_ID)
@@ -78,6 +81,8 @@ def test_fresh_instance_reloads_persisted_state_not_identity(session) -> None:
     ctx = agent1.build_context(_account())
     agent1.update(ctx, reward=1.0)
     agent1.update(agent1.build_context(_account(risk_score=20)), reward=-0.3)
+    # Caller commits -- update()/_save_state() only flush.
+    session.commit()
 
     agent2 = LinUCBAgent(session)
     assert np.allclose(agent2.A, agent1.A)
@@ -125,6 +130,7 @@ def test_reset_returns_to_identity_and_persists(session) -> None:
     ctx = agent.build_context(_account())
     agent.update(ctx, reward=1.0)
     agent.reset()
+    session.commit()
     assert np.array_equal(agent.A, np.identity(agent.d))
     assert agent.total_feedback == 0
 
@@ -137,6 +143,7 @@ def test_different_arm_ids_are_independent(session) -> None:
     LinUCBAgent(session, arm_id="arm-b")  # seed arm-b's row too, unused otherwise
     ctx = agent_a.build_context(_account())
     agent_a.update(ctx, reward=1.0)
+    session.commit()
 
     reloaded_b = LinUCBAgent(session, arm_id="arm-b")
     assert np.array_equal(reloaded_b.A, np.identity(reloaded_b.d))

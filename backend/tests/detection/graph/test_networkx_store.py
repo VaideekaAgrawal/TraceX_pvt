@@ -190,3 +190,41 @@ def test_empty_transactions_df_builds_nodes_only() -> None:
     assert store.compute_centrality() == {"pagerank": {}, "betweenness": {}}
     assert store.detect_cycles() == []
     assert store.get_transaction_chains() == []
+
+
+def test_get_ego_graph_caps_per_account_fan_out() -> None:
+    # A hub account with far more than the 500-row safety valve worth of
+    # transactions touching it -- without the cap, get_ego_graph would
+    # return all of them.
+    hub_rows = [
+        {
+            "txn_id": f"HUB{i}",
+            "source_account": "HUB",
+            "dest_account": f"LEAF{i}",
+            "amount": 100.0,
+            "timestamp": _ts("2026-01-01 00:00") + pd.Timedelta(minutes=i),
+            "channel": "UPI",
+        }
+        for i in range(600)
+    ]
+    accounts = pd.DataFrame({"account_id": ["HUB", *[f"LEAF{i}" for i in range(600)]]})
+    txns = pd.DataFrame(hub_rows)
+    store = NetworkXGraphStore(accounts, txns)
+
+    result = store.get_ego_graph("HUB", radius=1)
+    assert len(result["edges"]) == 500
+
+
+def test_simple_digraph_is_cached_across_calls(transactions_df, accounts_df) -> None:
+    store = NetworkXGraphStore(accounts_df, transactions_df)
+    first = store._simple_digraph()
+    second = store._simple_digraph()
+    assert first is second
+
+
+def test_detect_cycles_still_correct_after_simple_digraph_cache(store: NetworkXGraphStore) -> None:
+    # Calling detect_cycles twice must not be affected by caching the
+    # underlying simple digraph -- results should be stable.
+    first = store.detect_cycles(max_length=5, max_cycles=10)
+    second = store.detect_cycles(max_length=5, max_cycles=10)
+    assert [frozenset(c) for c in first] == [frozenset(c) for c in second]

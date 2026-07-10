@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from detection.detectors.round_trip import RoundTripDetector
 from detection.features import FeatureExtractor
@@ -71,6 +72,22 @@ def test_fraud_classifier_train_skips_with_too_few_positives(synthetic_dataset) 
     assert clf._fitted is False
 
 
+def test_fraud_classifier_train_raises_on_missing_source_account_column(
+    synthetic_dataset,
+) -> None:
+    accounts_df, transactions_df = synthetic_dataset
+    store = NetworkXGraphStore(accounts_df, transactions_df)
+    features_df = FeatureExtractor(store, accounts_df, transactions_df).extract_all()
+
+    from detection.scoring.training import _build_labels
+
+    labels = _build_labels(transactions_df, features_df)
+    bad_transactions_df = transactions_df.rename(columns={"source_account": "sender"})
+    clf = FraudClassifier()
+    with pytest.raises(ValueError, match="source_account"):
+        clf.train(features_df, labels, bad_transactions_df)
+
+
 def test_role_classifier_assigns_roles(synthetic_dataset) -> None:
     accounts_df, transactions_df = synthetic_dataset
     store = NetworkXGraphStore(accounts_df, transactions_df)
@@ -89,6 +106,24 @@ def test_role_classifier_empty_graph_returns_empty() -> None:
     )
     store = NetworkXGraphStore(accounts_df, transactions_df)
     assert RoleClassifier().classify_all(store) == {}
+
+
+def test_role_classifier_handles_nan_total_flow_without_crashing() -> None:
+    # RoleClassifier.classify_all uses the same `safe_ratio` as features.py
+    # (NaN-guarded denominator) -- exercise a node whose total in+out flow
+    # is NaN (e.g. a NaN edge amount) to confirm it degrades to the default
+    # ratio instead of propagating NaN into the role decision.
+    accounts_df = pd.DataFrame({"account_id": ["A", "B"]})
+    transactions_df = pd.DataFrame(
+        [{"source_account": "A", "dest_account": "B", "amount": 100.0,
+          "timestamp": pd.Timestamp("2026-01-01"), "channel": "UPI"}]
+    )
+    store = NetworkXGraphStore(accounts_df, transactions_df)
+    # Inject a NaN-amount edge directly so total_flow becomes NaN for "A".
+    store.graph.add_edge("A", "B", amount=float("nan"), is_laundering=0)
+
+    roles = RoleClassifier().classify_all(store)
+    assert roles["A"]["role"] in {"SOURCE", "MULE", "SINK", "NORMAL"}
 
 
 def test_ensemble_scorer_compute_priority_thresholds() -> None:

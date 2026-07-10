@@ -40,6 +40,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from detection.config import DEFAULT_DETECTION_CONFIG, DetectionConfig
+from detection.features import safe_ratio
 from detection.graph.store import GraphStore
 from detection.types import DetectionResult
 
@@ -155,8 +156,13 @@ class FraudClassifier:
             txns = transactions_df.copy()
             txns["timestamp"] = pd.to_datetime(txns["timestamp"], errors="coerce")
             txns = txns.sort_values("timestamp")
-            acc_col = "source_account" if "source_account" in txns.columns else txns.columns[1]
-            last_ts = txns.groupby(acc_col)["timestamp"].max()
+            if "source_account" not in txns.columns:
+                raise ValueError(
+                    "transactions_df must have a 'source_account' column for the temporal "
+                    "split (no positional-column fallback -- silently guessing the wrong "
+                    "column would corrupt the split)."
+                )
+            last_ts = txns.groupby("source_account")["timestamp"].max()
             common = features_df.index.intersection(last_ts.index).intersection(labels.index)
             order = last_ts.loc[common].sort_values().index
 
@@ -326,8 +332,8 @@ class RoleClassifier:
             out_flow = sum(d.get("amount", 0) for _, _, d in G.out_edges(node, data=True))
             total = in_flow + out_flow
             ratios[node] = {
-                "in_ratio": _safe_ratio(in_flow, total),
-                "out_ratio": _safe_ratio(out_flow, total),
+                "in_ratio": safe_ratio(in_flow, total),
+                "out_ratio": safe_ratio(out_flow, total),
                 "in_degree": G.in_degree(node),
                 "out_degree": G.out_degree(node),
                 "total_flow": total,
@@ -362,12 +368,6 @@ class RoleClassifier:
                 "in_degree": r["in_degree"], "out_degree": r["out_degree"],
             }
         return roles
-
-
-def _safe_ratio(num: float, den: float, default: float = 0.0) -> float:
-    if den == 0:
-        return default
-    return num / den
 
 
 class EnsembleScorer:

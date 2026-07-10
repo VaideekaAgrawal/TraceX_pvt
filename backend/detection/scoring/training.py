@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 import joblib
@@ -20,6 +19,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType
+from db.models.base import utcnow
 from db.models.detection import ModelRun
 from db.repositories.detection import ModelRunRepository
 from detection.config import DEFAULT_DETECTION_CONFIG, DetectionConfig
@@ -107,7 +107,7 @@ def train_and_persist(
             "anomaly_detector": anomaly_detector,
             "fraud_classifier": fraud_classifier,
             "feature_names": list(features_df.columns),
-            "trained_at": datetime.now(UTC).isoformat(),
+            "trained_at": utcnow().isoformat(),
         },
         artifact_path,
     )
@@ -118,13 +118,22 @@ def train_and_persist(
         **fraud_metrics,
     }
 
+    # A single commit at the end, after create + demote + promote, all of
+    # which only flush internally (`BaseRepository._create`/`_update`) --
+    # the artifact-serialization-succeeded guarantee is already established
+    # above (joblib.dump before any DB write), so splitting this into two
+    # commits protected nothing while opening a crash window: if the
+    # process died between two separate commits, the new run could be left
+    # permanently active=False with no recovery path anywhere in the
+    # codebase. One commit means either the whole promote (create + demote
+    # + activate) lands atomically, or none of it does.
     repo = ModelRunRepository(session)
     run = repo.create(
         run_id=run_id,
         model_name=model_name,
         model_type="ensemble",
-        version=datetime.now(UTC).strftime("%Y%m%d%H%M%S"),
-        trained_at=datetime.now(UTC),
+        version=utcnow().strftime("%Y%m%d%H%M%S"),
+        trained_at=utcnow(),
         dataset_hash=_dataset_hash(accounts_df, transactions_df),
         metrics=metrics,
         feature_importance=fraud_classifier.get_feature_importance(),
@@ -133,7 +142,6 @@ def train_and_persist(
         actor_type=actor_type,
         actor_id=actor_id,
     )
-    session.commit()
 
     # Promote: demote any prior active run(s) for this model_name (defends
     # against more than one somehow already being active, not just the

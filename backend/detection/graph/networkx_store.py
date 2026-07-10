@@ -22,6 +22,11 @@ from detection.graph.store import GraphStore
 
 logger = logging.getLogger(__name__)
 
+# Matches the archived `SQLiteAdapter.get_ego_graph`'s `LIMIT 500` per-hop
+# safety valve — without it a hub account entering the BFS frontier can
+# balloon the ego-graph to tens of thousands of edges.
+_EGO_GRAPH_PER_ACCOUNT_LIMIT = 500
+
 
 class NetworkXGraphStore(GraphStore):
     """NetworkX `MultiDiGraph`-backed graph engine, built once from
@@ -33,6 +38,7 @@ class NetworkXGraphStore(GraphStore):
         self.transactions_df = transactions_df
         self._G = nx.MultiDiGraph()
         self._centrality_cache: dict[str, dict[str, float]] = {}
+        self._simple_digraph_cache: nx.DiGraph | None = None
         self._build()
 
     @property
@@ -85,9 +91,21 @@ class NetworkXGraphStore(GraphStore):
 
     def _simple_digraph(self) -> nx.DiGraph:
         """Lightweight weighted DiGraph from `transactions_df` (avoids
-        iterating every edge of the full MultiDiGraph)."""
+        iterating every edge of the full MultiDiGraph).
+
+        Cached the same way `compute_centrality` caches its own comparably
+        expensive derivation from the same immutable `transactions_df` —
+        `detect_cycles` (the only caller) never mutates the graph this
+        returns (it works off `.subgraph(...).copy()`), so memoizing is
+        safe. Without this, the Rule Engine instantiating a fresh
+        `RoundTripDetector` per enabled Tier-1 "cycle" rule meant N enabled
+        cycle-rules rebuilt this from scratch N times against the same
+        `graph_store` instance."""
+        if self._simple_digraph_cache is not None:
+            return self._simple_digraph_cache
         if len(self.transactions_df) == 0:
-            return nx.DiGraph()
+            self._simple_digraph_cache = nx.DiGraph()
+            return self._simple_digraph_cache
         agg = (
             self.transactions_df.groupby(["source_account", "dest_account"], sort=False)["amount"]
             .sum()
@@ -97,6 +115,7 @@ class NetworkXGraphStore(GraphStore):
         simple = nx.from_pandas_edgelist(
             agg, source="source", target="dest", edge_attr="weight", create_using=nx.DiGraph()
         )
+        self._simple_digraph_cache = simple
         return simple
 
     # ── Centrality (cached) ──────────────────────────────────────────
@@ -303,7 +322,16 @@ class NetworkXGraphStore(GraphStore):
                 if acc in visited:
                     continue
                 visited.add(acc)
-                touching = df[(df["source_account"] == acc) | (df["dest_account"] == acc)]
+                # Per-account fan-out cap, matching the archived
+                # `SQLiteAdapter.get_ego_graph`'s `LIMIT 500` (no ORDER BY —
+                # the archive returns whichever 500 rows SQLite yields
+                # first, i.e. rowid/insertion order, not most-recent).
+                # `.head(500)` on `df` here preserves the same insertion
+                # order transactions_df was built in, so this matches that
+                # behavior rather than inventing a "most recent" policy.
+                touching = df[
+                    (df["source_account"] == acc) | (df["dest_account"] == acc)
+                ].head(_EGO_GRAPH_PER_ACCOUNT_LIMIT)
                 for rec in touching.to_dict("records"):
                     fallback_key = (
                         rec["source_account"],
