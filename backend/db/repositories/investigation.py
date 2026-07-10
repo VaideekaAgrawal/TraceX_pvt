@@ -111,9 +111,19 @@ class CaseRepository(BaseRepository[Case]):
         resolution: CaseResolution | None = UNSET,
         resolution_reason: str | None = UNSET,
         evidence_hash: str | None = UNSET,
+        action: str = "case_updated",
     ) -> Case:
         """Plain field update on the one `cases` row. Does not touch
-        `case_status_history` — see module docstring."""
+        `case_status_history` — see module docstring.
+
+        `action` defaults to the generic `case_updated` verb but is
+        overridable so Phase 4's case-lifecycle callers (the FSM, evidence/
+        decision flows) can log the taxonomy-specific verbs
+        `docs/DATA_SCHEMA.md` §3.5 names (`case_assigned`, `escalated`,
+        `decision_changed`, ...) instead of a generic one -- this repository
+        still owns the sole write path (via `_update`), it just no longer
+        hardcodes the audit verb.
+        """
         case = self.get(case_id)
         if case is None:
             raise ValueError(f"case {case_id!r} does not exist")
@@ -138,7 +148,7 @@ class CaseRepository(BaseRepository[Case]):
             changes,
             actor_type=actor_type,
             actor_id=actor_id,
-            action="case_updated",
+            action=action,
             case_id=case_id,
         )
 
@@ -321,6 +331,26 @@ class EvidenceRepository(BaseRepository[Evidence]):
             actor_type=actor_type,
             actor_id=actor_id,
             action="evidence_updated",
+            case_id=evidence.case_id,
+        )
+
+    def pin(self, evidence_id: str, *, actor_type: ActorType, actor_id: str | None) -> Evidence:
+        """Mark an evidence item pinned, generating a dedicated
+        `evidence_pinned` audit action (`docs/DATA_SCHEMA.md` §3.5's named
+        taxonomy verb) instead of the generic `evidence_updated` the plain
+        `update()` method would log for the same field change. Kept as its
+        own method (rather than asking every caller to remember
+        `update(..., pinned=True)`) precisely so "pin" is always audited
+        under its own distinguishable action name."""
+        evidence = self.get(evidence_id)
+        if evidence is None:
+            raise ValueError(f"evidence {evidence_id!r} does not exist")
+        return self._update(
+            evidence,
+            {"pinned": True},
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="evidence_pinned",
             case_id=evidence.case_id,
         )
 

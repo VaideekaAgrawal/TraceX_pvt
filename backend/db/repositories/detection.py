@@ -127,6 +127,31 @@ class AlertRepository(BaseRepository[Alert]):
             case_id=audit_case_id,
         )
 
+    def mark_opened(self, alert_id: str, *, actor_type: ActorType, actor_id: str | None) -> None:
+        """Record that an investigator opened this alert -- a legitimate
+        audit-only repository call with no domain-field change: there is no
+        `alerts` column tracking "opened" distinct from `status`/
+        `last_seen_at`, and overloading either would corrupt their existing,
+        different meanings (`status` is open/assigned/closed;
+        `last_seen_at` means "last re-detected by the pipeline", doc §3.2).
+        Routes through `_update()` with an empty `changes` dict rather than
+        calling `append_audit_log` directly, so the single-choke-point
+        invariant documented in `db/repositories/_audit.py` still holds --
+        mirrors `UserRepository.record_login`'s pattern of a repo method
+        whose only real purpose is producing the audited row, just with zero
+        fields actually written here instead of one."""
+        alert = self.get(alert_id)
+        if alert is None:
+            raise ValueError(f"alert {alert_id!r} does not exist")
+        self._update(
+            alert,
+            {},
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="alert_opened",
+            case_id=alert.case_id,
+        )
+
     def list_for_case(self, case_id: str) -> list[Alert]:
         stmt = select(Alert).where(Alert.case_id == case_id)
         return list(self.session.scalars(stmt))

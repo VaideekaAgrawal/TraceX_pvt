@@ -97,6 +97,38 @@ def test_alert_repository_round_trip(session: Session) -> None:
     assert [a.alert_id for a in repo.list_for_case("CASE1")] == ["AL1"]
 
 
+def test_alert_repository_mark_opened(session: Session) -> None:
+    _seed_account_and_user(session)
+    repo = AlertRepository(session)
+    repo.create(
+        alert_id="AL1",
+        detection_type=DetectionType.layering,
+        primary_account_id="A1",
+        account_ids=["A1"],
+        score=0.8,
+        risk_score=75.0,
+        severity=RiskLevel.HIGH,
+        priority=Priority.P1,
+        status="open",
+        source="pipeline",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    from db.repositories.platform import AuditLogRepository
+
+    repo.mark_opened("AL1", actor_type=ActorType.INVESTIGATOR, actor_id="U1")
+    session.commit()
+
+    alert = repo.get("AL1")
+    assert alert is not None
+    assert alert.status == "open"  # no domain-field change
+
+    actions = [r.action for r in AuditLogRepository(session).list_for_entity("alert", "AL1")]
+    assert "alert_opened" in actions
+
+
 def test_model_run_repository_round_trip(session: Session) -> None:
     repo = ModelRunRepository(session)
     repo.create(

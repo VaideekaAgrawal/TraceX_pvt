@@ -150,6 +150,72 @@ def test_case_status_history_repository_record_and_list(session: Session) -> Non
     assert [h.to_status for h in history] == [CaseStatus.NEW, CaseStatus.ASSIGNED]
 
 
+def test_case_repository_update_action_override(session: Session) -> None:
+    from db.repositories.platform import AuditLogRepository
+
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = CaseRepository(session)
+    repo.update(
+        "CASE1",
+        status=CaseStatus.ESCALATED,
+        action="escalated",
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    actions = [r.action for r in AuditLogRepository(session).list_for_case("CASE1")]
+    assert "escalated" in actions
+    assert "case_updated" not in actions
+
+
+def test_evidence_repository_pin(session: Session) -> None:
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = EvidenceRepository(session)
+    repo.create(
+        evidence_id="EV1",
+        case_id="CASE1",
+        type=EvidenceType.ACCOUNT,
+        added_by="U1",
+        pinned=False,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    from db.repositories.platform import AuditLogRepository
+
+    pinned = repo.pin("EV1", actor_type=ActorType.INVESTIGATOR, actor_id="U1")
+    session.commit()
+    assert pinned.pinned is True
+    assert [e.evidence_id for e in repo.list_pinned_for_case("CASE1")] == ["EV1"]
+
+    actions = [r.action for r in AuditLogRepository(session).list_for_entity("evidence", "EV1")]
+    assert "evidence_pinned" in actions
+
+
 def test_evidence_repository_round_trip(session: Session) -> None:
     _seed(session)
     CaseRepository(session).create(
