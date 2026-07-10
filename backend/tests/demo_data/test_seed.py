@@ -37,7 +37,11 @@ def _row_counts(session: Session) -> dict[str, int]:
         "ingestion_log": IngestionLog,
         "audit_log": AuditLog,
     }
-    return {name: session.scalar(select(func.count()).select_from(model)) for name, model in tables.items()}
+    counts: dict[str, int] = {}
+    for name, model in tables.items():
+        result = session.scalar(select(func.count()).select_from(model))
+        counts[name] = result if result is not None else 0
+    return counts
 
 
 def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
