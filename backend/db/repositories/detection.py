@@ -93,6 +93,8 @@ class AlertRepository(BaseRepository[Alert]):
         actor_type: ActorType,
         actor_id: str | None,
         case_id: str | None = UNSET,
+        score: float = UNSET,
+        risk_score: float = UNSET,
         severity: RiskLevel = UNSET,
         priority: Priority = UNSET,
         confidence: str | None = UNSET,
@@ -103,12 +105,22 @@ class AlertRepository(BaseRepository[Alert]):
     ) -> Alert:
         """Generic field update — covers both status/case-assignment
         changes and "refresh `last_seen_at` on idempotent re-detection"
-        (doc §3.2) as a case of setting that one field."""
+        (doc §3.2) as a case of setting that one field.
+
+        `score`/`risk_score` are accepted here (code-review finding,
+        Phase 4: they weren't, so a re-detected alert's row went stale on
+        those two columns even though both are freshly recomputed for
+        every detection result, including re-detections) so a refresh can
+        actually refresh the composite risk number, not just the metadata
+        around it.
+        """
         alert = self.get(alert_id)
         if alert is None:
             raise ValueError(f"alert {alert_id!r} does not exist")
         changes = collect_changes(
             case_id=case_id,
+            score=score,
+            risk_score=risk_score,
             severity=severity,
             priority=priority,
             confidence=confidence,
@@ -127,8 +139,42 @@ class AlertRepository(BaseRepository[Alert]):
             case_id=audit_case_id,
         )
 
+    def mark_opened(self, alert_id: str, *, actor_type: ActorType, actor_id: str | None) -> None:
+        """Record that an investigator opened this alert -- a legitimate
+        audit-only repository call with no domain-field change: there is no
+        `alerts` column tracking "opened" distinct from `status`/
+        `last_seen_at`, and overloading either would corrupt their existing,
+        different meanings (`status` is open/assigned/closed;
+        `last_seen_at` means "last re-detected by the pipeline", doc §3.2).
+        Routes through `_update()` with an empty `changes` dict rather than
+        calling `append_audit_log` directly, so the single-choke-point
+        invariant documented in `db/repositories/_audit.py` still holds --
+        mirrors `UserRepository.record_login`'s pattern of a repo method
+        whose only real purpose is producing the audited row, just with zero
+        fields actually written here instead of one."""
+        alert = self.get(alert_id)
+        if alert is None:
+            raise ValueError(f"alert {alert_id!r} does not exist")
+        self._update(
+            alert,
+            {},
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="alert_opened",
+            case_id=alert.case_id,
+        )
+
     def list_for_case(self, case_id: str) -> list[Alert]:
-        stmt = select(Alert).where(Alert.case_id == case_id)
+        """Ordered by `risk_score` descending (code-review finding,
+        Phase 4: `investigation.cases.close_case` picks `[0]` as the
+        primary alert to attribute a verdict to -- that needs to be the
+        highest-risk alert, not an incidental DB-insertion-order first
+        row)."""
+        stmt = (
+            select(Alert)
+            .where(Alert.case_id == case_id)
+            .order_by(Alert.risk_score.desc())
+        )
         return list(self.session.scalars(stmt))
 
     def list_unassigned(self, *, limit: int = 100) -> list[Alert]:

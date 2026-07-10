@@ -5,6 +5,7 @@ NoteRepository, ReportRepository, CaseFeatureVectorRepository.
 """
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.orm import Session
 
 from db.enums import (
@@ -68,15 +69,26 @@ def test_case_repository_round_trip_and_list_by_assignee(session: Session) -> No
 
     updated = repo.update(
         "CASE1",
-        status=CaseStatus.IN_PROGRESS,
         assigned_to=None,
         actor_type=ActorType.INVESTIGATOR,
         actor_id="U1",
     )
     session.commit()
-    assert updated.status == CaseStatus.IN_PROGRESS
     assert updated.assigned_to is None
     assert repo.list_by_assignee("U1") == []
+
+    # Status can only change via `set_status_for_transition` (code-review
+    # finding, Phase 4: `update()` no longer accepts a `status` kwarg at
+    # all -- see `test_case_repository_update_rejects_status_kwarg`).
+    updated = repo.set_status_for_transition(
+        "CASE1",
+        status=CaseStatus.IN_PROGRESS,
+        action="case_status_changed",
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+    assert updated.status == CaseStatus.IN_PROGRESS
     assert [c.case_id for c in repo.list_by_status(CaseStatus.IN_PROGRESS)] == ["CASE1"]
 
 
@@ -148,6 +160,134 @@ def test_case_status_history_repository_record_and_list(session: Session) -> Non
 
     history = repo.list_for_case("CASE1")
     assert [h.to_status for h in history] == [CaseStatus.NEW, CaseStatus.ASSIGNED]
+
+
+def test_case_repository_update_action_override(session: Session) -> None:
+    from db.repositories.platform import AuditLogRepository
+
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = CaseRepository(session)
+    repo.update(
+        "CASE1",
+        priority=Priority.P1,
+        action="escalated",
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    actions = [r.action for r in AuditLogRepository(session).list_for_case("CASE1")]
+    assert "escalated" in actions
+    assert "case_updated" not in actions
+
+
+def test_case_repository_update_rejects_status_kwarg(session: Session) -> None:
+    """Code-review finding, Phase 4: `Case.status` can only change via
+    `set_status_for_transition` -- `update()` must not accept `status` at
+    all (structural, not just conventional, lockout)."""
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    with pytest.raises(TypeError):
+        CaseRepository(session).update(
+            "CASE1",
+            status=CaseStatus.ASSIGNED,  # type: ignore[call-arg]
+            actor_type=ActorType.SYSTEM,
+            actor_id=None,
+        )
+
+
+def test_case_repository_set_status_for_transition_bundles_extra_fields(
+    session: Session,
+) -> None:
+    from db.repositories.platform import AuditLogRepository
+
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = CaseRepository(session)
+    updated = repo.set_status_for_transition(
+        "CASE1",
+        status=CaseStatus.ASSIGNED,
+        action="case_assigned",
+        assigned_to="U1",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    assert updated.status == CaseStatus.ASSIGNED
+    assert updated.assigned_to == "U1"
+
+    # Exactly one audit row for this bundled write, not two.
+    rows = AuditLogRepository(session).list_for_case("CASE1")
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    assert len(assigned_rows) == 1
+
+
+def test_evidence_repository_pin(session: Session) -> None:
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = EvidenceRepository(session)
+    repo.create(
+        evidence_id="EV1",
+        case_id="CASE1",
+        type=EvidenceType.ACCOUNT,
+        added_by="U1",
+        pinned=False,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    from db.repositories.platform import AuditLogRepository
+
+    pinned = repo.pin("EV1", actor_type=ActorType.INVESTIGATOR, actor_id="U1")
+    session.commit()
+    assert pinned.pinned is True
+    assert [e.evidence_id for e in repo.list_pinned_for_case("CASE1")] == ["EV1"]
+
+    actions = [r.action for r in AuditLogRepository(session).list_for_entity("evidence", "EV1")]
+    assert "evidence_pinned" in actions
 
 
 def test_evidence_repository_round_trip(session: Session) -> None:

@@ -121,13 +121,14 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phases 2, 3
 **Branch:** phase/4-case-lifecycle
 **Scope (checklist):**
-- [ ] Alert generation from detection results (id, type, risk, confidence, timestamp).
-- [ ] AI Prioritization Queue wired as its own stage (reuse ported RL bandit).
-- [ ] Case creation + workload-based auto-assignment + SLA timer + status machine (New→Assigned→In Progress→Awaiting Review→Escalated/Closed).
-- [ ] Unified, queryable **audit trail** subsystem — every investigator + system action (alert opened, graph expanded, evidence pinned, note added, decision changed, escalation).
-**Explicitly out of scope:** L1/L2 feature panels (Phases 5–6); AI actions (that audit hook lands in Phase 8).
+- [x] Alert generation from detection results (id, type, risk, confidence, timestamp). `investigation/alerts.py::generate_alerts_from_detection` (+ ported `make_deterministic_alert_id`), fed by `detection/rules/seed.py`'s idempotent built-in-rule seed (a small addition beyond the literal Phase 4 plan file list — needed so `RuleEngine.run_all` has something to alert on against a fresh DB; see `docs/SESSION_LOG.md`).
+- [x] AI Prioritization Queue wired as its own stage (reuse ported RL bandit). `investigation/prioritization.py::rank_alert_queue` — 200-alert candidate cap (mirrors the archive), groups same-account alerts to feed `LinUCBAgent.build_context` real multi-alert pattern signal.
+- [x] Case creation + workload-based auto-assignment + SLA timer + status machine (New→Assigned→In Progress→Awaiting Review→Escalated/Closed). `investigation/fsm.py` (FSM + `transition_case`), `investigation/assignment.py` (`auto_assign`, plain open-case-count workload per `DATA_SCHEMA.md`, `list_overdue_cases`), `investigation/cases.py` (`create_case_from_alert`, `close_case` incl. RL feedback tie-in, no rule-confidence adjustment — that's Phase 12), `investigation/config.py` (`SlaPolicy`, invented-but-documented defaults).
+- [x] Unified, queryable **audit trail** subsystem — every investigator + system action (alert opened, graph expanded, evidence pinned, note added, decision changed, escalation). `AlertRepository.mark_opened` (audit-only, no domain-field change), `EvidenceRepository.pin` (`evidence_pinned`), `CaseRepository.update`'s new `action` override (`case_assigned`/`escalated`/`decision_changed`/...), `NoteRepository.create` already logged `note_created` (left as-is). **`graph_expanded` is NOT instrumented** — no case-scoped graph-view persistence entity exists yet (Phase 3's `GraphStore` is in-memory/session-scoped) and no endpoint calls it; that lands with Phase 6's L2 graph work.
+**Verification:** `scripts/run_detection_pipeline.py` — CLI end-to-end orchestrator (stages 1→4: score → rules → alerts → ranked queue → auto-case-create/assign), mirroring `scripts/train_detection_model.py`'s precedent. Run live against real ingested data on a throwaway DB (`docs/SESSION_LOG.md` has the actual output).
+**Explicitly out of scope:** L1/L2 feature panels (Phases 5–6); AI actions (that audit hook lands in Phase 8); HTTP/API routes (Phase 5+); automatic SLA-breach escalation (tracking only, no autonomous trigger — no spec backing); rule-engine confidence adjustment on feedback (Phase 12).
 **Reference:** §3 (lifecycle), §5 (case management, audit trail).
-**Status:** not started
+**Status:** done
 
 ### Phase 5 — L1 triage feature set
 **Goal:** Everything an investigator needs for a 15–30 min triage on one case.
