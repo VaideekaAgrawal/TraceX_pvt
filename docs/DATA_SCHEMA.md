@@ -394,7 +394,7 @@ Reuse the existing string enums where noted; **replace `CaseStatus`** with the F
 
 Three **separate** data concerns; do not conflate them (detail lives in ROADMAP **Phase 1B — Demo & Training Data Studio**):
 
-- **(a) Trained detection engine — keep, don't retrain.** The ML ensemble is already trained; Phase 3 ports the serialized artifacts into `model_runs`/`artifact_path`. No from-scratch retraining of the core detectors.
+- **(a) Trained detection engine — train once, persist, never retrain on boot.** Confirmed during Phase 0 (`archive/SALVAGE.md`) and executed in Phase 3: no serialized ML model artifact exists anywhere in the archive — the old system retrained XGBoost from `data/` on every pipeline run, the exact "ML model retrains from scratch each boot" landmine (`CLAUDE.md`). Phase 3 ports the detector/feature-engineering/ensemble-weighting *logic* unchanged (tuned hyperparameters/weights from `archive/fund-flow-tracker/infrastructure/config.py`, not re-derived), trains once against the root-level `data/` set via `scripts/train_detection_model.py`, and persists the resulting artifact to `model_runs.artifact_path` (`detection/scoring/training.py::train_and_persist`) — never retrained on boot again. No from-scratch retraining of the core detector *logic* either (ported as-is, not redesigned).
 - **(b) Generated training/reference data** for features that need their own corpus:
   - **Similar Historical Cases** — seed a corpus of past `cases` + `case_feature_vector` + `resolution` (SAR/FP) so cosine retrieval returns real matches.
   - **RL bandit** — seed `detection_feedback` events so the queue looks learned, not cold-start, in a demo.
