@@ -27,7 +27,7 @@ from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from detection.rl.bandit import LinUCBAgent
 from investigation.assignment import auto_assign
 from investigation.fsm import transition_case
-from investigation.rl_features import base_rl_feature_dict
+from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
 
 
 def _new_case_id() -> str:
@@ -96,21 +96,23 @@ def create_case_from_alert(
 #: escalation is a mid-flow FSM transition (the case stays open, pending
 #: compliance action), not a closing action; call `investigation.fsm.
 #: transition_case(..., CaseStatus.ESCALATED)` directly for that instead.
-_CLOSING_TRANSITIONS: dict[CaseResolution, CaseStatus] = {
+#: Public (not `_CLOSING_TRANSITIONS`, Phase 1B code-review finding): the
+#: demo-data historical-case generator (`backend/demo_data/
+#: historical_cases.py`) is a second real caller that needs the identical
+#: resolution->terminal-status mapping so its pre-closed synthetic cases stay
+#: internally consistent with what a live `close_case` would have produced --
+#: same "reuse before rebuild" reasoning as `CLOSING_REWARD` below. Left in
+#: this module (not relocated to `rl_features.py`) since it's FSM-shaped, not
+#: RL-shaped.
+CLOSING_TRANSITIONS: dict[CaseResolution, CaseStatus] = {
     CaseResolution.TRUE_POSITIVE_SAR: CaseStatus.CLOSED_TP,
     CaseResolution.FALSE_POSITIVE: CaseStatus.CLOSED_FP,
     CaseResolution.ENHANCED_MONITORING: CaseStatus.MONITORING,
 }
 
-#: RL reward per resolution (`LinUCBAgent.receive_feedback`'s own
-#: convention: +1.0 confirmed-risk / -0.3 false positive).
-#: `ENHANCED_MONITORING` is treated as a TP-like (+1.0) outcome -- it
-#: confirms genuine risk warranting ongoing monitoring, not a cleared alert.
-_CLOSING_REWARD: dict[CaseResolution, float] = {
-    CaseResolution.TRUE_POSITIVE_SAR: 1.0,
-    CaseResolution.FALSE_POSITIVE: -0.3,
-    CaseResolution.ENHANCED_MONITORING: 1.0,
-}
+#: RL reward per resolution -- promoted to `investigation.rl_features.
+#: CLOSING_REWARD` (Phase 1B: a second real caller, the demo-data historical
+#: case generator, needs the identical mapping). Imported, not duplicated.
 
 
 def _case_rl_features(case: Case) -> dict:
@@ -135,7 +137,9 @@ def _case_rl_features(case: Case) -> dict:
 #: (which everywhere else in this schema means "stopped being worked")
 #: would be misleading if set here (code-review finding, Phase 4 --
 #: previously set unconditionally for all three with no documented reason).
-_SETS_CLOSED_AT = frozenset({CaseResolution.TRUE_POSITIVE_SAR, CaseResolution.FALSE_POSITIVE})
+#: Public (not `_SETS_CLOSED_AT`) for the same second-real-caller reason as
+#: `CLOSING_TRANSITIONS` above (Phase 1B code-review finding).
+SETS_CLOSED_AT = frozenset({CaseResolution.TRUE_POSITIVE_SAR, CaseResolution.FALSE_POSITIVE})
 
 
 def close_case(
@@ -158,7 +162,7 @@ def close_case(
     already-injected `LinUCBAgent` for the case's primary account/context.
     Does NOT touch `RuleDefinition.confidence` -- that adjustment is
     Phase 12's job (ROADMAP Phase 4 plan)."""
-    if resolution not in _CLOSING_TRANSITIONS:
+    if resolution not in CLOSING_TRANSITIONS:
         raise ValueError(
             f"close_case does not support resolution={resolution!r} -- "
             "ESCALATED_COMPLIANCE is a mid-flow FSM transition (case stays "
@@ -167,9 +171,9 @@ def close_case(
             "CaseStatus.ESCALATED, ...) directly for that case instead."
         )
 
-    to_status = _CLOSING_TRANSITIONS[resolution]
+    to_status = CLOSING_TRANSITIONS[resolution]
     extra_changes: dict[str, object] = {"resolution": resolution, "resolution_reason": reason}
-    if resolution in _SETS_CLOSED_AT:
+    if resolution in SETS_CLOSED_AT:
         extra_changes["closed_at"] = utcnow()
 
     # Bundles resolution/resolution_reason/closed_at into the SAME
@@ -194,7 +198,7 @@ def close_case(
     primary_alert_id = case_alerts[0].alert_id if case_alerts else None
     rule_ids = sorted({rid for a in case_alerts for rid in (a.rule_ids or [])}) or None
 
-    reward = _CLOSING_REWARD[resolution]
+    reward = CLOSING_REWARD[resolution]
     DetectionFeedbackRepository(session).create(
         case_id=case_id,
         alert_id=primary_alert_id,

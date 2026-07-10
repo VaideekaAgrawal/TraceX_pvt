@@ -60,16 +60,32 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 2 merge | 106 tests, 97% coverage | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | Test count — Phase 3 merge | 198 tests | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
 | Test count — Phase 4 merge | 270 tests | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
+| Test count — Phase 1B merge | 275 tests | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
 | CI duration — Phase 4 (branch push / PR) | 18m34s / 22m8s | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
+| Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
 | Metric | Value | Recorded | Source |
 |---|---|---|---|
 | Response latency — unknown username / wrong password / inactive user (post-fix, 5x each, live-timed) | ~0.40–0.42s (converged) | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
+
+## 7. Demo & Training Data Studio (Phase 1B)
+
+Source: `backend/demo_data/`, run live against a throwaway SQLite DB via `backend/scripts/generate_demo_data.py`.
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| KYC demo customers + accounts seeded | 200 (~4% PEP, ~2% sanctioned, ~15% occupation/income mismatch) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Relationship clusters seeded | 8 (2-4 customers each, shared pan/phone/email/employer/address/income_bracket/branch_city, zero transactions between members) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Historical cases seeded | 50 (~50% FALSE_POSITIVE / 35% TRUE_POSITIVE_SAR / 15% ENHANCED_MONITORING) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Golden edge-case scenarios seeded | 7 (one per typology), all 7 confirmed live to trigger their intended `DetectionType` through the real rule engine + alert pipeline | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Detection pipeline run against golden-scenario-only DB | 10 detections across 5 `DetectionType`s, 10 alerts generated | Session 8 (2026-07-11), reproduced identically pre- and post-code-review-fixes | `docs/SESSION_LOG.md` Session 8 |
+| `rl_arm_state` audit rows written per `generate_demo_data.py` run | ~~50 (pre-fix, one per historical case)~~ → 1 (post-fix, single persist after the seeding loop) — 2026-07-11 | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| `case_created` audit rows for 50 historical cases | 50 (1:1, confirms the backdating fix closed the audit-invariant gap — previously 0 audit rows for the `created_at` write) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 
 ---
 

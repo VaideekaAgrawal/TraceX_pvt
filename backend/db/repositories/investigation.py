@@ -66,9 +66,18 @@ class CaseRepository(BaseRepository[Case]):
         network_risk_reasons: dict | None = None,
         assigned_to: str | None = None,
         sla_due_at: datetime | None = None,
+        created_at: datetime | None = None,
         actor_type: ActorType,
         actor_id: str | None,
     ) -> Case:
+        """`created_at` defaults to `CreatedAtMixin`'s normal `utcnow()`
+        behavior when omitted; the explicit parameter exists so a caller
+        that legitimately needs a backdated row (e.g.
+        `demo_data.historical_cases`'s synthetic training corpus, where
+        every case being "created" in the same second would look obviously
+        synthetic) can set it through this normal, audited `create()` call
+        instead of mutating the ORM object directly after the fact (which
+        would silently skip the audit_log append `_create()` performs)."""
         case = Case(
             case_id=case_id,
             primary_account_id=primary_account_id,
@@ -82,6 +91,7 @@ class CaseRepository(BaseRepository[Case]):
             network_risk_reasons=network_risk_reasons,
             assigned_to=assigned_to,
             sla_due_at=sla_due_at,
+            created_at=created_at if created_at is not None else utcnow(),
         )
         return self._create(
             case,

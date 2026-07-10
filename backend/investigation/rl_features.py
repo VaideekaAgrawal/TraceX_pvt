@@ -20,6 +20,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from db.enums import CaseResolution
+
+#: RL reward per closing `CaseResolution` (`LinUCBAgent.receive_feedback`'s
+#: own convention: +1.0 confirmed-risk / -0.3 false positive).
+#: `ENHANCED_MONITORING` is treated as a TP-like (+1.0) outcome -- it
+#: confirms genuine risk warranting ongoing monitoring, not a cleared alert.
+#: Promoted here (Phase 1B) from `investigation.cases._CLOSING_REWARD` --
+#: `backend/demo_data/historical_cases.py` is a second real caller that needs
+#: the identical mapping to genuinely pre-train the bandit from a synthetic
+#: corpus, and this codebase's own Phase 3 code review already flagged
+#: silent-duplication-instead-of-shared-import as a real bug class (see
+#: `base_rl_feature_dict` above). `investigation.cases` imports this instead
+#: of defining its own copy.
+CLOSING_REWARD: dict[CaseResolution, float] = {
+    CaseResolution.TRUE_POSITIVE_SAR: 1.0,
+    CaseResolution.FALSE_POSITIVE: -0.3,
+    CaseResolution.ENHANCED_MONITORING: 1.0,
+}
+
 
 def base_rl_feature_dict(
     *, risk_score: float, patterns: list[str], counterparties: int = 0
