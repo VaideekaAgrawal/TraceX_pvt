@@ -152,3 +152,87 @@ def test_transaction_repository_create_and_list_for_account_in_window(session: S
 
     all_for_a1 = txn_repo.list_for_account_in_window("A1")
     assert {t.txn_id for t in all_for_a1} == {"T1", "T2", "T3"}
+
+
+def _seed_search_fixture(session: Session) -> TransactionRepository:
+    account_repo = AccountRepository(session)
+    for account_id in ("A1", "A2", "A3", "OUT"):
+        account_repo.create(account_id=account_id, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+
+    txn_repo = TransactionRepository(session)
+    ts = datetime(2026, 6, 1, tzinfo=UTC)
+    txn_repo.create(
+        txn_id="S1", timestamp=ts, source_account="A1", dest_account="A2", amount=100,
+        channel=Channel.UPI, is_laundering=0, ingested_at=NOW,
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    txn_repo.create(
+        txn_id="S2", timestamp=ts.replace(day=15), source_account="A2", dest_account="A3",
+        amount=5_000, channel=Channel.NEFT, is_laundering=0, ingested_at=NOW,
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    txn_repo.create(
+        txn_id="S3", timestamp=ts.replace(month=7), source_account="A3", dest_account="A1",
+        amount=200, channel=Channel.UPI, is_laundering=0, ingested_at=NOW,
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    # Touches only the out-of-scope account -- must never surface regardless
+    # of filters (the security-invariant this method exists to guarantee).
+    txn_repo.create(
+        txn_id="S_OUT", timestamp=ts, source_account="OUT", dest_account="OUT",
+        amount=999_999, channel=Channel.UPI, is_laundering=0, ingested_at=NOW,
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+    return txn_repo
+
+
+def test_search_for_accounts_filters_and_paginates(session: Session) -> None:
+    txn_repo = _seed_search_fixture(session)
+    scope = ["A1", "A2", "A3"]
+
+    all_in_scope = txn_repo.search_for_accounts(scope)
+    assert {t.txn_id for t in all_in_scope} == {"S1", "S2", "S3"}
+    assert txn_repo.count_for_accounts(scope) == 3
+
+    by_amount = txn_repo.search_for_accounts(scope, min_amount=1_000)
+    assert [t.txn_id for t in by_amount] == ["S2"]
+    assert txn_repo.count_for_accounts(scope, min_amount=1_000) == 1
+
+    by_channel = txn_repo.search_for_accounts(scope, channels=[Channel.NEFT])
+    assert [t.txn_id for t in by_channel] == ["S2"]
+
+    by_window = txn_repo.search_for_accounts(
+        scope, start=datetime(2026, 6, 10, tzinfo=UTC), end=datetime(2026, 6, 20, tzinfo=UTC)
+    )
+    assert [t.txn_id for t in by_window] == ["S2"]
+
+    # direction is relative to the whole scope, not one account: "out" of
+    # scope means source_account is in scope.
+    outbound = txn_repo.search_for_accounts(scope, direction="out")
+    assert {t.txn_id for t in outbound} == {"S1", "S2", "S3"}
+    inbound_narrow = txn_repo.search_for_accounts(["A2"], direction="in")
+    assert [t.txn_id for t in inbound_narrow] == ["S1"]
+
+    page1 = txn_repo.search_for_accounts(scope, limit=2, sort="timestamp_asc")
+    page2 = txn_repo.search_for_accounts(scope, limit=2, offset=2, sort="timestamp_asc")
+    assert [t.txn_id for t in page1] == ["S1", "S2"]
+    assert [t.txn_id for t in page2] == ["S3"]
+
+
+def test_search_for_accounts_never_returns_out_of_scope_transactions(session: Session) -> None:
+    txn_repo = _seed_search_fixture(session)
+    # No filter loose enough to leak the out-of-scope account's transaction
+    # into an in-scope search -- the security invariant
+    # `investigation.transaction_search` structurally relies on.
+    results = txn_repo.search_for_accounts(
+        ["A1", "A2", "A3"], min_amount=0, max_amount=10_000_000
+    )
+    assert "S_OUT" not in {t.txn_id for t in results}
+
+
+def test_search_for_accounts_empty_scope_returns_empty_no_query(session: Session) -> None:
+    txn_repo = _seed_search_fixture(session)
+    assert txn_repo.search_for_accounts([]) == []
+    assert txn_repo.count_for_accounts([]) == 0

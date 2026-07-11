@@ -5,8 +5,9 @@ Repositories for `docs/DATA_SCHEMA.md` §3.1 reference/domain tables:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, func, select
 
 from db.enums import (
     AccountStatus,
@@ -321,3 +322,139 @@ class TransactionRepository(BaseRepository[Transaction]):
             stmt = stmt.where(Transaction.timestamp <= end)
         stmt = stmt.order_by(Transaction.timestamp.asc()).limit(limit)
         return list(self.session.scalars(stmt))
+
+    #: Every `sort` value `search_for_accounts` accepts, mapped to its
+    #: ORDER BY clause. Module-level so `count_for_accounts` doesn't need
+    #: it (a count has no order) and so the accepted set is defined once.
+    _SEARCH_SORTS: dict[str, Any] = {
+        "timestamp_desc": Transaction.timestamp.desc(),
+        "timestamp_asc": Transaction.timestamp.asc(),
+        "amount_desc": Transaction.amount.desc(),
+        "amount_asc": Transaction.amount.asc(),
+    }
+
+    def _search_where_clause(
+        self,
+        account_ids: list[str],
+        *,
+        min_amount: float | None,
+        max_amount: float | None,
+        start: datetime | None,
+        end: datetime | None,
+        channels: list[Channel] | None,
+        direction: Literal["in", "out"] | None,
+        txn_type: str | None,
+    ) -> list[ColumnElement[bool]]:
+        """Shared filter-clause builder for `search_for_accounts`/
+        `count_for_accounts` (ROADMAP Phase 6) -- generalizes
+        `list_for_account_in_window`'s `side_filter` idiom to a *set* of
+        scoped `account_ids` rather than one account.
+
+        `direction` is defined relative to the whole `account_ids` scope,
+        not any single account within it (this method has no concept of a
+        "center" the way `investigation.graph_filters` does): `"in"` means
+        `dest_account` is one of `account_ids` (money arriving into the
+        scope, from any counterparty, in or out of scope); `"out"` means
+        `source_account` is. With no `direction`, a transaction matches if
+        *either* side is in scope -- the same "touches this account" test
+        `list_for_account_in_window` uses, just widened to a set. This
+        reading is what lets the same method serve both L2 search routes
+        unchanged: the whole-case search passes every case-linked account
+        id, the single-account search narrows `account_ids` to `[account_id]`
+        first (making `"in"`/`"out"` collapse to exactly
+        `list_for_account_in_window`'s `as_dest`/`as_source` semantics for
+        that one account)."""
+        if direction == "in":
+            touches_scope: ColumnElement[bool] = Transaction.dest_account.in_(account_ids)
+        elif direction == "out":
+            touches_scope = Transaction.source_account.in_(account_ids)
+        else:
+            touches_scope = Transaction.source_account.in_(account_ids) | (
+                Transaction.dest_account.in_(account_ids)
+            )
+        clauses: list[ColumnElement[bool]] = [touches_scope]
+        if min_amount is not None:
+            clauses.append(Transaction.amount >= min_amount)
+        if max_amount is not None:
+            clauses.append(Transaction.amount <= max_amount)
+        if start is not None:
+            clauses.append(Transaction.timestamp >= start)
+        if end is not None:
+            clauses.append(Transaction.timestamp <= end)
+        if channels:
+            clauses.append(Transaction.channel.in_(channels))
+        if txn_type is not None:
+            clauses.append(Transaction.txn_type == txn_type)
+        return clauses
+
+    def search_for_accounts(
+        self,
+        account_ids: list[str],
+        *,
+        min_amount: float | None = None,
+        max_amount: float | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        channels: list[Channel] | None = None,
+        direction: Literal["in", "out"] | None = None,
+        txn_type: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        sort: str = "timestamp_desc",
+    ) -> list[Transaction]:
+        """Filtered, paginated transaction search over a *set* of account
+        ids (ROADMAP Phase 6 -- Complete Transaction Analysis). Empty
+        `account_ids` returns `[]` with no query issued: the caller
+        (`investigation.transaction_search.search`) always passes
+        `CaseAccountRepository.list_account_ids_for_case`'s output (or a
+        subset of it) -- there is structurally no path to call this with an
+        unbounded id set, so an empty scope is "this case has no accounts
+        yet," not "search everything." Unrecognized `sort` falls back to
+        `timestamp_desc` rather than raising, matching this codebase's
+        general "narrow, don't 500, on a bad-but-harmless query param"
+        posture at the repository layer (validation belongs to the route)."""
+        if not account_ids:
+            return []
+        clauses = self._search_where_clause(
+            account_ids,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            start=start,
+            end=end,
+            channels=channels,
+            direction=direction,
+            txn_type=txn_type,
+        )
+        order = self._SEARCH_SORTS.get(sort, self._SEARCH_SORTS["timestamp_desc"])
+        stmt = select(Transaction).where(*clauses).order_by(order).limit(limit).offset(offset)
+        return list(self.session.scalars(stmt))
+
+    def count_for_accounts(
+        self,
+        account_ids: list[str],
+        *,
+        min_amount: float | None = None,
+        max_amount: float | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        channels: list[Channel] | None = None,
+        direction: Literal["in", "out"] | None = None,
+        txn_type: str | None = None,
+    ) -> int:
+        """Total row count for `search_for_accounts`'s exact filter set
+        (unpaginated) -- powers the response's `total_count` so a caller
+        can page without re-fetching everything first."""
+        if not account_ids:
+            return 0
+        clauses = self._search_where_clause(
+            account_ids,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            start=start,
+            end=end,
+            channels=channels,
+            direction=direction,
+            txn_type=txn_type,
+        )
+        stmt = select(func.count()).select_from(Transaction).where(*clauses)
+        return int(self.session.scalar(stmt) or 0)

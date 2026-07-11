@@ -223,6 +223,30 @@ class CaseRepository(BaseRepository[Case]):
             case_id=case_id,
         )
 
+    def mark_graph_expanded(
+        self, case_id: str, *, actor_type: ActorType, actor_id: str | None
+    ) -> Case:
+        """Record that an investigator expanded this case's N-hop graph --
+        an audit-only repository call with no domain-field change, mirroring
+        `AlertRepository.mark_opened`'s exact shape (`_update()` with an
+        empty `changes` dict). ROADMAP Phase 4 deferred this hook because no
+        case-scoped graph-view endpoint existed yet
+        (`docs/ROADMAP.md`: "`graph_expanded` is NOT instrumented ... that
+        lands with Phase 6's L2 graph work") -- `GET /cases/{case_id}/
+        accounts/{account_id}/graph` (`api.routes.l2`) is that endpoint,
+        closing the deferral."""
+        case = self.get(case_id)
+        if case is None:
+            raise ValueError(f"case {case_id!r} does not exist")
+        return self._update(
+            case,
+            {},
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="graph_expanded",
+            case_id=case_id,
+        )
+
     def list_by_assignee(
         self, user_id: str, *, statuses: list[CaseStatus] | None = None, limit: int = 100
     ) -> list[Case]:
