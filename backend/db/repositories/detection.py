@@ -177,6 +177,28 @@ class AlertRepository(BaseRepository[Alert]):
         )
         return list(self.session.scalars(stmt))
 
+    def list_for_primary_account(self, account_id: str, *, limit: int = 100) -> list[Alert]:
+        """Alerts where `account_id` is the *primary* account -- deliberately
+        narrower than a full `account_ids` membership search (ROADMAP Phase
+        5: `investigation.previous_alerts` documents this same narrowing --
+        network-wide "any connected account" reach is Phase 6/7's Previous
+        Alert & Case History feature, not this one). Ordered descending by
+        `created_at` (most recent first) before `.limit()` (code-review
+        finding, Phase 5: ascending order meant an account with more than
+        `limit` alerts had its *oldest* ones kept and its most recent
+        activity silently dropped -- backwards for both callers, which want
+        recent/prior-SAR signal, not ancient history). Callers that want
+        chronological display order (e.g. `investigation.previous_alerts`'s
+        `risk_trend`) re-sort ascending themselves rather than relying on
+        this method's order."""
+        stmt = (
+            select(Alert)
+            .where(Alert.primary_account_id == account_id)
+            .order_by(Alert.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
     def list_unassigned(self, *, limit: int = 100) -> list[Alert]:
         """Alerts with no case yet — the alert->case assignment queue
         (Phase 4 consumes this)."""

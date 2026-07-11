@@ -4,9 +4,9 @@ tests can build an app against arbitrary `Settings` — in particular the
 "missing secrets in a non-dev env raises at startup" test, which needs a
 fresh app instance per `Settings` rather than one shared module-level app.
 
-This is the minimal app skeleton this phase adds: the auth router and an
-unauthenticated health probe. All case/alert/business routes are Phase 4's
-job (see `docs/ROADMAP.md`).
+Phase 2 added the auth router and an unauthenticated health probe. Phase 5
+adds `cases_router` — the L1 triage HTTP surface and this backend's first
+business-logic routes beyond `/auth/*` (see `docs/ROADMAP.md`).
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from api.routes.auth import router as auth_router
+from api.routes.cases import router as cases_router
 from foundation.config import Settings, get_settings
 
 
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # `settings=` argument for the real JWT sign/verify path).
     app.state.settings = settings
     app.include_router(auth_router)
+    app.include_router(cases_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
