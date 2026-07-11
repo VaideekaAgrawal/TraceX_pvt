@@ -35,6 +35,7 @@ from foundation.auth import (
     get_app_settings,
     get_current_user,
     require_case_access,
+    require_case_scoped_account,
 )
 from foundation.config import Settings
 from investigation import account_facts, case_graph, previous_alerts
@@ -44,23 +45,6 @@ from investigation.network_risk import compute_network_risk
 from orchestration.account_explanation import explain_account
 
 router = APIRouter(prefix="/cases", tags=["cases"])
-
-
-def require_case_scoped_account(
-    account_id: str,
-    case: Case = Depends(require_case_access),
-    db: Session = Depends(get_db),
-) -> Account:
-    """404s if `account_id` isn't in `case`'s `case_accounts` scope (don't
-    leak "this account exists elsewhere in the system" to an investigator
-    who isn't scoped to it), else loads and returns the `Account` row."""
-    scoped_ids = set(CaseAccountRepository(db).list_account_ids_for_case(case.case_id))
-    if account_id not in scoped_ids:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not in this case's scope")
-    account = AccountRepository(db).get(account_id)
-    if account is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    return account
 
 
 # ── Response models ──────────────────────────────────────────────────────

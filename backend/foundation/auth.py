@@ -20,8 +20,10 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType, UserRole
 from db.models.investigation import Case
 from db.models.platform import User
-from db.repositories.investigation import CaseRepository
+from db.models.reference import Account
+from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.platform import UserRepository
+from db.repositories.reference import AccountRepository
 from db.session import get_db
 from foundation.config import Settings
 from foundation.security import TokenError, decode_access_token
@@ -120,3 +122,26 @@ def require_case_access(
     if user.role == UserRole.INVESTIGATOR and case.assigned_to != user.user_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not assigned to this case")
     return case
+
+
+def require_case_scoped_account(
+    account_id: str,
+    case: Case = Depends(require_case_access),
+    db: Session = Depends(get_db),
+) -> Account:
+    """404s if `account_id` isn't in `case`'s `case_accounts` scope (don't
+    leak "this account exists elsewhere in the system" to an investigator
+    who isn't scoped to it), else loads and returns the `Account` row.
+
+    Moved verbatim from `api.routes.cases` (ROADMAP Phase 6 — `api.routes.l2`
+    is its second real caller, meeting this codebase's own "promote on
+    second real caller" convention already used for e.g.
+    `HIGH_PAGERANK_THRESHOLD`/`CLOSING_REWARD`/`list_account_ids_for_case`).
+    No behavior change from the `cases.py` original."""
+    scoped_ids = set(CaseAccountRepository(db).list_account_ids_for_case(case.case_id))
+    if account_id not in scoped_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not in this case's scope")
+    account = AccountRepository(db).get(account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    return account

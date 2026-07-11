@@ -33,11 +33,9 @@ narration/purpose regression test).
 """
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
 
-import httpx
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, AiAgent
@@ -51,58 +49,20 @@ from detection.scoring.ensemble import RoleClassifier
 from foundation.config import Settings
 from investigation.account_facts import transaction_stats
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT, build_case_graph_store
+from orchestration.llm_client import (
+    _NOT_CONFIGURED_MESSAGE,  # noqa: F401 -- re-exported
+    ExplanationUnavailableError,
+)
+from orchestration.llm_client import call_openrouter as _call_openrouter
 
-logger = logging.getLogger(__name__)
-
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_NOT_CONFIGURED_MESSAGE = "AI explanations not configured. Set openrouter_api_key."
-
-
-class ExplanationUnavailableError(Exception):
-    """Raised by `_call_openrouter` when no explanation could be generated
-    (missing API key, network failure, non-2xx response, malformed body).
-    `explain_account` catches this and returns a visible message to the
-    caller WITHOUT persisting an `AiInteraction` row for it (code-review
-    finding, Phase 5: the previous "fails open by returning the error text"
-    design got that error text written to `ai_interactions` and then served
-    back as `cached: True`, indistinguishable from a real explanation, on
-    every subsequent non-force call -- a transient outage could get
-    permanently "cached" as the answer)."""
-
-
-def _call_openrouter(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
-    """Single OpenRouter chat-completions call -- ported near-verbatim from
-    `archive/fund-flow-tracker/api/server.py::_call_openrouter`
-    (temperature=0.3, 20s timeout). Raises `ExplanationUnavailableError` on
-    any failure (missing key, network error, non-2xx response, malformed
-    body) instead of returning an error string -- `explain_account` is the
-    layer that decides how a failure is surfaced/not-cached; this function
-    only knows how to make the call."""
-    if not settings.openrouter_api_key:
-        raise ExplanationUnavailableError(_NOT_CONFIGURED_MESSAGE)
-    try:
-        response = httpx.post(
-            _OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:3000",
-                "X-Title": "TraceX AML",
-            },
-            json={
-                "model": settings.llm_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return str(content).strip()
-    except Exception as exc:  # noqa: BLE001 -- narrowed to ExplanationUnavailableError below
-        logger.warning("OpenRouter call failed for account explanation: %s", exc)
-        raise ExplanationUnavailableError(f"Could not generate explanation: {exc}") from exc
+# `_call_openrouter`/`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`
+# are re-exported at module level (not just imported for internal use) --
+# ROADMAP Phase 6: moved verbatim into `orchestration.llm_client` (renamed
+# `call_openrouter`), imported back here under the original names so this
+# module's existing behavior, and every existing test that monkeypatches
+# `account_explanation._call_openrouter` or references
+# `account_explanation.ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`,
+# needs zero changes.
 
 
 def _assemble_facts(session: Session, case_id: str, account_id: str) -> dict[str, Any]:
