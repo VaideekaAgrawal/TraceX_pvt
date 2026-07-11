@@ -5,8 +5,11 @@ tests can build an app against arbitrary `Settings` — in particular the
 fresh app instance per `Settings` rather than one shared module-level app.
 
 Phase 2 added the auth router and an unauthenticated health probe. Phase 5
-adds `cases_router` — the L1 triage HTTP surface and this backend's first
-business-logic routes beyond `/auth/*` (see `docs/ROADMAP.md`).
+added `cases_router` — the L1 triage HTTP surface and this backend's first
+business-logic routes beyond `/auth/*`. Phase 6 adds `l2_router` — the L2
+deep-investigation surface, mounted under the same `/cases` prefix as a
+separate router file rather than growing `cases.py` further (see
+`docs/ROADMAP.md`).
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from fastapi import FastAPI
 
 from api.routes.auth import router as auth_router
 from api.routes.cases import router as cases_router
+from api.routes.l2 import router as l2_router
 from foundation.config import Settings, get_settings
 
 
@@ -42,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.include_router(auth_router)
     app.include_router(cases_router)
+    app.include_router(l2_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
