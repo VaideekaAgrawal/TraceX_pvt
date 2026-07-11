@@ -31,6 +31,7 @@ from db.repositories.reference import AccountRepository, TransactionRepository
 from detection.scoring.ensemble import RoleClassifier
 from investigation.graph_filters import (
     GraphFilters,
+    _sanitize_edge,
     apply_filters,
     build_subgraph_store,
     get_filtered_ego_graph,
@@ -218,6 +219,26 @@ def test_apply_filters_direction_self_loop_passes_under_either_direction() -> No
 
     _, in_edges = apply_filters(nodes, edges, "C", GraphFilters(direction="in"))
     assert {e["txn_id"] for e in in_edges} == {"LOOP"}
+
+
+def test_sanitize_edge_converts_pandas_nan_to_none() -> None:
+    """Regression test (found live against real ingested data, not caught
+    by any seeded test fixture): `NetworkXGraphStore.get_ego_graph` builds
+    edges via pandas `.to_dict("records")`, and a missing `from_bank`/
+    `to_bank` value survives as `float('nan')`, not `None` -- which fails
+    `GraphEdge`'s `str | None` Pydantic validation with a raw
+    `ValidationError` (a live 500) instead of serializing as `null`."""
+    edge = {
+        "txn_id": "T1", "source_account": "A", "dest_account": "B", "amount": 10.0,
+        "channel": "UPI", "is_laundering": 0, "timestamp": UTC_TS,
+        "from_bank": float("nan"), "to_bank": float("nan"),
+    }
+    sanitized = _sanitize_edge(edge)
+    assert sanitized["from_bank"] is None
+    assert sanitized["to_bank"] is None
+    # Non-NaN values and unrelated fields pass through unchanged.
+    normal_edge = _edge("T2", "A", "B", 10.0)
+    assert _sanitize_edge(normal_edge) == normal_edge
 
 
 # ── DB-backed: annotate_nodes / get_filtered_ego_graph ───────────────────

@@ -373,5 +373,32 @@ def get_filtered_ego_graph(
         "center": account_id,
         "radius": radius,
         "nodes": filtered_nodes,
-        "edges": filtered_edges,
+        "edges": [_sanitize_edge(e) for e in filtered_edges],
     }
+
+
+#: `NetworkXGraphStore.get_ego_graph` builds edges via pandas `.to_dict
+#:("records")` over `transactions_df` -- a missing value in a nullable
+#: column (e.g. `from_bank`/`to_bank`, which real ingested data frequently
+#: leaves blank) survives as a pandas/numpy `float('nan')`, not `None`.
+#: That's fine for `networkx_store.py`'s own internal consumers, but this
+#: module's `GraphEdge` Pydantic response model declares these fields
+#: `str | None` -- `nan` is neither, so `NHopGraphResponse(**result)`
+#: raises a validation error (found live, Phase 6: `GET .../graph` 500s on
+#: any real transaction with a blank `from_bank`/`to_bank`, not caught by
+#: unit tests since the seeded fixtures never left these columns blank).
+#: Sanitized here, at the API-shaping boundary, rather than in
+#: `networkx_store.py` (out of this phase's scope, and other consumers of
+#: raw `get_ego_graph` edges may rely on pandas semantics).
+_NULLABLE_EDGE_STRING_FIELDS = ("from_bank", "to_bank")
+
+
+def _sanitize_edge(edge: dict[str, Any]) -> dict[str, Any]:
+    """Replace pandas NaN with `None` in the edge's nullable string fields
+    so the dict is safe to pass into a `str | None`-typed Pydantic model."""
+    sanitized = dict(edge)
+    for field in _NULLABLE_EDGE_STRING_FIELDS:
+        value = sanitized.get(field)
+        if isinstance(value, float) and pd.isna(value):
+            sanitized[field] = None
+    return sanitized
