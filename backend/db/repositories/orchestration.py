@@ -93,6 +93,26 @@ class AiInteractionRepository(BaseRepository[AiInteraction]):
         stmt = select(AiInteraction).where(AiInteraction.case_id == case_id)
         return list(self.session.scalars(stmt))
 
+    def list_for_case_and_agent(
+        self, case_id: str, agent: AiAgent, *, limit: int = 50
+    ) -> list[AiInteraction]:
+        """Narrower than `list_for_case` -- also filters by `agent`.
+
+        ROADMAP Phase 5's account-explanation cache (`orchestration.
+        account_explanation`) is the first real caller: it needs one
+        account's prior `RECOMMENDATION` interactions for this case, but
+        `facts["account_id"] == account_id` isn't a portable SQL predicate
+        (SQLite's JSON1 extension and Postgres's `jsonb` operators diverge,
+        and case-scale row counts -- at most a few dozen interactions per
+        case -- make filtering in Python over this list cheap), so that
+        last narrowing step is the caller's job, not this method's."""
+        stmt = (
+            select(AiInteraction)
+            .where(AiInteraction.case_id == case_id, AiInteraction.agent == agent)
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
     def list_for_user(self, user_id: str, *, limit: int = 100) -> list[AiInteraction]:
         stmt = select(AiInteraction).where(AiInteraction.user_id == user_id).limit(limit)
         return list(self.session.scalars(stmt))

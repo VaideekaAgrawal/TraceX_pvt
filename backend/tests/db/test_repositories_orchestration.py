@@ -75,6 +75,40 @@ def test_ai_interaction_repository_round_trip(session: Session) -> None:
     assert updated.investigator_feedback == "accepted"
 
 
+def test_ai_interaction_repository_list_for_case_and_agent_filters_by_agent(
+    session: Session,
+) -> None:
+    _seed(session)
+    repo = AiInteractionRepository(session)
+    rec = repo.create(
+        case_id="CASE1",
+        agent=AiAgent.RECOMMENDATION,
+        user_id="U1",
+        response_text="Explanation for A1.",
+        model="claude-opus-4.8",
+        model_provider="openrouter",
+        facts={"account_id": "A1"},
+        actor_type=ActorType.AI,
+        actor_id="RECOMMENDATION",
+    )
+    repo.create(
+        case_id="CASE1",
+        agent=AiAgent.COPILOT,
+        user_id="U1",
+        response_text="Copilot answer.",
+        model="claude-opus-4.8",
+        model_provider="openrouter",
+        actor_type=ActorType.AI,
+        actor_id="COPILOT",
+    )
+    session.commit()
+
+    recommendation_only = repo.list_for_case_and_agent("CASE1", AiAgent.RECOMMENDATION)
+    assert [i.id for i in recommendation_only] == [rec.id]
+    assert repo.list_for_case_and_agent("CASE1", AiAgent.COPILOT)[0].agent == AiAgent.COPILOT
+    assert repo.list_for_case_and_agent("NOPE", AiAgent.RECOMMENDATION) == []
+
+
 def test_relationship_repository_round_trip(session: Session) -> None:
     CustomerRepository(session).create(
         customer_id="C1",
