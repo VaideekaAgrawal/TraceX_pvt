@@ -46,6 +46,16 @@ from detection.types import DetectionResult
 
 logger = logging.getLogger(__name__)
 
+#: Centrality thresholds `compute_confidence` uses to flag "high pagerank"/
+#: "high betweenness" as independent confidence indicators. Promoted from
+#: inline magic numbers to named module constants (ROADMAP Phase 5:
+#: `investigation.network_risk` is a second real caller that needs the exact
+#: same thresholds for its `high_centrality_accounts` signal -- it imports
+#: these rather than re-declaring them, the same "second real caller
+#: promotes a constant" pattern as `investigation.fsm.CLOSING_TRANSITIONS`).
+HIGH_PAGERANK_THRESHOLD = 0.005
+HIGH_BETWEENNESS_THRESHOLD = 0.01
+
 
 def _detect_gpu() -> bool:
     """Check if a CUDA GPU is available for XGBoost."""
@@ -471,9 +481,9 @@ class EnsembleScorer:
         for det_type, flagged in detection_flags.items():
             if flagged:
                 indicators.append(f"Pattern: {det_type}")
-        if pagerank > 0.005:
+        if pagerank > HIGH_PAGERANK_THRESHOLD:
             indicators.append("High PageRank centrality")
-        if betweenness > 0.01:
+        if betweenness > HIGH_BETWEENNESS_THRESHOLD:
             indicators.append("High betweenness centrality")
 
         count = len(indicators)
