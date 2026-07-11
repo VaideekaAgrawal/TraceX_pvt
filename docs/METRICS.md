@@ -61,11 +61,14 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 3 merge | 198 tests | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
 | Test count — Phase 4 merge | 270 tests | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
 | Test count — Phase 1B merge | 275 tests | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Test count — Phase 5 merge | 304 tests, 97% coverage | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
 | CI duration — Phase 4 (branch push / PR) | 18m34s / 22m8s | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
+| CI duration — Phase 5 (branch push / PR) | 20m15s / 22m0s | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+| Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
