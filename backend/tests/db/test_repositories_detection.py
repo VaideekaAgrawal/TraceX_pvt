@@ -130,6 +130,43 @@ def test_alert_repository_list_for_case_orders_by_risk_score_desc(session: Sessi
     assert [a.alert_id for a in repo.list_for_case("CASE1")] == ["AL_HIGH", "AL_MID", "AL_LOW"]
 
 
+def test_alert_repository_list_for_primary_account_orders_by_created_at_asc(
+    session: Session,
+) -> None:
+    _seed_account_and_user(session)
+    AccountRepository(session).create(
+        account_id="A2", actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+    repo = AlertRepository(session)
+
+    for alert_id, primary, created_at in [
+        ("AL_OLD", "A1", datetime(2026, 1, 1, tzinfo=UTC)),
+        ("AL_NEW", "A1", datetime(2026, 6, 1, tzinfo=UTC)),
+        ("AL_OTHER", "A2", datetime(2026, 3, 1, tzinfo=UTC)),
+    ]:
+        repo.create(
+            alert_id=alert_id,
+            detection_type=DetectionType.layering,
+            primary_account_id=primary,
+            account_ids=[primary],
+            score=0.5,
+            risk_score=40.0,
+            severity=RiskLevel.MEDIUM,
+            priority=Priority.P3,
+            status="open",
+            source="pipeline",
+            created_at=created_at,
+            actor_type=ActorType.SYSTEM,
+            actor_id=None,
+        )
+    session.commit()
+
+    assert [a.alert_id for a in repo.list_for_primary_account("A1")] == ["AL_OLD", "AL_NEW"]
+    assert [a.alert_id for a in repo.list_for_primary_account("A2")] == ["AL_OTHER"]
+    assert repo.list_for_primary_account("NOPE") == []
+
+
 def test_alert_repository_update_score_and_risk_score(session: Session) -> None:
     _seed_account_and_user(session)
     repo = AlertRepository(session)

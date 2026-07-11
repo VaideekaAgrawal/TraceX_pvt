@@ -177,6 +177,22 @@ class AlertRepository(BaseRepository[Alert]):
         )
         return list(self.session.scalars(stmt))
 
+    def list_for_primary_account(self, account_id: str, *, limit: int = 100) -> list[Alert]:
+        """Alerts where `account_id` is the *primary* account -- deliberately
+        narrower than a full `account_ids` membership search (ROADMAP Phase
+        5: `investigation.previous_alerts` documents this same narrowing --
+        network-wide "any connected account" reach is Phase 6/7's Previous
+        Alert & Case History feature, not this one). Ordered ascending by
+        `created_at` (oldest first) so a `risk_trend` built from this is
+        already in chronological order without a caller-side re-sort."""
+        stmt = (
+            select(Alert)
+            .where(Alert.primary_account_id == account_id)
+            .order_by(Alert.created_at.asc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
     def list_unassigned(self, *, limit: int = 100) -> list[Alert]:
         """Alerts with no case yet — the alert->case assignment queue
         (Phase 4 consumes this)."""
