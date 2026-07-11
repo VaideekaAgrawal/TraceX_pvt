@@ -105,10 +105,18 @@ class AiInteractionRepository(BaseRepository[AiInteraction]):
         (SQLite's JSON1 extension and Postgres's `jsonb` operators diverge,
         and case-scale row counts -- at most a few dozen interactions per
         case -- make filtering in Python over this list cheap), so that
-        last narrowing step is the caller's job, not this method's."""
+        last narrowing step is the caller's job, not this method's.
+
+        Ordered by `created_at` descending *before* `.limit()` (code-review
+        finding, Phase 5: without this, once a case passed 50
+        `RECOMMENDATION` interactions the kept rows were an arbitrary
+        50-row slice -- not necessarily the most recent -- so `_find_cached`'s
+        `max(..., key=created_at)` over that slice could silently miss a
+        fresher row, e.g. one just written by a `force=True` call)."""
         stmt = (
             select(AiInteraction)
             .where(AiInteraction.case_id == case_id, AiInteraction.agent == agent)
+            .order_by(AiInteraction.created_at.desc())
             .limit(limit)
         )
         return list(self.session.scalars(stmt))

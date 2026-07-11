@@ -250,7 +250,38 @@ def test_explain_account_rejects_account_outside_case_scope(session: Session) ->
         )
 
 
-def test_call_openrouter_not_configured_returns_visible_message(session: Session) -> None:
+def test_call_openrouter_not_configured_raises_explanation_unavailable(session: Session) -> None:
     settings = Settings(env="dev", jwt_secret="test-secret", openrouter_api_key="")
-    result = account_explanation._call_openrouter("hello", settings=settings)
-    assert result == account_explanation._NOT_CONFIGURED_MESSAGE
+    with pytest.raises(
+        account_explanation.ExplanationUnavailableError,
+        match=account_explanation._NOT_CONFIGURED_MESSAGE,
+    ):
+        account_explanation._call_openrouter("hello", settings=settings)
+
+
+def test_explain_account_failure_is_not_cached(session: Session) -> None:
+    # Regression test (code-review finding, Phase 5): a failed/"not
+    # configured" call must never be written to `ai_interactions` and
+    # served back as `cached: True` on a later call.
+    _seed(session)
+    settings = Settings(env="dev", jwt_secret="test-secret", openrouter_api_key="")
+
+    first = account_explanation.explain_account(
+        session, "CASE1", "A1",
+        settings=settings, actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    session.commit()
+    assert first["cached"] is False
+    assert first["explanation"] == account_explanation._NOT_CONFIGURED_MESSAGE
+
+    second = account_explanation.explain_account(
+        session, "CASE1", "A1",
+        settings=settings, actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    session.commit()
+    assert second["cached"] is False  # still not cached, not a bad cache hit
+
+    interactions = AiInteractionRepository(session).list_for_case_and_agent(
+        "CASE1", AiAgent.RECOMMENDATION
+    )
+    assert interactions == []  # no failure ever persisted

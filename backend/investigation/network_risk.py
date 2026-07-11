@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, CaseResolution
@@ -28,12 +29,32 @@ from db.models.investigation import Case
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.reference import AccountRepository, CustomerRepository
-from detection.scoring.ensemble import (
-    HIGH_BETWEENNESS_THRESHOLD,
-    HIGH_PAGERANK_THRESHOLD,
-    RoleClassifier,
-)
+from detection.scoring.ensemble import RoleClassifier
 from investigation.case_graph import build_case_graph_store
+
+#: `EnsembleScorer.compute_confidence`'s `HIGH_PAGERANK_THRESHOLD`/
+#: `HIGH_BETWEENNESS_THRESHOLD` (0.005/0.01) are calibrated for centrality
+#: computed over the FULL transaction graph -- `NetworkXGraphStore.
+#: compute_centrality`'s pandas approximation normalizes pagerank/
+#: betweenness within whatever graph they're computed over, so a node's
+#: score on a 300k-node graph and the same node's score on a case-scoped
+#: graph of a handful of accounts aren't comparable in absolute terms
+#: (code-review finding, Phase 5, verified against the test fixture's
+#: 3-node cycle: pagerank there is ~60-70x that absolute threshold and
+#: betweenness ~100x it, so nearly every account in any multi-account case
+#: tripped "high centrality" regardless of genuine anomaly). This module
+#: therefore does NOT import those constants -- it flags an account as
+#: "high centrality" only if it's in the top quartile of THIS case's own
+#: centrality distribution, i.e. relative to its own case graph, not an
+#: absolute score tuned for a much larger one. Same p75-relative-threshold
+#: idiom `detection.scoring.ensemble.RoleClassifier.classify_all` already
+#: uses for role classification (`np.percentile(..., 75)`), reused here for
+#: the same reason: it degrades gracefully at case scale instead of
+#: requiring a graph-size-dependent absolute number. A single-node (or
+#: single-value) case graph never flags anything -- the 75th percentile of
+#: one value is that value itself, and the comparison below is strict `>`,
+#: so a lone account has no network to be "central" within.
+_HIGH_CENTRALITY_PERCENTILE = 75
 
 #: Weighted, capped sub-scores clamped to an overall 0-100 total -- mirrors
 #: `EnsembleScorer.compute_all`'s own pattern of per-signal weighted
@@ -69,9 +90,7 @@ def compute_network_risk(
     (matches `investigation.cases`/`investigation.fsm`'s convention).
     Raises `ValueError` (via `CaseRepository.update`) if the case doesn't
     exist."""
-    account_ids = [
-        ca.account_id for ca in CaseAccountRepository(session).list_for_case(case_id)
-    ]
+    account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
 
     graph = build_case_graph_store(session, account_ids)
 
@@ -84,32 +103,37 @@ def compute_network_risk(
     centrality = graph.compute_centrality()
     pagerank = centrality["pagerank"]
     betweenness = centrality["betweenness"]
+    # Case-graph-relative thresholds -- see the module-level comment above
+    # `_HIGH_CENTRALITY_PERCENTILE` for why an absolute threshold doesn't
+    # transfer from the full-database graph to this case-scoped one.
+    pagerank_values = list(pagerank.values())
+    betweenness_values = list(betweenness.values())
+    pagerank_threshold = (
+        float(np.percentile(pagerank_values, _HIGH_CENTRALITY_PERCENTILE))
+        if pagerank_values
+        else 0.0
+    )
+    betweenness_threshold = (
+        float(np.percentile(betweenness_values, _HIGH_CENTRALITY_PERCENTILE))
+        if betweenness_values
+        else 0.0
+    )
     high_centrality_accounts = sum(
         1
         for account_id in account_ids
-        if pagerank.get(account_id, 0.0) > HIGH_PAGERANK_THRESHOLD
-        or betweenness.get(account_id, 0.0) > HIGH_BETWEENNESS_THRESHOLD
+        if pagerank.get(account_id, 0.0) > pagerank_threshold
+        or betweenness.get(account_id, 0.0) > betweenness_threshold
     )
 
-    account_repo = AccountRepository(session)
-    customer_repo = CustomerRepository(session)
-    seen_customer_ids: set[str] = set()
-    sanctioned_entities = 0
-    pep_entities = 0
-    for account_id in account_ids:
-        account = account_repo.get(account_id)
-        if account is None or account.customer_id is None:
-            continue
-        if account.customer_id in seen_customer_ids:
-            continue
-        seen_customer_ids.add(account.customer_id)
-        customer = customer_repo.get(account.customer_id)
-        if customer is None:
-            continue
-        if customer.sanction_status:
-            sanctioned_entities += 1
-        if customer.pep_status:
-            pep_entities += 1
+    # Batched account/customer lookups (code-review finding, Phase 5: this
+    # used to `.get()` one account then one customer per case-linked
+    # account, an N+1 round-trip pattern for what's already a small,
+    # case-scoped id list).
+    accounts = AccountRepository(session).list_by_ids(account_ids)
+    customer_ids = sorted({a.customer_id for a in accounts if a.customer_id is not None})
+    customers = CustomerRepository(session).list_by_ids(customer_ids)
+    sanctioned_entities = sum(1 for c in customers if c.sanction_status)
+    pep_entities = sum(1 for c in customers if c.pep_status)
 
     alert_repo = AlertRepository(session)
     case_repo = CaseRepository(session)
@@ -118,11 +142,13 @@ def compute_network_risk(
         for alert in alert_repo.list_for_primary_account(account_id):
             if alert.case_id is not None and alert.case_id != case_id:
                 prior_case_ids.add(alert.case_id)
+    # Batched case lookup (code-review finding, Phase 5: this used to
+    # `.get()` one case per unique prior-case id in a Python loop).
+    prior_cases = case_repo.list_by_ids(list(prior_case_ids))
     previous_sars = sum(
         1
-        for prior_case_id in prior_case_ids
-        if (prior_case := case_repo.get(prior_case_id)) is not None
-        and prior_case.resolution == CaseResolution.TRUE_POSITIVE_SAR
+        for prior_case in prior_cases
+        if prior_case.resolution == CaseResolution.TRUE_POSITIVE_SAR
     )
 
     mule_score = min(mule_linked_accounts * _MULE_POINTS_PER_ACCOUNT, _MULE_SCORE_CAP)

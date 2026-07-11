@@ -4,6 +4,8 @@ RelationshipRepository.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from db.enums import (
@@ -107,6 +109,42 @@ def test_ai_interaction_repository_list_for_case_and_agent_filters_by_agent(
     assert [i.id for i in recommendation_only] == [rec.id]
     assert repo.list_for_case_and_agent("CASE1", AiAgent.COPILOT)[0].agent == AiAgent.COPILOT
     assert repo.list_for_case_and_agent("NOPE", AiAgent.RECOMMENDATION) == []
+
+
+def test_ai_interaction_repository_list_for_case_and_agent_orders_most_recent_first(
+    session: Session,
+) -> None:
+    # Regression test (code-review finding, Phase 5): without an ORDER BY
+    # before LIMIT, a case with more interactions than `limit` could have
+    # its kept rows be an arbitrary slice rather than the most recent ones.
+    _seed(session)
+    repo = AiInteractionRepository(session)
+    older = repo.create(
+        case_id="CASE1",
+        agent=AiAgent.RECOMMENDATION,
+        user_id="U1",
+        response_text="Older explanation.",
+        model="claude-opus-4.8",
+        model_provider="openrouter",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        actor_type=ActorType.AI,
+        actor_id="RECOMMENDATION",
+    )
+    newer = repo.create(
+        case_id="CASE1",
+        agent=AiAgent.RECOMMENDATION,
+        user_id="U1",
+        response_text="Newer explanation (e.g. from a force=True call).",
+        model="claude-opus-4.8",
+        model_provider="openrouter",
+        created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        actor_type=ActorType.AI,
+        actor_id="RECOMMENDATION",
+    )
+    session.commit()
+
+    results = repo.list_for_case_and_agent("CASE1", AiAgent.RECOMMENDATION)
+    assert [i.id for i in results] == [newer.id, older.id]
 
 
 def test_relationship_repository_round_trip(session: Session) -> None:

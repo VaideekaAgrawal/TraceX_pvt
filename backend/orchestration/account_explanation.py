@@ -33,6 +33,7 @@ narration/purpose regression test).
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -40,6 +41,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, AiAgent
+from db.models.base import utcnow
 from db.models.orchestration import AiInteraction
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
@@ -48,21 +50,36 @@ from db.repositories.reference import AccountRepository, CustomerRepository, Tra
 from detection.scoring.ensemble import RoleClassifier
 from foundation.config import Settings
 from investigation.account_facts import transaction_stats
-from investigation.case_graph import build_case_graph_store
+from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT, build_case_graph_store
+
+logger = logging.getLogger(__name__)
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _NOT_CONFIGURED_MESSAGE = "AI explanations not configured. Set openrouter_api_key."
 
 
+class ExplanationUnavailableError(Exception):
+    """Raised by `_call_openrouter` when no explanation could be generated
+    (missing API key, network failure, non-2xx response, malformed body).
+    `explain_account` catches this and returns a visible message to the
+    caller WITHOUT persisting an `AiInteraction` row for it (code-review
+    finding, Phase 5: the previous "fails open by returning the error text"
+    design got that error text written to `ai_interactions` and then served
+    back as `cached: True`, indistinguishable from a real explanation, on
+    every subsequent non-force call -- a transient outage could get
+    permanently "cached" as the answer)."""
+
+
 def _call_openrouter(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
     """Single OpenRouter chat-completions call -- ported near-verbatim from
     `archive/fund-flow-tracker/api/server.py::_call_openrouter`
-    (temperature=0.3, 20s timeout). Fails open: returns a visible error/
-    "not configured" string on any failure (missing key, network error,
-    non-2xx response, malformed body) rather than raising, so a triage
-    screen degrades to a readable message instead of a 500."""
+    (temperature=0.3, 20s timeout). Raises `ExplanationUnavailableError` on
+    any failure (missing key, network error, non-2xx response, malformed
+    body) instead of returning an error string -- `explain_account` is the
+    layer that decides how a failure is surfaced/not-cached; this function
+    only knows how to make the call."""
     if not settings.openrouter_api_key:
-        return _NOT_CONFIGURED_MESSAGE
+        raise ExplanationUnavailableError(_NOT_CONFIGURED_MESSAGE)
     try:
         response = httpx.post(
             _OPENROUTER_URL,
@@ -83,8 +100,9 @@ def _call_openrouter(prompt: str, *, settings: Settings, max_tokens: int = 300) 
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         return str(content).strip()
-    except Exception as exc:  # noqa: BLE001 -- fails open with a message, matches the archive
-        return f"Could not generate explanation: {exc}"
+    except Exception as exc:  # noqa: BLE001 -- narrowed to ExplanationUnavailableError below
+        logger.warning("OpenRouter call failed for account explanation: %s", exc)
+        raise ExplanationUnavailableError(f"Could not generate explanation: {exc}") from exc
 
 
 def _assemble_facts(session: Session, case_id: str, account_id: str) -> dict[str, Any]:
@@ -93,13 +111,17 @@ def _assemble_facts(session: Session, case_id: str, account_id: str) -> dict[str
     account = AccountRepository(session).get(account_id)
     case = CaseRepository(session).get(case_id)
 
-    case_account_ids = [
-        ca.account_id for ca in CaseAccountRepository(session).list_for_case(case_id)
-    ]
+    case_account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
     graph = build_case_graph_store(session, case_account_ids)
     role_info = RoleClassifier().classify_all(graph).get(account_id, {})
 
-    txns = TransactionRepository(session).list_for_account_in_window(account_id)
+    # `limit=CASE_SCOPE_TRANSACTION_LIMIT`, not the repository's own
+    # oldest-first-capped-at-500 default -- see that constant's docstring
+    # (code-review finding, Phase 5: the default silently dropped a
+    # high-volume account's most recent activity from these facts).
+    txns = TransactionRepository(session).list_for_account_in_window(
+        account_id, limit=CASE_SCOPE_TRANSACTION_LIMIT
+    )
     stats = transaction_stats(txns, account_id)
 
     customer = None
@@ -241,13 +263,15 @@ def explain_account(
 
     Unless `force=True`, checks `ai_interactions` for a prior `RECOMMENDATION`
     interaction for this exact (case, account) and returns it (`cached=True`)
-    without calling the LLM again. Otherwise assembles fresh facts, calls
-    `_call_openrouter`, persists a new `ai_interactions` row (does NOT commit
-    -- caller owns the transaction boundary, matching every other
-    investigation-layer function), and returns `cached=False`."""
-    case_account_ids = {
-        ca.account_id for ca in CaseAccountRepository(session).list_for_case(case_id)
-    }
+    without calling the LLM again. Otherwise assembles fresh facts and calls
+    `_call_openrouter`: on success, persists a new `ai_interactions` row
+    (does NOT commit -- caller owns the transaction boundary, matching every
+    other investigation-layer function) and returns `cached=False`; on
+    `ExplanationUnavailableError`, returns `cached=False` with the error
+    message surfaced but writes NO `ai_interactions` row -- a failure must
+    never be persisted and later served back as `cached=True` (code-review
+    finding, Phase 5)."""
+    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
     if account_id not in case_account_ids:
         raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
 
@@ -267,7 +291,16 @@ def explain_account(
     prompt = _build_prompt(facts)
 
     start = time.monotonic()
-    explanation = _call_openrouter(prompt, settings=settings)
+    try:
+        explanation = _call_openrouter(prompt, settings=settings)
+    except ExplanationUnavailableError as exc:
+        return {
+            "account_id": account_id,
+            "explanation": str(exc),
+            "cached": False,
+            "model": settings.llm_model,
+            "generated_at": utcnow(),
+        }
     latency_ms = int((time.monotonic() - start) * 1000)
 
     interaction = interaction_repo.create(

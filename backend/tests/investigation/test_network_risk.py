@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import numpy as np
 from sqlalchemy.orm import Session
 
 from db.enums import (
@@ -30,11 +31,7 @@ from db.enums import (
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
-from detection.scoring.ensemble import (
-    HIGH_BETWEENNESS_THRESHOLD,
-    HIGH_PAGERANK_THRESHOLD,
-    RoleClassifier,
-)
+from detection.scoring.ensemble import RoleClassifier
 from investigation.case_graph import build_case_graph_store
 from investigation.network_risk import compute_network_risk
 
@@ -146,16 +143,22 @@ def test_compute_network_risk_matches_formula_and_persists(session: Session) -> 
 
     # Independently recompute the same underlying signals from the same
     # case-scoped graph, then run them through the documented formula.
+    # "High centrality" is relative to THIS case graph's own p75 (not an
+    # absolute threshold -- see `network_risk._HIGH_CENTRALITY_PERCENTILE`'s
+    # docstring for why an absolute one doesn't transfer to a small
+    # case-scoped graph).
     graph = build_case_graph_store(session, ["A", "B", "C"])
     roles = RoleClassifier().classify_all(graph)
     expected_mule = sum(1 for r in roles.values() if r["role"] == "MULE")
     expected_cycles = len(graph.detect_cycles(max_length=8, max_cycles=50))
     centrality = graph.compute_centrality()
+    pagerank_threshold = float(np.percentile(list(centrality["pagerank"].values()), 75))
+    betweenness_threshold = float(np.percentile(list(centrality["betweenness"].values()), 75))
     expected_high_centrality = sum(
         1
         for account_id in ("A", "B", "C")
-        if centrality["pagerank"].get(account_id, 0.0) > HIGH_PAGERANK_THRESHOLD
-        or centrality["betweenness"].get(account_id, 0.0) > HIGH_BETWEENNESS_THRESHOLD
+        if centrality["pagerank"].get(account_id, 0.0) > pagerank_threshold
+        or centrality["betweenness"].get(account_id, 0.0) > betweenness_threshold
     )
     expected_sanctioned = 1
     expected_pep = 0
@@ -188,6 +191,44 @@ def test_compute_network_risk_matches_formula_and_persists(session: Session) -> 
     assert refetched is not None
     assert refetched.network_risk_score == expected_total
     assert refetched.network_risk_reasons == reasons
+
+
+def test_high_centrality_is_relative_to_case_graph_not_full_db_absolute_threshold(
+    session: Session,
+) -> None:
+    """Regression test (code-review finding, Phase 5): the old absolute
+    thresholds (`HIGH_PAGERANK_THRESHOLD=0.005`/`HIGH_BETWEENNESS_
+    THRESHOLD=0.01`, calibrated for a full-database-scale graph) were
+    tripped by nearly every account in a small case-scoped graph -- verified
+    directly against this exact 3-node cycle fixture, where pagerank was
+    ~60-70x that absolute threshold and betweenness ~100x it for every node.
+    The case-graph-relative (p75) approach must NOT flag all 3 accounts as
+    "high centrality" here."""
+    account_repo = AccountRepository(session)
+    for account_id in ("A", "B", "C"):
+        account_repo.create(account_id=account_id, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_txn(session, "T1", "A", "B", 100_000.0, ts)
+    _seed_txn(session, "T2", "B", "C", 95_000.0, ts)
+    _seed_txn(session, "T3", "C", "A", 90_000.0, ts)
+    session.commit()
+
+    _seed_case_with_accounts(session, "CASE_CYCLE", "A", ["A", "B", "C"])
+    session.commit()
+
+    case = compute_network_risk(
+        session, "CASE_CYCLE", actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    assert case.network_risk_reasons is not None
+    high_centrality = case.network_risk_reasons["high_centrality_accounts"]
+    assert high_centrality < 3, (
+        "every account in a small case-scoped graph was flagged 'high centrality' -- "
+        "the absolute-threshold bug this test guards against"
+    )
 
 
 def test_compute_network_risk_all_zero_signals_gives_fallback_summary(session: Session) -> None:

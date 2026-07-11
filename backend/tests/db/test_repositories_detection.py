@@ -130,7 +130,7 @@ def test_alert_repository_list_for_case_orders_by_risk_score_desc(session: Sessi
     assert [a.alert_id for a in repo.list_for_case("CASE1")] == ["AL_HIGH", "AL_MID", "AL_LOW"]
 
 
-def test_alert_repository_list_for_primary_account_orders_by_created_at_asc(
+def test_alert_repository_list_for_primary_account_orders_by_created_at_desc(
     session: Session,
 ) -> None:
     _seed_account_and_user(session)
@@ -162,7 +162,7 @@ def test_alert_repository_list_for_primary_account_orders_by_created_at_asc(
         )
     session.commit()
 
-    assert [a.alert_id for a in repo.list_for_primary_account("A1")] == ["AL_OLD", "AL_NEW"]
+    assert [a.alert_id for a in repo.list_for_primary_account("A1")] == ["AL_NEW", "AL_OLD"]
     assert [a.alert_id for a in repo.list_for_primary_account("A2")] == ["AL_OTHER"]
     assert repo.list_for_primary_account("NOPE") == []
 

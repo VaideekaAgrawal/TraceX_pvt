@@ -54,7 +54,7 @@ def require_case_scoped_account(
     """404s if `account_id` isn't in `case`'s `case_accounts` scope (don't
     leak "this account exists elsewhere in the system" to an investigator
     who isn't scoped to it), else loads and returns the `Account` row."""
-    scoped_ids = {ca.account_id for ca in CaseAccountRepository(db).list_for_case(case.case_id)}
+    scoped_ids = set(CaseAccountRepository(db).list_account_ids_for_case(case.case_id))
     if account_id not in scoped_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not in this case's scope")
     account = AccountRepository(db).get(account_id)
@@ -278,10 +278,15 @@ def get_customer_snapshot(
 def get_geo_risk(
     account: Account = Depends(require_case_scoped_account), db: Session = Depends(get_db)
 ) -> GeoRiskResponse:
-    txns = TransactionRepository(db).list_for_account_in_window(account.account_id)
-    account_repo = AccountRepository(db)
+    # `limit=CASE_SCOPE_TRANSACTION_LIMIT`, not the repository's own
+    # oldest-first-capped-at-500 default -- see `investigation.case_graph.
+    # CASE_SCOPE_TRANSACTION_LIMIT`'s docstring (code-review finding,
+    # Phase 5: the default silently dropped a high-volume account's most
+    # recent counterparty activity from this view).
+    txns = TransactionRepository(db).list_for_account_in_window(
+        account.account_id, limit=case_graph.CASE_SCOPE_TRANSACTION_LIMIT
+    )
     banks: set[str] = set()
-    cities: set[str] = set()
     counterparties: set[str] = set()
     for t in txns:
         if t.source_account == account.account_id:
@@ -292,10 +297,10 @@ def get_geo_risk(
             counterparties.add(t.source_account)
             if t.from_bank:
                 banks.add(t.from_bank)
-    for counterparty_id in counterparties:
-        counterparty = account_repo.get(counterparty_id)
-        if counterparty is not None and counterparty.branch_city:
-            cities.add(counterparty.branch_city)
+    # Batched lookup (code-review finding, Phase 5: this used to `.get()`
+    # each counterparty account one at a time).
+    counterparty_accounts = AccountRepository(db).list_by_ids(list(counterparties))
+    cities = {a.branch_city for a in counterparty_accounts if a.branch_city}
     return GeoRiskResponse(
         account_id=account.account_id,
         branch_city=account.branch_city,
@@ -318,8 +323,11 @@ def get_transaction_summary(
     account: Account = Depends(require_case_scoped_account),
     db: Session = Depends(get_db),
 ) -> TransactionSummaryResponse:
+    # `limit=CASE_SCOPE_TRANSACTION_LIMIT` -- see that constant's docstring
+    # (code-review finding, Phase 5: the repository's own default silently
+    # dropped a high-volume account's most recent transactions).
     txns = TransactionRepository(db).list_for_account_in_window(
-        account.account_id, start=start, end=end
+        account.account_id, start=start, end=end, limit=case_graph.CASE_SCOPE_TRANSACTION_LIMIT
     )
     stats = account_facts.transaction_stats(txns, account.account_id)
     return TransactionSummaryResponse(account_id=account.account_id, **stats)
@@ -336,7 +344,11 @@ def get_transaction_purpose(
     distribution -- data assembly only, per the ROADMAP plan: no invented
     "declared vs. actual purpose consistency" heuristic (no formula for one
     exists anywhere in this codebase or its spec)."""
-    txns = TransactionRepository(db).list_for_account_in_window(account.account_id)
+    # `limit=CASE_SCOPE_TRANSACTION_LIMIT` -- see that constant's docstring
+    # (code-review finding, Phase 5).
+    txns = TransactionRepository(db).list_for_account_in_window(
+        account.account_id, limit=case_graph.CASE_SCOPE_TRANSACTION_LIMIT
+    )
     items: list[TransactionPurposeItem] = []
     distribution: dict[str, int] = {}
     for t in txns:
@@ -379,7 +391,7 @@ def get_money_flow(
     account: Account = Depends(require_case_scoped_account),
     db: Session = Depends(get_db),
 ) -> MoneyFlowResponse:
-    account_ids = [ca.account_id for ca in CaseAccountRepository(db).list_for_case(case.case_id)]
+    account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
     graph = case_graph.build_case_graph_store(db, account_ids)
     ego = graph.get_ego_graph(account.account_id, radius=1)
     shaped = case_graph.shape_money_flow(ego, account.account_id)
@@ -387,6 +399,22 @@ def get_money_flow(
 
 
 # ── Network Risk Score ────────────────────────────────────────────────────
+
+
+def _compute_and_respond(db: Session, case: Case, user: User) -> NetworkRiskResponse:
+    """Shared by `get_network_risk`'s lazy-compute path and
+    `recompute_network_risk` (code-review finding, Phase 5: the two
+    handlers were near-identical -- compute, commit, build the same
+    response -- differing only in *when* they call this)."""
+    case = compute_network_risk(
+        db, case.case_id, actor_type=actor_type_for_role(user.role), actor_id=user.user_id
+    )
+    db.commit()
+    return NetworkRiskResponse(
+        case_id=case.case_id,
+        network_risk_score=case.network_risk_score,
+        network_risk_reasons=case.network_risk_reasons,
+    )
 
 
 @router.get("/{case_id}/network-risk", response_model=NetworkRiskResponse)
@@ -400,10 +428,7 @@ def get_network_risk(
     matching `network_risk_score`/`_reasons`'s "stored, not recomputed each
     view" design (`db/models/investigation.py::Case` docstring)."""
     if case.network_risk_score is None:
-        case = compute_network_risk(
-            db, case.case_id, actor_type=actor_type_for_role(user.role), actor_id=user.user_id
-        )
-        db.commit()
+        return _compute_and_respond(db, case, user)
     return NetworkRiskResponse(
         case_id=case.case_id,
         network_risk_score=case.network_risk_score,
@@ -417,15 +442,7 @@ def recompute_network_risk(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NetworkRiskResponse:
-    case = compute_network_risk(
-        db, case.case_id, actor_type=actor_type_for_role(user.role), actor_id=user.user_id
-    )
-    db.commit()
-    return NetworkRiskResponse(
-        case_id=case.case_id,
-        network_risk_score=case.network_risk_score,
-        network_risk_reasons=case.network_risk_reasons,
-    )
+    return _compute_and_respond(db, case, user)
 
 
 # ── AI account explanation ────────────────────────────────────────────────

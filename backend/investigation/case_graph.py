@@ -35,6 +35,22 @@ _TRANSACTION_COLUMNS = [
     "channel", "is_laundering", "from_bank", "to_bank",
 ]
 
+#: `TransactionRepository.list_for_account_in_window`'s own default
+#: (`limit=500`, oldest-first) is tuned for a *general* caller with no
+#: context on how many rows are reasonable -- but it silently keeps the
+#: OLDEST 500 transactions and drops the most recent activity for any
+#: account with more than that (code-review finding, Phase 5: every L1
+#: triage caller that reads an account's transactions within a case --
+#: `build_case_graph_store` below, the geo-risk/transaction-summary/
+#: transaction-purpose routes, and the AI explanation's fact assembly --
+#: inherited that default unintentionally). These callers are all
+#: case-scoped (a case links a small, bounded number of accounts, not the
+#: whole customer base -- `case_accounts` is the security boundary), so a
+#: much higher cap than the general default is safe and cheap; import this
+#: constant instead of leaving each call site to inherit `list_for_account_
+#: in_window`'s bare default.
+CASE_SCOPE_TRANSACTION_LIMIT = 10_000
+
 
 def build_case_graph_store(session: Session, account_ids: list[str]) -> NetworkXGraphStore:
     """Compose every transaction touching any of `account_ids` (deduped by
@@ -43,17 +59,21 @@ def build_case_graph_store(session: Session, account_ids: list[str]) -> NetworkX
     `transactions_df` shape `NetworkXGraphStore` expects, then build it.
 
     Uses `TransactionRepository.list_for_account_in_window` with no window
-    bound (every transaction the account has, up to that method's own
-    `limit`) -- this is a case-scoped graph, not a time-scoped one; callers
-    that need a time window (e.g. a future timeline feature) apply it on top
-    of the returned store's own `transactions_df`, not here.
+    bound (every transaction the account has, up to `CASE_SCOPE_TRANSACTION_
+    LIMIT` -- see that constant's docstring for why the repository's own
+    default cap is wrong for this caller) -- this is a case-scoped graph,
+    not a time-scoped one; callers that need a time window (e.g. a future
+    timeline feature) apply it on top of the returned store's own
+    `transactions_df`, not here.
     """
     txn_repo = TransactionRepository(session)
     seen_txn_ids: set[str] = set()
     records: list[dict[str, Any]] = []
 
     for account_id in account_ids:
-        for txn in txn_repo.list_for_account_in_window(account_id):
+        for txn in txn_repo.list_for_account_in_window(
+            account_id, limit=CASE_SCOPE_TRANSACTION_LIMIT
+        ):
             if txn.txn_id in seen_txn_ids:
                 continue
             seen_txn_ids.add(txn.txn_id)

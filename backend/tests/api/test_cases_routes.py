@@ -35,6 +35,7 @@ from db.repositories.reference import AccountRepository
 from db.session import build_engine, get_db
 from foundation.config import Settings
 from foundation.security import hash_password
+from orchestration import account_explanation
 
 _HASHED_PASSWORD = hash_password("correct-horse")
 
@@ -328,8 +329,17 @@ def test_network_risk_lazy_fill_then_recompute(
 
 
 def test_account_explanation_second_call_is_cached(
-    client: TestClient, db_sessionmaker: sessionmaker[Session]
+    client: TestClient, db_sessionmaker: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Monkeypatch the actual LLM call (not the route) so this still exercises
+    # the real HTTP route + DB round-trip end to end, just without a real
+    # network call -- mirrors tests/orchestration/test_account_explanation.py's
+    # pattern, applied over TestClient this time.
+    def _fake_call(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
+        return "Fake explanation."
+
+    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+
     _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
     _seed_case(
         db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
@@ -342,6 +352,7 @@ def test_account_explanation_second_call_is_cached(
     )
     assert first.status_code == 200
     assert first.json()["cached"] is False
+    assert first.json()["explanation"] == "Fake explanation."
 
     second = client.get(
         "/cases/CASE1/accounts/A1/explanation", headers=_auth_headers(token)
@@ -355,3 +366,32 @@ def test_account_explanation_second_call_is_cached(
             "CASE1", AiAgent.RECOMMENDATION
         )
         assert len(interactions) == 1  # cached read did not write a second row
+
+
+def test_account_explanation_not_configured_is_never_cached(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    # Regression test (code-review finding, Phase 5): with no
+    # openrouter_api_key configured (this fixture's real `client`), every
+    # call must fail open with the same visible message and NEVER be
+    # served back as cached=True.
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.IN_PROGRESS,
+    )
+    token = _login(client, "inv1")
+
+    first = client.get("/cases/CASE1/accounts/A1/explanation", headers=_auth_headers(token))
+    second = client.get("/cases/CASE1/accounts/A1/explanation", headers=_auth_headers(token))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+
+    with db_sessionmaker() as db:
+        interactions = AiInteractionRepository(db).list_for_case_and_agent(
+            "CASE1", AiAgent.RECOMMENDATION
+        )
+        assert interactions == []

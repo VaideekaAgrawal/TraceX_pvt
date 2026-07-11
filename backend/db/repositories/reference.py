@@ -122,6 +122,22 @@ class CustomerRepository(BaseRepository[Customer]):
             action="customer_updated",
         )
 
+    def list_by_ids(self, customer_ids: list[str]) -> list[Customer]:
+        """Batched `customer_id IN (...)` lookup — avoids an N-query loop
+        for callers that already have a small, bounded list of ids to
+        resolve at once (code-review finding, Phase 5:
+        `investigation.network_risk` used to `.get()` one customer per
+        case-linked account). Assumes a case-scale id list (dozens, not
+        export-scale thousands) — no chunking against SQLite's IN-clause
+        parameter ceiling, the same "case-scoped is small" assumption
+        `CaseAccountRepository.list_for_case` already relies on elsewhere
+        in this codebase; a caller with an unbounded id list should chunk
+        itself (see `detection.data._chunked` for that pattern)."""
+        if not customer_ids:
+            return []
+        stmt = select(Customer).where(Customer.customer_id.in_(customer_ids))
+        return list(self.session.scalars(stmt))
+
 
 class AccountRepository(BaseRepository[Account]):
     model = Account
@@ -202,6 +218,17 @@ class AccountRepository(BaseRepository[Account]):
         """All accounts belonging to one customer — the 1:N read the schema
         doc's ER overview calls out (`customers ──1:N── accounts`)."""
         stmt = select(Account).where(Account.customer_id == customer_id)
+        return list(self.session.scalars(stmt))
+
+    def list_by_ids(self, account_ids: list[str]) -> list[Account]:
+        """Batched `account_id IN (...)` lookup — same reasoning as
+        `CustomerRepository.list_by_ids` (code-review finding, Phase 5):
+        avoids an N-query loop for a small, bounded id list (e.g. a case's
+        linked accounts, or one account's counterparty set within a case
+        window). No chunking — assumes case-scale, not export-scale."""
+        if not account_ids:
+            return []
+        stmt = select(Account).where(Account.account_id.in_(account_ids))
         return list(self.session.scalars(stmt))
 
 

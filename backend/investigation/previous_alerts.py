@@ -32,18 +32,23 @@ def summarize(
     case isn't closed, contributes to `total_prior_alerts` and `risk_trend`
     but not to any of the three resolution buckets.
 
-    `risk_trend` is ordered ascending by `created_at` (the order
-    `AlertRepository.list_for_primary_account` already returns), i.e. oldest
-    first -- "trend" reads left-to-right chronologically.
+    `AlertRepository.list_for_primary_account` returns most-recent-first
+    (so that this account's *newest* activity survives its `limit`, not its
+    oldest) -- `risk_trend` re-sorts ascending by `created_at` here, since
+    "trend" reads left-to-right chronologically and that display order
+    shouldn't depend on the repository's own limit-truncation order.
     """
     alert_repo = AlertRepository(session)
     case_repo = CaseRepository(session)
 
-    alerts = [
-        a
-        for a in alert_repo.list_for_primary_account(account_id)
-        if a.case_id != exclude_case_id
-    ]
+    alerts = sorted(
+        (
+            a
+            for a in alert_repo.list_for_primary_account(account_id)
+            if a.case_id != exclude_case_id
+        ),
+        key=lambda a: a.created_at,
+    )
 
     prior_sar_count = 0
     prior_false_positive_count = 0

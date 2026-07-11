@@ -182,13 +182,19 @@ class AlertRepository(BaseRepository[Alert]):
         narrower than a full `account_ids` membership search (ROADMAP Phase
         5: `investigation.previous_alerts` documents this same narrowing --
         network-wide "any connected account" reach is Phase 6/7's Previous
-        Alert & Case History feature, not this one). Ordered ascending by
-        `created_at` (oldest first) so a `risk_trend` built from this is
-        already in chronological order without a caller-side re-sort."""
+        Alert & Case History feature, not this one). Ordered descending by
+        `created_at` (most recent first) before `.limit()` (code-review
+        finding, Phase 5: ascending order meant an account with more than
+        `limit` alerts had its *oldest* ones kept and its most recent
+        activity silently dropped -- backwards for both callers, which want
+        recent/prior-SAR signal, not ancient history). Callers that want
+        chronological display order (e.g. `investigation.previous_alerts`'s
+        `risk_trend`) re-sort ascending themselves rather than relying on
+        this method's order."""
         stmt = (
             select(Alert)
             .where(Alert.primary_account_id == account_id)
-            .order_by(Alert.created_at.asc())
+            .order_by(Alert.created_at.desc())
             .limit(limit)
         )
         return list(self.session.scalars(stmt))

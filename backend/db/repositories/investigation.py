@@ -236,6 +236,19 @@ class CaseRepository(BaseRepository[Case]):
         stmt = select(Case).where(Case.status == status).limit(limit)
         return list(self.session.scalars(stmt))
 
+    def list_by_ids(self, case_ids: list[str]) -> list[Case]:
+        """Batched `case_id IN (...)` lookup — same reasoning as
+        `reference.AccountRepository.list_by_ids`/`CustomerRepository.
+        list_by_ids` (code-review finding, Phase 5:
+        `investigation.network_risk` used to `.get()` one case per unique
+        prior-case id in a Python loop). No chunking — assumes a case-scale
+        id list (the set of *other* cases sharing an account with the one
+        being scored, realistically small)."""
+        if not case_ids:
+            return []
+        stmt = select(Case).where(Case.case_id.in_(case_ids))
+        return list(self.session.scalars(stmt))
+
 
 class CaseAccountRepository(BaseRepository[CaseAccount]):
     model = CaseAccount
@@ -290,6 +303,17 @@ class CaseAccountRepository(BaseRepository[CaseAccount]):
         this table *is* the case-scoping security boundary (doc §3.3)."""
         stmt = select(CaseAccount).where(CaseAccount.case_id == case_id)
         return list(self.session.scalars(stmt))
+
+    def list_account_ids_for_case(self, case_id: str) -> list[str]:
+        """Just the `account_id`s from `list_for_case` — the common case for
+        callers that only need the case-scoping id set, not the full
+        `CaseAccount` rows (role/hop_distance). Extracted (code-review
+        finding, Phase 5) because `[ca.account_id for ca in ...
+        list_for_case(case_id)]` had been independently duplicated at five
+        call sites across `investigation.network_risk`,
+        `orchestration.account_explanation`, and `api.routes.cases` for
+        what is this codebase's case-scoping security boundary."""
+        return [ca.account_id for ca in self.list_for_case(case_id)]
 
 
 class CaseStatusHistoryRepository(BaseRepository[CaseStatusHistory]):
