@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from db.enums import CaseResolution
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseRepository
-from db.repositories.reference import AccountRepository
+from db.repositories.reference import AccountRepository, CustomerRepository
 from detection.graph.networkx_store import NetworkXGraphStore
 from detection.scoring.ensemble import RoleClassifier
 from investigation.case_graph import build_case_graph_store
@@ -147,7 +147,13 @@ def annotate_nodes(session: Session, ego: dict[str, Any], case_id: str) -> list[
         TRUE_POSITIVE_SAR` pattern, but extended here to EVERY node in the
         ego-graph rather than just the case's own accounts -- exactly the
         network-wide reach `previous_alerts.py`'s own docstring defers to
-        Phase 6 ("Previous Alert & Case History (network-wide)").
+        Phase 6 ("Previous Alert & Case History (network-wide)"). Uses
+        `AlertRepository.list_for_primary_accounts` (batched, one `IN`
+        query for every node) rather than looping `list_for_primary_
+        account` once per node (code-review finding, Phase 6: the
+        per-node loop was hundreds of sequential round-trips at radius=4
+        on a real hub account -- 325ms vs. 6-13ms for every other L2
+        endpoint).
       - `hop_distance`: BFS distance from `ego["center"]` (see
         `_compute_hop_distances`).
     """
@@ -160,18 +166,17 @@ def annotate_nodes(session: Session, ego: dict[str, Any], case_id: str) -> list[
     account_ids = [n["account_id"] for n in nodes if n.get("account_id") is not None]
     accounts = {a.account_id: a for a in AccountRepository(session).list_by_ids(account_ids)}
 
-    alert_repo = AlertRepository(session)
     case_repo = CaseRepository(session)
-    per_account_prior_case_ids: dict[str, set[str]] = {}
+    per_account_prior_case_ids: dict[str, set[str]] = defaultdict(set)
     all_prior_case_ids: set[str] = set()
-    for account_id in account_ids:
-        prior_ids = {
-            alert.case_id
-            for alert in alert_repo.list_for_primary_account(account_id)
-            if alert.case_id is not None and alert.case_id != case_id
-        }
-        per_account_prior_case_ids[account_id] = prior_ids
-        all_prior_case_ids |= prior_ids
+    # Batched alert lookup (code-review finding, Phase 6 -- see the
+    # `has_prior_sar` docstring bullet above): one `IN` query for every
+    # node's alerts instead of one query per node.
+    for alert in AlertRepository(session).list_for_primary_accounts(account_ids):
+        if alert.case_id is None or alert.case_id == case_id:
+            continue
+        per_account_prior_case_ids[alert.primary_account_id].add(alert.case_id)
+        all_prior_case_ids.add(alert.case_id)
     # Batched case lookup (same "no per-id round trip" idiom
     # `investigation.network_risk` uses for the same prior-SAR pattern).
     prior_cases = {c.case_id: c for c in case_repo.list_by_ids(list(all_prior_case_ids))}
@@ -228,7 +233,13 @@ def apply_filters(
     `"in"`) -- an edge 2+ hops away, not touching `center` at all, passes
     through unfiltered by `direction` (documented, not a bug: this filter
     has no meaningful "direction relative to center" for an edge that
-    doesn't touch it).
+    doesn't touch it). A self-loop ON `center` (`source_account ==
+    dest_account == center`) is simultaneously incoming and outgoing to
+    itself, so it passes EITHER `direction` filter (code-review finding,
+    Phase 6: checking the `"out"` and `"in"` conditions sequentially, as if
+    they were mutually exclusive, meant a self-loop tripped whichever
+    condition ran second regardless of which `direction` was requested --
+    unconditionally excluded either way, not "keep under at least one").
     """
     filtered_edges: list[dict[str, Any]] = []
     for edge in edges:
@@ -249,9 +260,11 @@ def apply_filters(
             continue
         if filters.direction is not None:
             src, dst = edge.get("source_account"), edge.get("dest_account")
-            if src == center and filters.direction != "out":
+            if src == center and dst == center:
+                pass  # self-loop on center satisfies both directions -- never filtered
+            elif src == center and filters.direction != "out":
                 continue
-            if dst == center and filters.direction != "in":
+            elif dst == center and filters.direction != "in":
                 continue
             # Neither endpoint is `center` -- passes through unfiltered by
             # `direction` (see docstring).
@@ -284,6 +297,47 @@ def apply_filters(
     return filtered_nodes, final_edges
 
 
+def _synthesize_center_node(session: Session, account_id: str) -> dict[str, Any]:
+    """A minimal node entry for `center` when `NetworkXGraphStore.
+    get_ego_graph` returns it with zero nodes -- happens when `center` is a
+    case-linked account with no transactions anywhere in the case's
+    transaction set. `NetworkXGraphStore._build()` only seeds isolated
+    accounts-df nodes as a fallback when the WHOLE case's transaction set is
+    empty (see that method's docstring); it does NOT seed a per-account
+    isolated node when other case-linked accounts DO have transactions but
+    this one doesn't, so `account_id not in self._G` is true and
+    `get_ego_graph` returns `{"nodes": [], "edges": [], "center":
+    account_id}` (code-review finding, Phase 6: this silently dropped the
+    center account from the N-hop graph response entirely, breaking
+    `apply_filters`' documented "`center` always survives" guarantee).
+
+    Mirrors `NetworkXGraphStore._account_nodes`'s own shape exactly (the
+    full account/customer-joined row when available, else a bare
+    `{"account_id": ...}` placeholder matching that method's own fallback
+    for an account_id with no matching `accounts` row) so `build_subgraph_
+    store`/`annotate_nodes` treat this node identically to one the graph
+    store itself would have produced."""
+    account = AccountRepository(session).get(account_id)
+    if account is None:
+        return {"account_id": account_id}
+    customer = (
+        CustomerRepository(session).get(account.customer_id)
+        if account.customer_id is not None
+        else None
+    )
+    return {
+        "account_id": account.account_id,
+        "branch_city": account.branch_city,
+        "declared_annual_income": (
+            float(customer.declared_annual_income)
+            if customer is not None and customer.declared_annual_income is not None
+            else None
+        ),
+        "occupation": customer.occupation if customer is not None else None,
+        "income_bracket": customer.income_bracket if customer is not None else None,
+    }
+
+
 def get_filtered_ego_graph(
     session: Session,
     case_id: str,
@@ -300,10 +354,17 @@ def get_filtered_ego_graph(
     here too (defense-in-depth -- the real clamp is `api.routes.l2`'s route,
     but this function is also directly unit-testable/callable without going
     through HTTP, matching `orchestration.account_explanation.
-    explain_account`'s "repeat the boundary check" precedent)."""
+    explain_account`'s "repeat the boundary check" precedent).
+
+    If `account_id` has zero transactions anywhere in the case's
+    transaction set, `get_ego_graph` returns it with an empty `nodes` list
+    (see `_synthesize_center_node`'s docstring) -- synthesized here so
+    `center` always appears in the response, even then."""
     radius = min(radius, MAX_RADIUS)
     graph = build_case_graph_store(session, case_account_ids)
     ego = graph.get_ego_graph(account_id, radius=radius)
+    if not ego.get("nodes"):
+        ego = {**ego, "nodes": [_synthesize_center_node(session, account_id)]}
     annotated_nodes = annotate_nodes(session, ego, case_id)
     filtered_nodes, filtered_edges = apply_filters(
         annotated_nodes, ego.get("edges", []), account_id, filters

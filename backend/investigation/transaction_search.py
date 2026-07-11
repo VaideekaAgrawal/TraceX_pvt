@@ -39,6 +39,7 @@ def search(
     case_id: str,
     *,
     account_id: str | None = None,
+    case_account_ids: list[str] | None = None,
     min_amount: float | None = None,
     max_amount: float | None = None,
     start: datetime | None = None,
@@ -56,12 +57,24 @@ def search(
     `account_id` via `foundation.auth.require_case_scoped_account`, but this
     function narrows to it defensively either way rather than trusting the
     caller silently). Returns `{"items", "total_count", "limit", "offset"}`.
+
+    `case_account_ids`, if given, is trusted as `case_id`'s already-computed
+    scoped account-id set -- e.g. from `foundation.auth.require_case_scoped_
+    account_with_ids`, which an account-scoped caller already ran to
+    validate `account_id` -- avoiding a second identical `CaseAccountRepository.
+    list_account_ids_for_case` query in the same request (code-review
+    finding, Phase 6). When omitted (the whole-case search route has no
+    account dependency to reuse), computed here as before -- the defensive
+    `account_id in case_account_ids` narrowing below still applies either
+    way, so a caller passing a stale/wrong id list can't widen scope.
     """
-    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
+    if case_account_ids is None:
+        case_account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
+    scoped_ids = set(case_account_ids)
     if account_id is not None:
-        scope = [account_id] if account_id in case_account_ids else []
+        scope = [account_id] if account_id in scoped_ids else []
     else:
-        scope = list(case_account_ids)
+        scope = list(scoped_ids)
 
     txn_repo = TransactionRepository(session)
     matched = txn_repo.search_for_accounts(

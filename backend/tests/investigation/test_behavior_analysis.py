@@ -12,10 +12,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from sqlalchemy.orm import Session
 
-from db.enums import ActorType, Channel
+from db.enums import ActorType, CaseLevel, CaseStatus, Channel, Priority
 from db.models.reference import Transaction
+from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.reference import AccountRepository, TransactionRepository
 from investigation.behavior_analysis import (
     analyze,
@@ -176,6 +178,13 @@ def test_analyze_wires_every_reducer_and_lists_deferred_items(session: Session) 
         channel=Channel.UPI, is_laundering=0, ingested_at=ts,
         actor_type=ActorType.SYSTEM, actor_id=None,
     )
+    CaseRepository(session).create(
+        case_id="CASE1", primary_account_id="A", status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    CaseAccountRepository(session).add_account(
+        case_id="CASE1", account_id="A", actor_type=ActorType.SYSTEM, actor_id=None
+    )
     session.commit()
 
     result = analyze(session, "CASE1", "A")
@@ -190,3 +199,19 @@ def test_analyze_wires_every_reducer_and_lists_deferred_items(session: Session) 
     # docstring: "salary mismatch"/"seasonal trends" have no backing
     # schema/data to compute from).
     assert result["deferred"] == ["salary_mismatch", "seasonal_trends"]
+
+
+def test_analyze_rejects_account_outside_case_scope(session: Session) -> None:
+    """Regression test (code-review finding, Phase 6): `analyze` must
+    defense-in-depth-validate `account_id` is in `case_id`'s scope, same as
+    `orchestration.pattern_explanation._assemble_facts` already did."""
+    AccountRepository(session).create(account_id="A", actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    CaseRepository(session).create(
+        case_id="CASE1", primary_account_id="A", status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()  # deliberately no CaseAccountRepository.add_account
+
+    with pytest.raises(ValueError, match="not in case"):
+        analyze(session, "CASE1", "A")

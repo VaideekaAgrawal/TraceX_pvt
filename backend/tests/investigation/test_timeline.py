@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, CaseLevel, CaseStatus, Channel, Priority
@@ -33,6 +34,17 @@ def _seed_txn(
     )
 
 
+def _seed_case_with_accounts(session: Session, case_id: str, account_ids: list[str]) -> None:
+    CaseRepository(session).create(
+        case_id=case_id, primary_account_id=account_ids[0], status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    for account_id in account_ids:
+        CaseAccountRepository(session).add_account(
+            case_id=case_id, account_id=account_id, actor_type=ActorType.SYSTEM, actor_id=None
+        )
+
+
 def test_build_timeline_ascending_order_regardless_of_insertion_order(session: Session) -> None:
     _seed_account(session, "A")
     _seed_account(session, "B")
@@ -45,6 +57,7 @@ def test_build_timeline_ascending_order_regardless_of_insertion_order(session: S
     _seed_txn(session, "T_LATE", "A", "B", 300.0, late)
     _seed_txn(session, "T_EARLY", "B", "A", 100.0, early)
     _seed_txn(session, "T_MID", "A", "B", 200.0, mid)
+    _seed_case_with_accounts(session, "CASE1", ["A", "B"])
     session.commit()
 
     timeline = build_timeline(session, "CASE1", "A")
@@ -64,6 +77,7 @@ def test_build_timeline_respects_window(session: Session) -> None:
     _seed_txn(session, "T1", "A", "B", 100.0, early)
     _seed_txn(session, "T2", "A", "B", 100.0, mid)
     _seed_txn(session, "T3", "A", "B", 100.0, late)
+    _seed_case_with_accounts(session, "CASE1", ["A", "B"])
     session.commit()
 
     timeline = build_timeline(
@@ -72,6 +86,23 @@ def test_build_timeline_respects_window(session: Session) -> None:
     )
 
     assert [e["txn_id"] for e in timeline["events"]] == ["T2"]
+
+
+def test_build_timeline_rejects_account_outside_case_scope(session: Session) -> None:
+    """Regression test (code-review finding, Phase 6): `build_timeline`
+    must defense-in-depth-validate `account_id` is in `case_id`'s scope,
+    same as `orchestration.pattern_explanation._assemble_facts` already
+    did."""
+    _seed_account(session, "A")
+    session.commit()
+    CaseRepository(session).create(
+        case_id="CASE1", primary_account_id="A", status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()  # deliberately no CaseAccountRepository.add_account
+
+    with pytest.raises(ValueError, match="not in case"):
+        build_timeline(session, "CASE1", "A")
 
 
 def test_timeline_txn_id_overlaps_graph_filter_edges_for_same_data(session: Session) -> None:

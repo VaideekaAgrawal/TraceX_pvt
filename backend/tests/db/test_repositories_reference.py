@@ -154,6 +154,42 @@ def test_transaction_repository_create_and_list_for_account_in_window(session: S
     assert {t.txn_id for t in all_for_a1} == {"T1", "T2", "T3"}
 
 
+def test_list_for_account_in_window_most_recent_keeps_newest_within_limit(
+    session: Session,
+) -> None:
+    """Regression test (code-review finding, Phase 6): the default
+    `ORDER BY timestamp ASC LIMIT limit` keeps the OLDEST rows once an
+    account exceeds `limit` -- `most_recent=True` must keep the NEWEST
+    `limit` rows instead (still returned in ascending order)."""
+    account_repo = AccountRepository(session)
+    account_repo.create(account_id="A1", actor_type=ActorType.SYSTEM, actor_id=None)
+    account_repo.create(account_id="A2", actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+
+    txn_repo = TransactionRepository(session)
+    for i in range(5):
+        txn_repo.create(
+            txn_id=f"T{i}",
+            timestamp=datetime(2026, 1, 1 + i, tzinfo=UTC),
+            source_account="A1",
+            dest_account="A2",
+            amount=100 + i,
+            channel=Channel.UPI,
+            is_laundering=0,
+            ingested_at=NOW,
+            actor_type=ActorType.SYSTEM,
+            actor_id=None,
+        )
+    session.commit()
+
+    oldest_first = txn_repo.list_for_account_in_window("A1", limit=3)
+    assert [t.txn_id for t in oldest_first] == ["T0", "T1", "T2"]
+
+    newest_first = txn_repo.list_for_account_in_window("A1", limit=3, most_recent=True)
+    # Still ascending order, but the NEWEST 3, not the oldest 3.
+    assert [t.txn_id for t in newest_first] == ["T2", "T3", "T4"]
+
+
 def _seed_search_fixture(session: Session) -> TransactionRepository:
     account_repo = AccountRepository(session)
     for account_id in ("A1", "A2", "A3", "OUT"):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy.orm import Session
 
 from db.enums import (
@@ -16,9 +17,19 @@ from db.enums import (
     RiskLevel,
 )
 from db.repositories.detection import AlertRepository
-from db.repositories.investigation import CaseRepository
+from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from investigation.customer_profile import build_customer_profile
+
+
+def _seed_case_with_account(session: Session, case_id: str, account_id: str) -> None:
+    CaseRepository(session).create(
+        case_id=case_id, primary_account_id=account_id, status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    CaseAccountRepository(session).add_account(
+        case_id=case_id, account_id=account_id, actor_type=ActorType.SYSTEM, actor_id=None
+    )
 
 
 def test_build_customer_profile_excludes_self_from_siblings(session: Session) -> None:
@@ -38,10 +49,7 @@ def test_build_customer_profile_excludes_self_from_siblings(session: Session) ->
     )
     session.commit()
 
-    CaseRepository(session).create(
-        case_id="CASE1", primary_account_id="A1", status=CaseStatus.IN_PROGRESS,
-        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
-    )
+    _seed_case_with_account(session, "CASE1", "A1")
     session.commit()
 
     profile = build_customer_profile(session, "CASE1", "A1")
@@ -57,10 +65,7 @@ def test_build_customer_profile_documents_omitted_fields(session: Session) -> No
         account_id="A1", actor_type=ActorType.SYSTEM, actor_id=None
     )
     session.commit()
-    CaseRepository(session).create(
-        case_id="CASE1", primary_account_id="A1", status=CaseStatus.IN_PROGRESS,
-        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
-    )
+    _seed_case_with_account(session, "CASE1", "A1")
     session.commit()
 
     profile = build_customer_profile(session, "CASE1", "A1")
@@ -90,10 +95,7 @@ def test_build_customer_profile_variance_ratio_math(session: Session) -> None:
         actor_type=ActorType.SYSTEM, actor_id=None,
     )
     session.commit()
-    CaseRepository(session).create(
-        case_id="CASE1", primary_account_id="A1", status=CaseStatus.IN_PROGRESS,
-        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
-    )
+    _seed_case_with_account(session, "CASE1", "A1")
     session.commit()
 
     profile = build_customer_profile(session, "CASE1", "A1")
@@ -123,13 +125,27 @@ def test_build_customer_profile_prior_sar_count(session: Session) -> None:
     )
     session.commit()
 
-    CaseRepository(session).create(
-        case_id="CASE1", primary_account_id="A1", status=CaseStatus.IN_PROGRESS,
-        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
-    )
+    _seed_case_with_account(session, "CASE1", "A1")
     session.commit()
 
     profile = build_customer_profile(session, "CASE1", "A1")
 
     assert profile["prior_sar_count"] == 1
     assert profile["total_prior_alerts"] == 1
+
+
+def test_build_customer_profile_rejects_account_outside_case_scope(session: Session) -> None:
+    """Regression test (code-review finding, Phase 6): `build_customer_
+    profile` must defense-in-depth-validate `account_id` is in `case_id`'s
+    scope, same as `orchestration.pattern_explanation._assemble_facts`
+    already did."""
+    AccountRepository(session).create(account_id="A1", actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    CaseRepository(session).create(
+        case_id="CASE1", primary_account_id="A1", status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()  # deliberately no CaseAccountRepository.add_account
+
+    with pytest.raises(ValueError, match="not in case"):
+        build_customer_profile(session, "CASE1", "A1")

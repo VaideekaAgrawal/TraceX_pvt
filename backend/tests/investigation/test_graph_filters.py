@@ -205,6 +205,21 @@ def test_apply_filters_center_survives_isolation() -> None:
     assert filtered_edges == []
 
 
+def test_apply_filters_direction_self_loop_passes_under_either_direction() -> None:
+    """Regression test (code-review finding, Phase 6): a self-loop
+    transaction on `center` is simultaneously incoming and outgoing to
+    itself, so it must survive under EITHER `direction` filter, not be
+    unconditionally dropped by both."""
+    nodes = [_node("C")]
+    edges = [_edge("LOOP", "C", "C", 100.0)]
+
+    _, out_edges = apply_filters(nodes, edges, "C", GraphFilters(direction="out"))
+    assert {e["txn_id"] for e in out_edges} == {"LOOP"}
+
+    _, in_edges = apply_filters(nodes, edges, "C", GraphFilters(direction="in"))
+    assert {e["txn_id"] for e in in_edges} == {"LOOP"}
+
+
 # ── DB-backed: annotate_nodes / get_filtered_ego_graph ───────────────────
 
 
@@ -258,6 +273,37 @@ def test_get_filtered_ego_graph_radius_clamped_to_max() -> None:
     from investigation.graph_filters import MAX_RADIUS
 
     assert MAX_RADIUS == 4  # documented safety-valve value the plan specifies
+
+
+def test_get_filtered_ego_graph_center_survives_when_it_has_zero_transactions(
+    session: Session,
+) -> None:
+    """Regression test (code-review finding, Phase 6, highest severity):
+    `NetworkXGraphStore._build()` only seeds isolated accounts-df nodes when
+    the WHOLE case's transaction set is empty, not per-account -- so a
+    case-linked account with zero transactions, in a case where OTHER
+    linked accounts DO have transactions, used to be silently dropped from
+    the N-hop graph response entirely (`get_ego_graph` returned it with
+    `nodes: []`), breaking `apply_filters`' documented "center always
+    survives" guarantee. `CENTER` here has no transactions at all; `A`/`B`
+    do (between themselves, not touching `CENTER`) so the case's overall
+    transaction set is non-empty."""
+    for account_id in ("CENTER", "A", "B"):
+        _seed_account(session, account_id)
+    session.commit()
+    _seed_txn(session, "T1", "A", "B", 100.0)  # doesn't touch CENTER at all
+    session.commit()
+    _seed_case(session, "CASE1", "CENTER", ["CENTER", "A", "B"])
+    session.commit()
+
+    result = get_filtered_ego_graph(
+        session, "CASE1", "CENTER", radius=2, filters=GraphFilters(),
+        case_account_ids=["CENTER", "A", "B"],
+    )
+
+    assert [n["account_id"] for n in result["nodes"]] == ["CENTER"]
+    assert result["edges"] == []
+    assert result["center"] == "CENTER"
 
 
 def test_annotate_nodes_prior_sar_is_network_wide(session: Session) -> None:

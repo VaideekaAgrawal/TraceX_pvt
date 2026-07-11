@@ -18,10 +18,27 @@ actually looking at.
 
 Shares the `ai_interactions`/`AiAgent.RECOMMENDATION` namespace with
 `orchestration.account_explanation` -- no collision risk, since the two
-modules cache on disjoint keys (`facts["account_id"]` vs.
-`facts["pattern_signature"]`) and `_find_cached_by_signature` only ever
-matches rows carrying `pattern_signature`, which `account_explanation`
-never writes.
+modules cache on disjoint keys (`facts["account_id"]` vs. `facts
+["alert_id"]`).
+
+**Cache key is `alert_id`, NOT `pattern_signature`** (code-review finding,
+Phase 6, fixed from an earlier version of this module that cached on
+`compute_pattern_signature(detection_type, account_ids)` alone): `alerts.
+alert_id` is deterministic per `(account_ids, detection_type, detection
+date)` (`investigation.alerts.generate_alerts_from_detection` ->
+`make_deterministic_alert_id`), so the SAME `detection_type`+`account_ids`
+pair re-detected on a LATER date legitimately produces a second, different
+`Alert` row -- with its own `score`/`risk_score`/`severity`/`confidence`,
+which `_build_prompt` embeds directly into the LLM prompt text. Caching by
+pattern-shape alone meant a request for that newer alert could silently
+serve the older alert's stale explanation, with the wrong numbers baked
+into the prose and an internally-inconsistent `rule_anchors.alert_id`.
+Keying on `alert_id` (the natural unique identity of the entity being
+explained, same granularity as `account_explanation`'s per-account keying)
+eliminates that whole bug class rather than papering over the symptom.
+`compute_pattern_signature` is still computed and stored in `facts` --
+useful as a structural "same underlying pattern shape" fingerprint for a
+future feature (e.g. Phase 7's Similar Cases), just no longer the cache key.
 
 On success, this is the first real writer of `AiInteraction.rule_anchors`
 (always `None` on the `account_explanation` path) -- a structured pointer
@@ -35,33 +52,42 @@ Phase-5 code-review-fixed bug that must not regress): a failed/
 not-configured call returns `cached=False` with the error message
 surfaced, and writes NO `AiInteraction` row -- a transient outage must
 never get permanently "cached" as the answer.
+
+Shares the cache-lookup and generate-and-persist flow with
+`orchestration.account_explanation.explain_account` via `orchestration.
+llm_client.find_cached_interaction`/`generate_and_persist_explanation`
+(code-review finding, Phase 6: this module used to duplicate that whole
+flow near-verbatim).
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import time
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, AiAgent
 from db.models.base import utcnow
-from db.models.orchestration import AiInteraction
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
-from orchestration.llm_client import ExplanationUnavailableError
+from orchestration.llm_client import (
+    ExplanationUnavailableError,
+    find_cached_interaction,
+    generate_and_persist_explanation,
+)
 from orchestration.llm_client import call_openrouter as _call_openrouter
 
 
 def compute_pattern_signature(detection_type: str, account_ids: list[str]) -> str:
-    """Deterministic cache key for one detected pattern: a sha256 of the
-    JSON-serialized `{detection_type, account_ids}` (account_ids sorted, so
-    the same set in a different order hashes identically), truncated to 24
-    hex chars -- collision risk is irrelevant at this scale (a handful of
-    patterns per case), 24 chars just keeps it readable in logs/DB rows."""
+    """A structural "same underlying pattern shape" fingerprint: a sha256 of
+    the JSON-serialized `{detection_type, account_ids}` (account_ids sorted,
+    so the same set in a different order hashes identically), truncated to
+    24 hex chars. **Not the cache key** (see module docstring for why) --
+    stored in `facts["pattern_signature"]` as metadata a future feature
+    (e.g. Phase 7's Similar Cases) could group on."""
     payload = json.dumps(
         {"detection_type": detection_type, "account_ids": sorted(account_ids)}, sort_keys=True
     )
@@ -145,23 +171,6 @@ accounts and signals constitutes it
 - Maximum 4 sentences"""
 
 
-def _find_cached_by_signature(
-    repo: AiInteractionRepository, case_id: str, signature: str
-) -> AiInteraction | None:
-    """Most-recent-wins cache lookup over `ai_interactions`, filtered in
-    Python to this `pattern_signature` -- same shape as `orchestration.
-    account_explanation._find_cached`, filtering on the pattern-signature
-    key instead of `account_id`."""
-    matching = [
-        interaction
-        for interaction in repo.list_for_case_and_agent(case_id, AiAgent.RECOMMENDATION)
-        if interaction.facts is not None and interaction.facts.get("pattern_signature") == signature
-    ]
-    if not matching:
-        return None
-    return max(matching, key=lambda interaction: interaction.created_at)
-
-
 def explain_pattern(
     session: Session,
     case_id: str,
@@ -177,20 +186,25 @@ def explain_pattern(
     `alert_id` describes within `case_id`.
 
     Unless `force=True`, checks `ai_interactions` for a prior
-    `RECOMMENDATION` interaction carrying this exact pattern signature and
-    returns it (`cached=True`) without calling the LLM again. Otherwise
-    assembles fresh (already-persisted) facts and calls `call_openrouter`:
-    on success, persists a new `ai_interactions` row -- populating
+    `RECOMMENDATION` interaction for this exact `alert_id` (`orchestration.
+    llm_client.find_cached_interaction`, keyed on `facts["alert_id"]` -- see
+    module docstring for why this is `alert_id`, not a pattern-shape hash)
+    and returns it (`cached=True`) without calling the LLM again. Otherwise
+    assembles fresh (already-persisted) facts and calls `call_openrouter`
+    via `orchestration.llm_client.generate_and_persist_explanation`: on
+    success, persists a new `ai_interactions` row -- populating
     `rule_anchors` for the first time (see module docstring) -- and returns
     `cached=False`; on `ExplanationUnavailableError`, returns `cached=False`
     with the error message surfaced but writes NO `ai_interactions` row
     (identical contract to `explain_account` -- see module docstring)."""
     facts = _assemble_facts(session, case_id, alert_id)
-    signature = facts["pattern_signature"]
 
     interaction_repo = AiInteractionRepository(session)
     if not force:
-        cached = _find_cached_by_signature(interaction_repo, case_id, signature)
+        cached = find_cached_interaction(
+            interaction_repo, case_id, AiAgent.RECOMMENDATION,
+            key_field="alert_id", key_value=alert_id,
+        )
         if cached is not None:
             return {
                 "alert_id": alert_id,
@@ -199,14 +213,28 @@ def explain_pattern(
                 "model": cached.model,
                 "generated_at": cached.created_at,
                 "rule_anchors": cached.rule_anchors,
-                "pattern_signature": signature,
+                "pattern_signature": facts["pattern_signature"],
             }
 
     prompt = _build_prompt(facts)
+    rule_anchors = {
+        "detection_type": facts["detection_type"],
+        "rule_ids": facts["rule_ids"],
+        "alert_id": facts["alert_id"],
+    }
 
-    start = time.monotonic()
     try:
-        explanation = _call_openrouter(prompt, settings=settings)
+        interaction = generate_and_persist_explanation(
+            session,
+            call_fn=_call_openrouter,
+            prompt=prompt,
+            settings=settings,
+            case_id=case_id,
+            facts=facts,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            rule_anchors=rule_anchors,
+        )
     except ExplanationUnavailableError as exc:
         return {
             "alert_id": alert_id,
@@ -215,38 +243,15 @@ def explain_pattern(
             "model": settings.llm_model,
             "generated_at": utcnow(),
             "rule_anchors": None,
-            "pattern_signature": signature,
+            "pattern_signature": facts["pattern_signature"],
         }
-    latency_ms = int((time.monotonic() - start) * 1000)
-
-    rule_anchors = {
-        "detection_type": facts["detection_type"],
-        "rule_ids": facts["rule_ids"],
-        "alert_id": facts["alert_id"],
-    }
-
-    interaction = interaction_repo.create(
-        agent=AiAgent.RECOMMENDATION,
-        case_id=case_id,
-        user_id=actor_id,
-        request_text=prompt,
-        facts=facts,
-        rule_anchors=rule_anchors,
-        response_text=explanation,
-        model=settings.llm_model,
-        model_provider=settings.llm_provider,
-        redacted=False,
-        latency_ms=latency_ms,
-        actor_type=actor_type,
-        actor_id=actor_id,
-    )
 
     return {
         "alert_id": alert_id,
-        "explanation": explanation,
+        "explanation": interaction.response_text,
         "cached": False,
         "model": interaction.model,
         "generated_at": interaction.created_at,
         "rule_anchors": interaction.rule_anchors,
-        "pattern_signature": signature,
+        "pattern_signature": facts["pattern_signature"],
     }

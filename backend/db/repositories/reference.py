@@ -299,12 +299,36 @@ class TransactionRepository(BaseRepository[Transaction]):
         as_source: bool = True,
         as_dest: bool = True,
         limit: int = 500,
+        most_recent: bool = False,
     ) -> list[Transaction]:
         """Transactions touching `account_id` (as source and/or dest) within
         `[start, end]`, ordered by timestamp — the read pattern the two
         composite indexes `(source_account, timestamp)`/`(dest_account,
         timestamp)` exist for (ego-graph extraction, timeline
-        reconstruction, doc §3.1)."""
+        reconstruction, doc §3.1).
+
+        `most_recent=False` (default, unchanged behavior): `ORDER BY
+        timestamp ASC LIMIT limit` — for an account with more than `limit`
+        matching transactions, this keeps the OLDEST ones. Every existing
+        caller either windows tightly enough that this never matters, or
+        already deliberately wants "oldest-first, capped" (case-scoped graph
+        construction, where age doesn't matter, just completeness up to the
+        cap).
+
+        `most_recent=True`: fetches the newest `limit` rows (`ORDER BY
+        timestamp DESC LIMIT limit`) and reverses them back to ascending
+        order before returning — same `[start, end]`/composite-index-backed
+        query, just keeping the newest tail of a truncated result instead of
+        the oldest. Code-review finding, Phase 6: `investigation.
+        behavior_analysis`'s `velocity_increase`/`dormancy_reactivation`
+        treat the last element of this list as "most recent activity," and
+        `investigation.timeline.build_timeline`'s consumers may assume the
+        returned window reaches "now" — both silently broke for any account
+        exceeding `investigation.case_graph.CASE_SCOPE_TRANSACTION_LIMIT`
+        (10,000) under the old ascending-only behavior (the same class of
+        truncation bug Phase 5's review already fixed once for a different
+        caller, via `CASE_SCOPE_TRANSACTION_LIMIT` itself) — those two
+        callers now pass `most_recent=True`."""
         if not as_source and not as_dest:
             raise ValueError("at least one of as_source/as_dest must be True")
 
@@ -320,6 +344,9 @@ class TransactionRepository(BaseRepository[Transaction]):
             stmt = stmt.where(Transaction.timestamp >= start)
         if end is not None:
             stmt = stmt.where(Transaction.timestamp <= end)
+        if most_recent:
+            stmt = stmt.order_by(Transaction.timestamp.desc()).limit(limit)
+            return list(reversed(list(self.session.scalars(stmt))))
         stmt = stmt.order_by(Transaction.timestamp.asc()).limit(limit)
         return list(self.session.scalars(stmt))
 

@@ -1,10 +1,17 @@
 """
 `orchestration.pattern_explanation` -- ROADMAP Phase 6. Mirrors
 `tests/orchestration/test_account_explanation.py`'s structure: cache hit on
-repeat signature, cache miss on a different (unsorted-then-sorted)
-account_ids set, zero `AiInteraction` rows on failure (the same regression
-class `explain_account` was fixed for in Phase 5 -- must not regress here
-either), `rule_anchors` populated on success.
+repeat `alert_id`, cache miss on a different alert, zero `AiInteraction`
+rows on failure (the same regression class `explain_account` was fixed for
+in Phase 5 -- must not regress here either), `rule_anchors` populated on
+success.
+
+`test_explain_pattern_same_pattern_shape_different_alerts_do_not_share_cache`
+is the key regression test for the code-review finding that the cache used
+to key on `pattern_signature` (detection_type + account_ids) alone: two
+different `Alert` rows sharing that same shape but different
+severity/rule_ids/score must never serve one's cached explanation under the
+other's `alert_id`.
 """
 from __future__ import annotations
 
@@ -90,7 +97,7 @@ def test_explain_pattern_first_call_writes_interaction_with_rule_anchors(
     assert interactions[0].facts["pattern_signature"] == result["pattern_signature"]
 
 
-def test_explain_pattern_cache_hit_on_repeat_signature(
+def test_explain_pattern_cache_hit_on_repeat_alert_id(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed(session)
@@ -197,6 +204,79 @@ def test_explain_pattern_different_alert_is_a_cache_miss(
 
     assert len(calls) == 2  # both alerts triggered a real call
     assert result2["cached"] is False
+
+
+def test_explain_pattern_same_pattern_shape_different_alerts_do_not_share_cache(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test (code-review finding, Phase 6, highest-confidence
+    correctness bug): two different `Alert` rows sharing the exact same
+    `detection_type`/`account_ids` (the old cache key) but different
+    `severity`/`rule_ids`/`score` must NOT share a cached explanation --
+    each alert's own explanation/`rule_anchors.alert_id` must match the
+    alert actually requested, never leak the other's."""
+    _seed(session, account_ids=["A1", "A2"])
+    # AL2: identical detection_type + account_ids to AL1 (the seeded alert),
+    # but different severity/rule_ids/score -- exactly the scenario the old
+    # pattern_signature-only cache key would have collided on.
+    AlertRepository(session).create(
+        alert_id="AL2", detection_type=DetectionType.round_trip,
+        primary_account_id="A1", account_ids=["A1", "A2"], score=0.20, risk_score=20.0,
+        severity=RiskLevel.LOW, priority=Priority.P4, confidence="low",
+        rule_ids=["RULE_DIFFERENT"], status="open", source="pipeline", case_id="CASE1",
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    calls: list[str] = []
+
+    def _fake_call(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
+        calls.append(prompt)
+        return f"Explanation #{len(calls)}."
+
+    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+
+    result1 = pattern_explanation.explain_pattern(
+        session, "CASE1", "AL1",
+        settings=_settings(), actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    session.commit()
+    result2 = pattern_explanation.explain_pattern(
+        session, "CASE1", "AL2",
+        settings=_settings(), actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    session.commit()
+
+    # Both triggered a real LLM call -- no cache sharing despite identical
+    # pattern shape.
+    assert len(calls) == 2
+    assert result1["cached"] is False
+    assert result2["cached"] is False
+    assert result1["explanation"] != result2["explanation"]
+    # Each response's rule_anchors.alert_id matches the alert actually
+    # requested -- never the other one's.
+    assert result1["rule_anchors"]["alert_id"] == "AL1"
+    assert result1["rule_anchors"]["rule_ids"] == ["RULE_CYCLE_3"]
+    assert result2["rule_anchors"]["alert_id"] == "AL2"
+    assert result2["rule_anchors"]["rule_ids"] == ["RULE_DIFFERENT"]
+
+    # Both share the same pattern_signature (proving this really is the
+    # "same pattern shape" scenario the old cache key would have collided
+    # on), yet each still got persisted as its own AiInteraction row.
+    assert result1["pattern_signature"] == result2["pattern_signature"]
+    interactions = AiInteractionRepository(session).list_for_case_and_agent(
+        "CASE1", AiAgent.RECOMMENDATION
+    )
+    assert len(interactions) == 2
+
+    # Repeat-fetching AL1 must still hit ITS OWN cache entry, not AL2's.
+    refetch1 = pattern_explanation.explain_pattern(
+        session, "CASE1", "AL1",
+        settings=_settings(), actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    assert refetch1["cached"] is True
+    assert refetch1["explanation"] == result1["explanation"]
+    assert refetch1["rule_anchors"]["alert_id"] == "AL1"
 
 
 def test_explain_pattern_rejects_alert_outside_case_scope(session: Session) -> None:

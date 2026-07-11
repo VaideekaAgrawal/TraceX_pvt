@@ -31,12 +31,7 @@ from db.enums import Channel, EvidenceType, NoteSource
 from db.models.investigation import Case
 from db.models.platform import User
 from db.models.reference import Account
-from db.repositories.investigation import (
-    CaseAccountRepository,
-    CaseRepository,
-    EvidenceRepository,
-    NoteRepository,
-)
+from db.repositories.investigation import CaseRepository, EvidenceRepository, NoteRepository
 from db.session import get_db
 from foundation.auth import (
     actor_type_for_role,
@@ -44,6 +39,7 @@ from foundation.auth import (
     get_current_user,
     require_case_access,
     require_case_scoped_account,
+    require_case_scoped_account_with_ids,
 )
 from foundation.config import Settings
 from investigation import behavior_analysis, customer_profile, timeline, transaction_search
@@ -272,7 +268,7 @@ def get_account_graph(
     roles: list[str] | None = Query(default=None),
     prior_sar_only: bool = Query(default=False),
     case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    account_and_ids: tuple[Account, list[str]] = Depends(require_case_scoped_account_with_ids),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NHopGraphResponse:
@@ -281,7 +277,14 @@ def get_account_graph(
     `MAX_RADIUS` here (the real safety valve -- `get_filtered_ego_graph`
     clamps again defensively). Also closes the ROADMAP Phase 4
     `graph_expanded` audit-hook deferral: this is the case-scoped
-    graph-view endpoint that deferral was waiting on."""
+    graph-view endpoint that deferral was waiting on.
+
+    Uses `require_case_scoped_account_with_ids` (not the plain
+    `require_case_scoped_account`) so the case's scoped account-id set --
+    already computed by that dependency to validate `account_id` -- is
+    reused for `get_filtered_ego_graph` instead of being re-queried
+    (code-review finding, Phase 6)."""
+    account, case_account_ids = account_and_ids
     clamped_radius = min(radius, MAX_RADIUS)
     filters = GraphFilters(
         suspicious_only=suspicious_only,
@@ -295,7 +298,6 @@ def get_account_graph(
         roles=roles,
         prior_sar_only=prior_sar_only,
     )
-    case_account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
     result = get_filtered_ego_graph(
         db,
         case.case_id,
@@ -385,13 +387,18 @@ def search_case_transactions(
 def search_account_transactions(
     params: _TransactionSearchParams = Depends(),
     case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    account_and_ids: tuple[Account, list[str]] = Depends(require_case_scoped_account_with_ids),
     db: Session = Depends(get_db),
 ) -> TransactionSearchResponse:
+    # Reuses the scoped account-id set `require_case_scoped_account_with_ids`
+    # already computed to validate `account_id`, instead of re-querying it
+    # inside `transaction_search.search` (code-review finding, Phase 6).
+    account, case_account_ids = account_and_ids
     result = transaction_search.search(
         db,
         case.case_id,
         account_id=account.account_id,
+        case_account_ids=case_account_ids,
         min_amount=params.min_amount,
         max_amount=params.max_amount,
         start=params.start,

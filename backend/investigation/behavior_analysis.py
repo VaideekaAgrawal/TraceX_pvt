@@ -32,12 +32,14 @@ calls -- no formula for either exists anywhere to port, same precedent as
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from db.models.reference import Transaction
+from db.repositories.investigation import CaseAccountRepository
 from db.repositories.reference import TransactionRepository
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT
 
@@ -50,61 +52,87 @@ def _month_key(ts: datetime) -> str:
     return f"{ts.year:04d}-{ts.month:02d}"
 
 
+def _bucket_by_month(
+    txns: list[Transaction],
+    *,
+    include: Callable[[Transaction], bool],
+    amounts_of: Callable[[Transaction], dict[str, float]],
+) -> list[dict[str, Any]]:
+    """Shared "filter -> bucket by calendar month -> sum one or more amount
+    fields -> sort ascending" reducer (code-review finding, Phase 6:
+    `monthly_totals`/`cash_deposit_trend`/`transfer_trend` each hand-rolled
+    an identical version of this loop).
+
+    `include(txn)` decides which transactions count toward the bucket set
+    at all. `amounts_of(txn)` returns a `{field_name: amount_to_add}` dict
+    for a counted transaction -- may be empty (a transaction that counts
+    toward `txn_count` but contributes to no summed field this call cares
+    about). `cash_deposit_trend`/`transfer_trend` each contribute exactly
+    one field; `monthly_totals` contributes `total_in`/`total_out`
+    conditionally per transaction and fills in whichever field a given
+    month never saw a contribution for afterward (see its own docstring)."""
+    buckets: dict[str, dict[str, Any]] = {}
+    for txn in txns:
+        if not include(txn):
+            continue
+        key = _month_key(txn.timestamp)
+        bucket = buckets.setdefault(key, {"month": key, "txn_count": 0})
+        for field, amount in amounts_of(txn).items():
+            bucket[field] = bucket.get(field, 0.0) + amount
+        bucket["txn_count"] += 1
+    return [buckets[key] for key in sorted(buckets)]
+
+
 def monthly_totals(txns: list[Transaction], account_id: str) -> list[dict[str, Any]]:
     """Monthly inflow/outflow/total for `account_id`, sorted ascending by
     month -- "monthly spending" (spec item 1)."""
-    buckets: dict[str, dict[str, Any]] = {}
-    for txn in txns:
-        if txn.source_account != account_id and txn.dest_account != account_id:
-            continue
-        key = _month_key(txn.timestamp)
-        bucket = buckets.setdefault(
-            key, {"month": key, "total_in": 0.0, "total_out": 0.0, "txn_count": 0}
-        )
+
+    def amounts_of(txn: Transaction) -> dict[str, float]:
+        amounts: dict[str, float] = {}
         if txn.dest_account == account_id:
-            bucket["total_in"] += float(txn.amount)
+            amounts["total_in"] = float(txn.amount)
         if txn.source_account == account_id:
-            bucket["total_out"] += float(txn.amount)
-        bucket["txn_count"] += 1
-    result = []
-    for key in sorted(buckets):
-        bucket = buckets[key]
+            amounts["total_out"] = float(txn.amount)
+        return amounts
+
+    buckets = _bucket_by_month(
+        txns,
+        include=lambda t: t.source_account == account_id or t.dest_account == account_id,
+        amounts_of=amounts_of,
+    )
+    for bucket in buckets:
+        # A month whose transactions were entirely one-directional never got
+        # the other field set by `_bucket_by_month`'s `amounts_of` -- fill it
+        # in so every bucket always carries both fields, matching this
+        # function's pre-existing contract.
+        bucket.setdefault("total_in", 0.0)
+        bucket.setdefault("total_out", 0.0)
         bucket["total"] = bucket["total_in"] + bucket["total_out"]
-        result.append(bucket)
-    return result
+    return buckets
 
 
 def cash_deposit_trend(txns: list[Transaction], account_id: str) -> list[dict[str, Any]]:
     """Monthly cash-deposit totals -- `channel == branch_cash` AND
     `account_id` is the receiving side (spec item 2)."""
-    buckets: dict[str, dict[str, Any]] = {}
-    for txn in txns:
-        if txn.dest_account != account_id:
-            continue
-        if str(txn.channel) != "branch_cash":
-            continue
-        key = _month_key(txn.timestamp)
-        bucket = buckets.setdefault(key, {"month": key, "cash_deposit_total": 0.0, "txn_count": 0})
-        bucket["cash_deposit_total"] += float(txn.amount)
-        bucket["txn_count"] += 1
-    return [buckets[key] for key in sorted(buckets)]
+    return _bucket_by_month(
+        txns,
+        include=lambda t: t.dest_account == account_id and str(t.channel) == "branch_cash",
+        amounts_of=lambda t: {"cash_deposit_total": float(t.amount)},
+    )
 
 
 def transfer_trend(txns: list[Transaction], account_id: str) -> list[dict[str, Any]]:
     """Monthly transfer totals -- `txn_type == "transfer"` (the schema's
     own field, not an invented channel heuristic), touching `account_id`
     (spec item 3)."""
-    buckets: dict[str, dict[str, Any]] = {}
-    for txn in txns:
-        if txn.source_account != account_id and txn.dest_account != account_id:
-            continue
-        if txn.txn_type != "transfer":
-            continue
-        key = _month_key(txn.timestamp)
-        bucket = buckets.setdefault(key, {"month": key, "transfer_total": 0.0, "txn_count": 0})
-        bucket["transfer_total"] += float(txn.amount)
-        bucket["txn_count"] += 1
-    return [buckets[key] for key in sorted(buckets)]
+    return _bucket_by_month(
+        txns,
+        include=lambda t: (
+            (t.source_account == account_id or t.dest_account == account_id)
+            and t.txn_type == "transfer"
+        ),
+        amounts_of=lambda t: {"transfer_total": float(t.amount)},
+    )
 
 
 def dormancy_reactivation(
@@ -193,17 +221,21 @@ def velocity_increase(
 
 
 def analyze(session: Session, case_id: str, account_id: str) -> dict[str, Any]:
-    """Fetch `account_id`'s transactions once (`limit=CASE_SCOPE_
-    TRANSACTION_LIMIT` -- same case-scoped-is-small-but-not-500 reasoning as
-    every other Phase 5/6 caller of `list_for_account_in_window`) and run
-    every reducer above over it. `case_id` is accepted but not otherwise
-    used here -- kept for signature consistency with this module's sibling
-    L2 functions (`investigation.customer_profile.build_customer_profile`,
-    `investigation.timeline.build_timeline`), which `api.routes.l2`'s route
-    handlers call the same way, even though this function's own computation
-    is single-account and doesn't need case scope."""
+    """Validates `account_id` is in `case_id`'s scope (defense-in-depth --
+    see `investigation.timeline.build_timeline`'s docstring for the same
+    pattern/reasoning; raises `ValueError` otherwise), then fetches
+    `account_id`'s transactions once (`limit=CASE_SCOPE_TRANSACTION_LIMIT`,
+    `most_recent=True` -- code-review finding, Phase 6:
+    `velocity_increase`/`dormancy_reactivation` both treat the tail of this
+    list as "most recent activity," which the old ascending-then-limit
+    order could silently truncate away for an account exceeding the cap)
+    and runs every reducer above over it."""
+    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
+    if account_id not in case_account_ids:
+        raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
+
     txns = TransactionRepository(session).list_for_account_in_window(
-        account_id, limit=CASE_SCOPE_TRANSACTION_LIMIT
+        account_id, limit=CASE_SCOPE_TRANSACTION_LIMIT, most_recent=True
     )
     return {
         "account_id": account_id,

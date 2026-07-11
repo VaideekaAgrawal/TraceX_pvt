@@ -26,6 +26,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from db.repositories.investigation import CaseAccountRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from investigation import previous_alerts
 from investigation.behavior_analysis import monthly_totals
@@ -47,7 +48,15 @@ def build_customer_profile(session: Session, case_id: str, account_id: str) -> d
     =case_id)` (prior-SAR count/history), and `TransactionRepository.
     list_for_account_in_window` + `investigation.behavior_analysis.
     monthly_totals` for actual-vs-`Account.expected_monthly_volume`
-    variance."""
+    variance.
+
+    Validates `account_id` is in `case_id`'s scope (defense-in-depth -- see
+    `investigation.timeline.build_timeline`'s docstring for the same
+    pattern/reasoning; raises `ValueError` otherwise)."""
+    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
+    if account_id not in case_account_ids:
+        raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
+
     account = AccountRepository(session).get(account_id)
     customer = (
         CustomerRepository(session).get(account.customer_id)

@@ -18,13 +18,35 @@ Every caller of `call_openrouter` is independently responsible for its own
 guardrail property (facts assembled server-side only, never attacker-
 controllable free text) — this module only knows how to make the call, not
 what's safe to put in the prompt that reaches it.
+
+Also holds `find_cached_interaction`/`generate_and_persist_explanation` --
+the shared cache-lookup and generate-and-persist tail
+`account_explanation.explain_account`/`pattern_explanation.explain_pattern`
+both need (code-review finding, Phase 6: those two flows were near-verbatim
+duplicates of each other; extracted here on the same "second real caller"
+precedent as `call_openrouter` itself, one layer up). `generate_and_persist_
+explanation` takes the actual LLM call as a `call_fn` parameter rather than
+calling `call_openrouter` itself, so each caller still passes its OWN
+module-local `_call_openrouter` reference — this is what keeps each
+module's existing `monkeypatch.setattr(account_explanation,
+"_call_openrouter", ...)`-style test seam working unchanged: `call_fn` is
+resolved in the CALLER's frame (picking up whatever that name currently
+refers to there, including a monkeypatched value) before this function ever
+sees it.
 """
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
+from typing import Any
 
 import httpx
+from sqlalchemy.orm import Session
 
+from db.enums import ActorType, AiAgent
+from db.models.orchestration import AiInteraction
+from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -81,3 +103,69 @@ def call_openrouter(prompt: str, *, settings: Settings, max_tokens: int = 300) -
     except Exception as exc:  # noqa: BLE001 -- narrowed to ExplanationUnavailableError below
         logger.warning("OpenRouter call failed: %s", exc)
         raise ExplanationUnavailableError(f"Could not generate explanation: {exc}") from exc
+
+
+def find_cached_interaction(
+    repo: AiInteractionRepository, case_id: str, agent: AiAgent, *, key_field: str, key_value: str
+) -> AiInteraction | None:
+    """Most-recent-wins cache lookup over `ai_interactions`, filtered in
+    Python to `interaction.facts[key_field] == key_value` (see
+    `AiInteractionRepository.list_for_case_and_agent`'s docstring for why
+    this filtering step can't be pushed into SQL). Shared by
+    `account_explanation.explain_account` (`key_field="account_id"`) and
+    `pattern_explanation.explain_pattern` (`key_field="alert_id"`) -- both
+    cache in the same `ai_interactions`/`AiAgent.RECOMMENDATION` namespace
+    but on disjoint keys, so no collision risk from sharing this lookup."""
+    matching = [
+        interaction
+        for interaction in repo.list_for_case_and_agent(case_id, agent)
+        if interaction.facts is not None and interaction.facts.get(key_field) == key_value
+    ]
+    if not matching:
+        return None
+    return max(matching, key=lambda interaction: interaction.created_at)
+
+
+def generate_and_persist_explanation(
+    session: Session,
+    *,
+    call_fn: Callable[..., str],
+    prompt: str,
+    settings: Settings,
+    case_id: str,
+    facts: dict[str, Any],
+    actor_type: ActorType,
+    actor_id: str,
+    rule_anchors: dict[str, Any] | None = None,
+) -> AiInteraction:
+    """Timed LLM call + `AiInteraction` persistence -- the shared tail of
+    `account_explanation.explain_account`/`pattern_explanation.
+    explain_pattern`'s near-identical flows (code-review finding, Phase 6).
+
+    Calls `call_fn(prompt, settings=settings)` rather than `call_openrouter`
+    directly -- see module docstring for why (preserves each caller's own
+    monkeypatch-at-`_call_openrouter` test seam). Raises
+    `ExplanationUnavailableError` on failure, propagated from `call_fn` and
+    NOT caught here -- the caller decides how to surface it (matching
+    `call_openrouter`'s own "the caller decides" contract). Does NOT commit
+    -- caller owns the transaction boundary, matching every other
+    investigation/orchestration-layer function."""
+    start = time.monotonic()
+    explanation = call_fn(prompt, settings=settings)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    return AiInteractionRepository(session).create(
+        agent=AiAgent.RECOMMENDATION,
+        case_id=case_id,
+        user_id=actor_id,
+        request_text=prompt,
+        facts=facts,
+        rule_anchors=rule_anchors,
+        response_text=explanation,
+        model=settings.llm_model,
+        model_provider=settings.llm_provider,
+        redacted=False,
+        latency_ms=latency_ms,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )

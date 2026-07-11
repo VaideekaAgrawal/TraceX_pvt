@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from db.repositories.investigation import CaseAccountRepository
 from db.repositories.reference import TransactionRepository
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT
 
@@ -37,17 +38,26 @@ def build_timeline(
 ) -> dict[str, Any]:
     """Chronological (ascending by `timestamp`) reconstruction of every
     transaction touching `account_id`, optionally windowed. Reuses
-    `TransactionRepository.list_for_account_in_window` verbatim -- its
-    `ORDER BY timestamp ASC` is exactly the composite-index-backed read
-    pattern (`db/models/reference.py::Transaction`'s `(source_account,
-    timestamp)`/`(dest_account, timestamp)` indexes) this needs, so no
-    extra sort is applied here. `case_id` is accepted for signature
-    consistency with this module's L2 siblings (`investigation.
-    customer_profile.build_customer_profile`, `investigation.
-    behavior_analysis.analyze`) even though this function's own computation
-    is single-account and doesn't need case scope."""
+    `TransactionRepository.list_for_account_in_window` with
+    `most_recent=True` (code-review finding, Phase 6: the default
+    ascending-then-limit order silently kept the OLDEST transactions for an
+    account exceeding `CASE_SCOPE_TRANSACTION_LIMIT`, so a caller assuming
+    the returned window reaches "now" would be wrong; `most_recent=True`
+    fetches the newest `limit` rows and reverses them back to ascending
+    order, so no extra sort is applied here beyond that).
+
+    Validates `account_id` is in `case_id`'s scope (defense-in-depth --
+    the real boundary check is the route dependency, `foundation.auth.
+    require_case_scoped_account`; this repeats it because this function is
+    also directly unit-testable/callable without going through HTTP,
+    matching `orchestration.pattern_explanation._assemble_facts`'s
+    precedent) -- raises `ValueError` otherwise."""
+    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
+    if account_id not in case_account_ids:
+        raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
+
     txns = TransactionRepository(session).list_for_account_in_window(
-        account_id, start=start, end=end, limit=CASE_SCOPE_TRANSACTION_LIMIT
+        account_id, start=start, end=end, limit=CASE_SCOPE_TRANSACTION_LIMIT, most_recent=True
     )
     events = []
     for txn in txns:
