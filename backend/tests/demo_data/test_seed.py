@@ -1,9 +1,11 @@
 """
 Coverage for `demo_data.seed.run_demo_data_studio`: idempotency (a second
 run against the same DB is a true no-op), the `DEMO-` prefix invariant
-across every id this package creates, and that `case_feature_vector` rows
-are exactly 16-length (the RL context vector's dimensionality,
-`detection.rl.bandit.LinUCBAgent.FEATURE_NAMES`).
+across every id this package creates, that `case_feature_vector` rows are
+exactly 16-length (the RL context vector's dimensionality, `detection.rl.
+bandit.LinUCBAgent.FEATURE_NAMES`), and (ROADMAP Phase 7) that the
+`relationship_discovery` stage genuinely rediscovers Phase 1B's seeded
+shared-attribute clusters into real `relationships` rows.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType
 from db.models.detection import DetectionFeedback, RlArmState
 from db.models.investigation import CaseFeatureVector, CaseStatusHistory
+from db.models.orchestration import Relationship
 from db.models.platform import AuditLog, IngestionLog, Watchlist
 from db.models.reference import Account, Customer, Transaction
 from demo_data.config import DEMO_PREFIX
@@ -23,8 +26,9 @@ _ACTOR_ID = "test-demo-data-studio"
 
 def _row_counts(session: Session) -> dict[str, int]:
     """Row counts for every table this package writes to (directly or via
-    `case_status_history`/`detection_feedback`/`rl_arm_state`) -- used to
-    prove a second run inserts zero new rows anywhere it touches."""
+    `case_status_history`/`detection_feedback`/`rl_arm_state`/
+    `relationships`) -- used to prove a second run inserts zero new rows
+    anywhere it touches."""
     tables = {
         "customers": Customer,
         "accounts": Account,
@@ -33,6 +37,7 @@ def _row_counts(session: Session) -> dict[str, int]:
         "case_feature_vector": CaseFeatureVector,
         "detection_feedback": DetectionFeedback,
         "rl_arm_state": RlArmState,
+        "relationships": Relationship,
         "watchlist": Watchlist,
         "ingestion_log": IngestionLog,
         "audit_log": AuditLog,
@@ -50,6 +55,7 @@ def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
 
     assert first_summary.kyc_customers_created > 0
     assert first_summary.relationship_clusters_created > 0
+    assert first_summary.relationships_discovered > 0
     assert first_summary.historical_cases_created > 0
     assert first_summary.golden_scenarios_created == 7
     assert first_summary.already_seeded == []
@@ -61,14 +67,43 @@ def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
 
     assert second_summary.kyc_customers_created == 0
     assert second_summary.relationship_clusters_created == 0
+    assert second_summary.relationships_discovered == 0
     assert second_summary.historical_cases_created == 0
     assert second_summary.golden_scenarios_created == 0
     assert set(second_summary.already_seeded) == {
-        "kyc_customers", "relationships", "historical_cases", "golden_scenarios",
+        "kyc_customers", "relationships", "relationship_discovery",
+        "historical_cases", "golden_scenarios",
     }
 
     counts_after_second = _row_counts(session)
     assert counts_after_second == counts_after_first
+
+
+def test_relationship_discovery_rediscovers_seeded_clusters(session: Session) -> None:
+    """PAN collisions across the ~200-strong KYC pool are effectively
+    impossible outside a deliberately-seeded Phase 1B cluster (5 random
+    uppercase letters + index + checksum letter, per `demo_data.
+    kyc_customers._synthetic_pan`) -- so any discovered `shared_attribute
+    ="pan"` relationship IS evidence a seeded cluster was genuinely
+    rediscovered, not a coincidental collision. `income_bracket`/`branch`
+    are locked-v1-scope attributes `seed_relationship_networks` also
+    rotates through, expected to surface too (`phone`/`email`/`address`/
+    `employer` clusters are intentionally NOT rediscoverable -- out of
+    Relationship Explorer v1's locked scope, `docs/DATA_SCHEMA.md`)."""
+    run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    session.commit()
+
+    by_attribute: dict[str, list[Relationship]] = {}
+    for rel in session.scalars(select(Relationship)):
+        by_attribute.setdefault(rel.shared_attribute, []).append(rel)
+
+    assert set(by_attribute) <= {"pan", "name", "income_bracket", "branch"}
+    assert len(by_attribute.get("pan", [])) > 0
+    assert len(by_attribute.get("income_bracket", [])) > 0
+    assert len(by_attribute.get("branch", [])) > 0
+    for rel in by_attribute["pan"]:
+        assert rel.confidence == 0.95
+        assert rel.method == "shared_attribute_v1"
 
 
 def test_every_created_id_is_demo_prefixed(session: Session) -> None:

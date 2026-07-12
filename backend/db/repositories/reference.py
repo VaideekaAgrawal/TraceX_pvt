@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, or_, select
 
 from db.enums import (
     AccountStatus,
@@ -137,6 +137,33 @@ class CustomerRepository(BaseRepository[Customer]):
         if not customer_ids:
             return []
         stmt = select(Customer).where(Customer.customer_id.in_(customer_ids))
+        return list(self.session.scalars(stmt))
+
+    def list_relationship_candidate_pool(self, *, limit: int = 5001) -> list[Customer]:
+        """Relationship Explorer v1 discovery's candidate pool (ROADMAP
+        Phase 7, `investigation.relationship_discovery`) — gated on `pan IS
+        NOT NULL OR income_bracket IS NOT NULL`, not every customer.
+
+        This is a real-data scale requirement, not just a perf shortcut:
+        166,207 real ingested customers vs. ~200 Phase-1B demo KYC
+        customers means an unbounded pairwise comparison is ~2.8x10^10
+        pairs (never happening). A customer with neither field on file also
+        has no genuine KYC-quality signal to corroborate a match on — the
+        same "wait on data" reasoning `docs/DATA_SCHEMA.md` already applies
+        to the device/IP attributes Relationship Explorer v1 defers
+        entirely, applied here to the real customer population instead of
+        a whole attribute.
+
+        `limit` defaults to 5001 (`investigation.relationship_discovery.
+        MAX_CANDIDATE_POOL_SIZE + 1`) so that module's caller can detect
+        "the gated pool exceeds the safety valve" (`len(result) >
+        MAX_CANDIDATE_POOL_SIZE`) from this single query's result, without a
+        separate `COUNT(*)` round trip."""
+        stmt = (
+            select(Customer)
+            .where(or_(Customer.pan.is_not(None), Customer.income_bracket.is_not(None)))
+            .limit(limit)
+        )
         return list(self.session.scalars(stmt))
 
 

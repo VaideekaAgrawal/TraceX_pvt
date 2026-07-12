@@ -187,3 +187,36 @@ class RelationshipRepository(BaseRepository[Relationship]):
             or_(Relationship.entity_a == customer_id, Relationship.entity_b == customer_id)
         )
         return list(self.session.scalars(stmt))
+
+    def find_existing(
+        self, entity_a: str, entity_b: str, shared_attribute: str
+    ) -> Relationship | None:
+        """Idempotency check for `investigation.relationship_discovery`
+        (ROADMAP Phase 7): a rerun of the discovery job must not create a
+        duplicate row for a pair/attribute-type combination it already
+        found. Callers must canonicalize the pair (lexicographically
+        sorted `entity_a < entity_b`) before calling this AND before
+        `create()` -- this method only checks the exact `(entity_a,
+        entity_b)` order given, it does not also try the swapped order."""
+        stmt = select(Relationship).where(
+            Relationship.entity_a == entity_a,
+            Relationship.entity_b == entity_b,
+            Relationship.shared_attribute == shared_attribute,
+        )
+        return self.session.scalars(stmt).first()
+
+    def list_for_entities(self, customer_ids: list[str]) -> list[Relationship]:
+        """Batched sibling of `list_for_entity` -- avoids a per-customer
+        round trip when a caller (e.g. `investigation.relationship_graph.
+        build_case_relationship_graph`) already has a small, bounded list
+        of customer ids to resolve relationships for at once (same idiom as
+        `AlertRepository.list_for_primary_accounts`)."""
+        if not customer_ids:
+            return []
+        stmt = select(Relationship).where(
+            or_(
+                Relationship.entity_a.in_(customer_ids),
+                Relationship.entity_b.in_(customer_ids),
+            )
+        )
+        return list(self.session.scalars(stmt))
