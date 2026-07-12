@@ -23,7 +23,11 @@ from db.models.base import utcnow
 from db.models.detection import Alert
 from db.models.investigation import Case
 from db.repositories.detection import AlertRepository, DetectionFeedbackRepository
-from db.repositories.investigation import CaseAccountRepository, CaseRepository
+from db.repositories.investigation import (
+    CaseAccountRepository,
+    CaseFeatureVectorRepository,
+    CaseRepository,
+)
 from detection.rl.bandit import LinUCBAgent
 from investigation.assignment import auto_assign
 from investigation.fsm import transition_case
@@ -115,14 +119,22 @@ CLOSING_TRANSITIONS: dict[CaseResolution, CaseStatus] = {
 #: case generator, needs the identical mapping). Imported, not duplicated.
 
 
-def _case_rl_features(case: Case) -> dict:
+def case_rl_features(case: Case) -> dict:
     """Adapt a `Case` row into the flat feature dict `LinUCBAgent.
     build_context` expects -- source-specific extraction (reading
     `case.typology`/`case.risk_score`) stays here; the shared dict-shape/
     defaulting is `investigation.rl_features.base_rl_feature_dict`
     (code-review finding, Phase 4: this used to duplicate
     `investigation.prioritization._build_account_features`'s copy of the
-    same defaulting)."""
+    same defaulting).
+
+    Public (not `_case_rl_features`, Phase 7 code-review-style promotion --
+    same "promote on second real caller" convention as `CLOSING_TRANSITIONS`/
+    `SETS_CLOSED_AT` above): `investigation.similar_cases.
+    compute_query_vector` is a second real caller that needs the identical
+    `Case` -> RL-context-dict adaptation for an OPEN case's on-the-fly query
+    vector, so it stays consistent with the vector `close_case` persists for
+    a resolved one."""
     patterns = [case.typology] if case.typology else []
     return {
         "account_id": case.primary_account_id,
@@ -211,7 +223,24 @@ def close_case(
     )
 
     agent = LinUCBAgent(session, actor_type=actor_type, actor_id=actor_id)
-    context = agent.build_context(_case_rl_features(case))
+    context = agent.build_context(case_rl_features(case))
     agent.receive_feedback(case.primary_account_id, context, is_true_positive=reward > 0)
+
+    # Closes the Similar Historical Cases corpus gap (ROADMAP Phase 7): the
+    # exact same 16-dim `context` just fed to the bandit is reused, not
+    # recomputed, to persist this case's `case_feature_vector` row -- the
+    # only place a REAL (non-demo-seeded) case ever gets one, written once,
+    # here, when it's actually resolved (an open case's query vector is
+    # computed on-the-fly instead -- `investigation.similar_cases.
+    # compute_query_vector` -- never persisted, since its outcome doesn't
+    # exist yet).
+    CaseFeatureVectorRepository(session).upsert(
+        case_id=case_id,
+        vector=context.tolist(),
+        typology=case.typology,
+        outcome=resolution,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
 
     return case

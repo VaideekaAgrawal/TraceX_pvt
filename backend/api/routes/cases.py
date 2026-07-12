@@ -42,6 +42,7 @@ from investigation import account_facts, case_graph, previous_alerts
 from investigation.cases import close_case
 from investigation.fsm import InvalidTransitionError, transition_case
 from investigation.network_risk import compute_network_risk
+from investigation.similar_cases import find_similar_cases
 from orchestration.account_explanation import explain_account
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -159,6 +160,19 @@ class NetworkRiskResponse(BaseModel):
     case_id: str
     network_risk_score: float | None
     network_risk_reasons: dict[str, Any] | None
+
+
+class SimilarCaseItem(BaseModel):
+    case_id: str
+    similarity: float
+    typology: str | None
+    outcome: str | None
+    computed_at: datetime
+
+
+class SimilarCasesResponse(BaseModel):
+    case_id: str
+    similar_cases: list[SimilarCaseItem]
 
 
 class ExplanationResponse(BaseModel):
@@ -427,6 +441,44 @@ def recompute_network_risk(
     db: Session = Depends(get_db),
 ) -> NetworkRiskResponse:
     return _compute_and_respond(db, case, user)
+
+
+# ── Similar Historical Cases ──────────────────────────────────────────────
+
+
+@router.get("/{case_id}/similar-cases", response_model=SimilarCasesResponse)
+def get_similar_cases(
+    top_k: int = Query(default=5),
+    case: Case = Depends(require_case_access),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SimilarCasesResponse:
+    """Cosine similarity over the RL 16-dim feature vector
+    (`investigation.similar_cases`). GET-only, no `/recompute` sibling --
+    unlike Network Risk Score's stored-then-lazily-computed score, every
+    call here is already a live query (the query case's own vector is
+    computed on-the-fly, never persisted -- see that module's docstring),
+    so there is nothing to lazily cache."""
+    results = find_similar_cases(
+        db,
+        case.case_id,
+        top_k=top_k,
+        actor_type=actor_type_for_role(user.role),
+        actor_id=user.user_id,
+    )
+    return SimilarCasesResponse(
+        case_id=case.case_id,
+        similar_cases=[
+            SimilarCaseItem(
+                case_id=r.case_id,
+                similarity=r.similarity,
+                typology=r.typology,
+                outcome=str(r.outcome) if r.outcome is not None else None,
+                computed_at=r.computed_at,
+            )
+            for r in results
+        ],
+    )
 
 
 # ── AI account explanation ────────────────────────────────────────────────

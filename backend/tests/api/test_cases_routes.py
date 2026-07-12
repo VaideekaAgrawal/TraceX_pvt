@@ -28,7 +28,11 @@ from db.enums import (
 )
 from db.models import Base
 from db.repositories.detection import AlertRepository, DetectionFeedbackRepository
-from db.repositories.investigation import CaseAccountRepository, CaseRepository
+from db.repositories.investigation import (
+    CaseAccountRepository,
+    CaseFeatureVectorRepository,
+    CaseRepository,
+)
 from db.repositories.orchestration import AiInteractionRepository
 from db.repositories.platform import UserRepository
 from db.repositories.reference import AccountRepository
@@ -326,6 +330,78 @@ def test_network_risk_lazy_fill_then_recompute(
     resp = client.post("/cases/CASE1/network-risk/recompute", headers=_auth_headers(token))
     assert resp.status_code == 200
     assert resp.json()["network_risk_score"] == body["network_risk_score"]
+
+
+def test_similar_cases_returns_ranked_resolved_corpus_excluding_self(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.IN_PROGRESS,
+    )
+    # `CASE1`'s query vector (`typology="layering"`, `risk_score=80.0`, every
+    # other `base_rl_feature_dict` dim at its default) is exactly:
+    #   [0.8, 0, 0, 0.2, 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.2, 1.0]
+    # -- computed here (not asserted blind) so `CASE_HIST_1`/`CASE_HIST_2`
+    # below can be constructed as deliberately near-identical/orthogonal to
+    # it, making the expected ranking exact rather than incidental.
+    query_vector = [0.8, 0.0, 0.0, 0.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 1.0]
+    orthogonal_vector = [0.0, 5.0] + [0.0] * 14  # nonzero only where query_vector is 0
+
+    with db_sessionmaker() as db:
+        CaseRepository(db).update(
+            "CASE1", typology="layering", risk_score=80.0,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        # A resolved corpus row for CASE1 itself (as if this same case had
+        # been closed previously) -- must never appear in its own results.
+        CaseFeatureVectorRepository(db).upsert(
+            case_id="CASE1", vector=query_vector, typology="layering",
+            outcome=CaseResolution.TRUE_POSITIVE_SAR,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CaseFeatureVectorRepository(db).upsert(
+            case_id="CASE_HIST_1", vector=query_vector, typology="layering",
+            outcome=CaseResolution.TRUE_POSITIVE_SAR,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CaseFeatureVectorRepository(db).upsert(
+            case_id="CASE_HIST_2", vector=orthogonal_vector, typology="dormancy",
+            outcome=CaseResolution.FALSE_POSITIVE,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        db.commit()
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases/CASE1/similar-cases", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["case_id"] == "CASE1"
+    result_ids = [item["case_id"] for item in body["similar_cases"]]
+    assert "CASE1" not in result_ids
+    assert result_ids == ["CASE_HIST_1", "CASE_HIST_2"]
+    assert body["similar_cases"][0]["outcome"] == "TRUE_POSITIVE_SAR"
+
+    resp_top1 = client.get(
+        "/cases/CASE1/similar-cases", params={"top_k": 1}, headers=_auth_headers(token)
+    )
+    assert resp_top1.status_code == 200
+    assert len(resp_top1.json()["similar_cases"]) == 1
+
+
+def test_similar_cases_requires_case_access(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV",
+    )
+    other_token = _login(client, "inv2")
+    resp = client.get("/cases/CASE1/similar-cases", headers=_auth_headers(other_token))
+    assert resp.status_code == 403
 
 
 def test_account_explanation_second_call_is_cached(

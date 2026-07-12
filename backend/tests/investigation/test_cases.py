@@ -18,11 +18,11 @@ from db.repositories.detection import (
     DetectionFeedbackRepository,
     RlArmStateRepository,
 )
-from db.repositories.investigation import CaseAccountRepository
+from db.repositories.investigation import CaseAccountRepository, CaseFeatureVectorRepository
 from db.repositories.platform import UserRepository
 from db.repositories.reference import AccountRepository
 from detection.rl.bandit import GLOBAL_ARM_ID, LinUCBAgent
-from investigation.cases import close_case, create_case_from_alert
+from investigation.cases import case_rl_features, close_case, create_case_from_alert
 from investigation.fsm import InvalidTransitionError, transition_case
 
 
@@ -343,3 +343,69 @@ def test_close_case_attributes_feedback_to_highest_risk_alert(session: Session) 
 
     feedback = DetectionFeedbackRepository(session).list_for_case(case.case_id)
     assert feedback[0].alert_id == high_risk_alert.alert_id
+
+
+def test_close_case_upserts_case_feature_vector_reusing_bandit_context(
+    session: Session,
+) -> None:
+    """ROADMAP Phase 7: `close_case` is the only writer of a REAL case's
+    `case_feature_vector` row (the Similar Historical Cases corpus gap this
+    phase closes) -- and it must reuse the exact same context it just fed
+    the bandit, not recompute a second one."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    closed = close_case(
+        session,
+        case.case_id,
+        CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    row = CaseFeatureVectorRepository(session).get(case.case_id)
+    assert row is not None
+    assert row.outcome == CaseResolution.TRUE_POSITIVE_SAR
+    assert row.typology == closed.typology
+
+    # Same context the bandit itself was fed -- built via the now-public
+    # `case_rl_features`, not a second, possibly-divergent computation.
+    agent = LinUCBAgent(session)
+    expected_context = agent.build_context(case_rl_features(closed)).tolist()
+    assert row.vector == expected_context
+
+
+def test_close_case_upsert_is_idempotent_across_repeated_calls(session: Session) -> None:
+    """`CaseFeatureVectorRepository.upsert` (reused, not reinvented) means a
+    hypothetical second `close_case` on the same case_id updates the same
+    row in place rather than erroring/duplicating -- exercised here to
+    confirm the new call site inherits that behavior for free."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    close_case(
+        session,
+        case.case_id,
+        CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    row = CaseFeatureVectorRepository(session).get(case.case_id)
+    assert row is not None
