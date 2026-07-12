@@ -151,8 +151,3 @@ def test_candidate_pool_exceeding_safety_valve_raises(
 
     with pytest.raises(ValueError, match="exceeds MAX_CANDIDATE_POOL_SIZE"):
         rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
-
-
-def test_canonical_pair_is_lexicographically_sorted() -> None:
-    assert rd._canonical_pair("B", "A") == ("A", "B")
-    assert rd._canonical_pair("A", "B") == ("A", "B")

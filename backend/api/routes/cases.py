@@ -148,6 +148,13 @@ class MoneyFlowNode(BaseModel):
     account_id: str
     total_amount: float
     txn_count: int
+    #: Share of total inflow (`sources`) / outflow (`beneficiaries`), 0-100.
+    #: (code-review finding, Phase 7: `investigation.path_facts` computes
+    #: this exact percentage from the same `shape_money_flow` output for its
+    #: fund-flow fact group, via `case_graph.add_flow_percentages` -- this
+    #: route wasn't surfacing it to the L1 UI even though the underlying
+    #: data was identical.)
+    pct_of_total: float
 
 
 class MoneyFlowResponse(BaseModel):
@@ -392,8 +399,28 @@ def get_money_flow(
     account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
     graph = case_graph.build_case_graph_store(db, account_ids)
     ego = graph.get_ego_graph(account.account_id, radius=1)
-    shaped = case_graph.shape_money_flow(ego, account.account_id)
-    return MoneyFlowResponse(**shaped)
+    shaped = case_graph.add_flow_percentages(case_graph.shape_money_flow(ego, account.account_id))
+    return MoneyFlowResponse(
+        center=shaped["center"],
+        sources=[
+            MoneyFlowNode(
+                account_id=s["account_id"],
+                total_amount=s["total_amount"],
+                txn_count=s["txn_count"],
+                pct_of_total=s["pct_of_inflow"],
+            )
+            for s in shaped["sources"]
+        ],
+        beneficiaries=[
+            MoneyFlowNode(
+                account_id=b["account_id"],
+                total_amount=b["total_amount"],
+                txn_count=b["txn_count"],
+                pct_of_total=b["pct_of_outflow"],
+            )
+            for b in shaped["beneficiaries"]
+        ],
+    )
 
 
 # ── Network Risk Score ────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from db.repositories.investigation import CaseRepository
 from db.repositories.orchestration import RelationshipRepository
 from db.repositories.reference import AccountRepository, CustomerRepository
 
@@ -46,7 +47,15 @@ def build_case_relationship_graph(
             "edges": [{"id", "entity_a", "entity_b", "shared_attribute",
                        "confidence", "method", "discovered_at"}, ...],
         }
-    """
+
+    Raises `ValueError` if `case_id` doesn't exist -- matches the same
+    contract `investigation.similar_cases.find_similar_cases`/`investigation.
+    path_facts.compute_path_recommendation_facts` already establish for an
+    unknown case_id (code-review finding, Phase 7: this function used to be
+    the one sibling module that silently returned an empty graph instead)."""
+    if CaseRepository(session).get(case_id) is None:
+        raise ValueError(f"case {case_id!r} does not exist")
+
     accounts = AccountRepository(session).list_by_ids(case_account_ids)
     case_customer_ids = {a.customer_id for a in accounts if a.customer_id is not None}
 

@@ -98,25 +98,18 @@ def _name_pair_hash(name_a: str, name_b: str) -> str:
     return _value_hash(f"{lo}::{hi}")
 
 
-def _canonical_pair(entity_a: str, entity_b: str) -> tuple[str, str]:
-    """Lexicographically sorted pair -- the ordering `find_existing`/
-    `create()` both rely on (their own docstrings: "callers must
-    canonicalize")."""
-    return (entity_a, entity_b) if entity_a <= entity_b else (entity_b, entity_a)
-
-
 def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[str]]:
     """`customer_id -> {non-null Account.branch_city, ...}` for every
-    customer in the (bounded, safety-valved) candidate pool. One `get_by_
-    customer` query per customer -- acceptable at this pool's bounded scale
-    (low hundreds to low thousands, `MAX_CANDIDATE_POOL_SIZE`-capped), same
-    "case-scoped/pool-scoped is small" posture the rest of this codebase's
-    per-id loops rely on where no batched-by-customer-id method exists."""
-    account_repo = AccountRepository(session)
-    result: dict[str, set[str]] = {}
-    for customer_id in customer_ids:
-        cities = {a.branch_city for a in account_repo.get_by_customer(customer_id) if a.branch_city}
-        result[customer_id] = cities
+    customer in the (bounded, safety-valved) candidate pool. One batched
+    `AccountRepository.list_by_customer_ids` query, not a per-customer loop
+    (code-review finding, Phase 7: this used to call `get_by_customer` once
+    per candidate-pool customer -- the same N+1 shape already fixed once
+    elsewhere in this codebase, `graph_filters.annotate_nodes`'s Phase 6
+    fix)."""
+    result: dict[str, set[str]] = {cid: set() for cid in customer_ids}
+    for account in AccountRepository(session).list_by_customer_ids(customer_ids):
+        if account.branch_city and account.customer_id is not None:
+            result.setdefault(account.customer_id, set()).add(account.branch_city)
     return result
 
 
@@ -189,18 +182,22 @@ def discover_relationships(
 
     for a, b in combinations(pool, 2):
         pairs_compared += 1
-        entity_a, entity_b = _canonical_pair(a.customer_id, b.customer_id)
-        # `_matches_for_pair` is order-independent (every comparison it
-        # does is symmetric), so canonicalizing `a`/`b` themselves (rather
-        # than just the id pair) isn't necessary for correctness -- only
-        # `entity_a`/`entity_b` passed to `find_existing`/`create` need it.
+        # `RelationshipRepository.create`/`find_existing` canonicalize
+        # entity_a/entity_b (lexicographic sort) internally -- callers may
+        # pass either ordering (code-review finding, Phase 7: this used to
+        # be a caller-side responsibility via a local `_canonical_pair`
+        # helper here, now centralized in the repository so it can't be
+        # skipped by a future second writer).
         for shared_attribute, value_hash, confidence in _matches_for_pair(a, b, branch_cities):
-            if relationship_repo.find_existing(entity_a, entity_b, shared_attribute) is not None:
+            if (
+                relationship_repo.find_existing(a.customer_id, b.customer_id, shared_attribute)
+                is not None
+            ):
                 relationships_skipped_existing += 1
                 continue
             relationship_repo.create(
-                entity_a=entity_a,
-                entity_b=entity_b,
+                entity_a=a.customer_id,
+                entity_b=b.customer_id,
                 shared_attribute=shared_attribute,
                 value_hash=value_hash,
                 confidence=confidence,
