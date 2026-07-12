@@ -62,15 +62,16 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 4 merge | 270 tests | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
 | Test count — Phase 1B merge | 275 tests | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Test count — Phase 5 merge | 304 tests, 97% coverage | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
-| Test count — Phase 6 (branch, pre-merge) | 369 tests, 97% coverage | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Test count — Phase 6 merge | ~~369 tests (pre-code-review)~~ → 379 tests, 97% coverage (post-code-review-fixes + live-verify NaN fix) — 2026-07-12 | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
 | CI duration — Phase 4 (branch push / PR) | 18m34s / 22m8s | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
 | CI duration — Phase 5 (branch push / PR) | 20m15s / 22m0s | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
+| CI duration — Phase 6 (branch push / PR) | 22m22s / 22m13s | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
-| Local pytest run time — Phase 6 (full suite, incl. coverage) | ~5.9 min (351.31s, 369 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Local pytest run time — Phase 6 (full suite, incl. coverage, post-fixes) | ~5.9 min (353.14s, 379 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -94,18 +95,19 @@ Source: `backend/demo_data/`, run live against a throwaway SQLite DB via `backen
 
 ## 8. L2 deep investigation (Phase 6)
 
-Source: `scripts/run_detection_pipeline.py`/`scripts/train_detection_model.py` run live against a throwaway copy of the real ingested dataset (166,207 customers / 518,889 accounts / 8,002 transactions), then every new L2 route (`api/routes/l2.py`) driven over `TestClient` against a real, pipeline-generated case.
+Source: `scripts/run_detection_pipeline.py`/`scripts/train_detection_model.py` run live against a throwaway copy of the real ingested dataset (166,207 customers / 518,573 accounts / 8,002 transactions), then every new L2 route (`api/routes/l2.py`) driven over `TestClient` against a real, pipeline-generated case. First pass below is pre-code-review; the graph-latency figure was re-measured after the code-review's N+1 and redundant-query fixes.
 
 | Metric | Value | Recorded | Source |
 |---|---|---|---|
 | Detections → alerts → auto-created cases (pipeline run) | 2,740 detections across 5 `DetectionType`s → 2,740 alerts → 20 auto-created/assigned cases | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
-| `GET .../accounts/{account_id}/graph?radius=4` latency (real case-linked account) | 325ms (128 nodes / 162 edges walked), includes the `graph_expanded` audit commit | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../accounts/{account_id}/graph?radius=4` latency (real case-linked account) | ~~325ms (128 nodes / 162 edges, pre-code-review — per-node N+1 prior-SAR lookup)~~ → 96ms (post-fix: batched `list_for_primary_accounts` + reused case-account-id set) — 2026-07-12, includes the `graph_expanded` audit commit | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `GET .../profile` latency | 13ms | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `GET .../transactions/search` latency (case-wide) | 13ms (162 items) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `GET .../behavior` latency | 8ms | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `GET .../timeline` latency | 7ms (65 events) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `GET .../pattern-explanation` latency, no LLM key configured (fail-open path) | 6ms, `cached=False`, zero `AiInteraction` rows persisted | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | `graph_expanded` audit rows after one `GET .../graph` call | 1 (confirmed via `audit_log` query — closes the Phase 4 deferral) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Pandas-NaN-vs-Pydantic-`None` crash on `GET .../graph` (real data, blank `from_bank`/`to_bank`) | Found live (no seeded test fixture had ever left these columns blank); fixed via `graph_filters._sanitize_edge`, confirmed 200 post-fix on the exact real transaction that previously 500'd | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 
 ---
 
