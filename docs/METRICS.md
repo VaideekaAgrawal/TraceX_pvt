@@ -62,6 +62,7 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 4 merge | 270 tests | Session 7 (2026-07-10) | `docs/SESSION_LOG.md` Session 7 |
 | Test count — Phase 1B merge | 275 tests | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Test count — Phase 5 merge | 304 tests, 97% coverage | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
+| Test count — Phase 6 (branch, pre-merge) | 369 tests, 97% coverage | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
@@ -69,6 +70,7 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | CI duration — Phase 5 (branch push / PR) | 20m15s / 22m0s | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
+| Local pytest run time — Phase 6 (full suite, incl. coverage) | ~5.9 min (351.31s, 369 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -89,6 +91,21 @@ Source: `backend/demo_data/`, run live against a throwaway SQLite DB via `backen
 | Detection pipeline run against golden-scenario-only DB | 10 detections across 5 `DetectionType`s, 10 alerts generated | Session 8 (2026-07-11), reproduced identically pre- and post-code-review-fixes | `docs/SESSION_LOG.md` Session 8 |
 | `rl_arm_state` audit rows written per `generate_demo_data.py` run | ~~50 (pre-fix, one per historical case)~~ → 1 (post-fix, single persist after the seeding loop) — 2026-07-11 | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | `case_created` audit rows for 50 historical cases | 50 (1:1, confirms the backdating fix closed the audit-invariant gap — previously 0 audit rows for the `created_at` write) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
+
+## 8. L2 deep investigation (Phase 6)
+
+Source: `scripts/run_detection_pipeline.py`/`scripts/train_detection_model.py` run live against a throwaway copy of the real ingested dataset (166,207 customers / 518,889 accounts / 8,002 transactions), then every new L2 route (`api/routes/l2.py`) driven over `TestClient` against a real, pipeline-generated case.
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| Detections → alerts → auto-created cases (pipeline run) | 2,740 detections across 5 `DetectionType`s → 2,740 alerts → 20 auto-created/assigned cases | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../accounts/{account_id}/graph?radius=4` latency (real case-linked account) | 325ms (128 nodes / 162 edges walked), includes the `graph_expanded` audit commit | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../profile` latency | 13ms | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../transactions/search` latency (case-wide) | 13ms (162 items) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../behavior` latency | 8ms | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../timeline` latency | 7ms (65 events) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `GET .../pattern-explanation` latency, no LLM key configured (fail-open path) | 6ms, `cached=False`, zero `AiInteraction` rows persisted | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| `graph_expanded` audit rows after one `GET .../graph` call | 1 (confirmed via `audit_log` query — closes the Phase 4 deferral) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 
 ---
 

@@ -199,6 +199,34 @@ class AlertRepository(BaseRepository[Alert]):
         )
         return list(self.session.scalars(stmt))
 
+    def list_for_primary_accounts(
+        self, account_ids: list[str], *, limit: int = 1000
+    ) -> list[Alert]:
+        """Batched form of `list_for_primary_account` -- one `IN (...)`
+        query for many accounts instead of one query per account
+        (code-review finding, Phase 6: `investigation.graph_filters.
+        annotate_nodes` was calling `list_for_primary_account` once per
+        ego-graph node -- hundreds of sequential round-trips at radius=4 on
+        a real hub account; confirmed live at 325ms for that one endpoint
+        vs. 6-13ms for every other new L2 endpoint). Mirrors
+        `AccountRepository.list_by_ids`'s plain-`IN`-clause batching
+        precedent, NOT `list_for_primary_account`'s per-account cap: `limit`
+        here is a single OVERALL cap across every requested account, not a
+        per-account one. Correct for `annotate_nodes`'s use (a boolean "does
+        this account have any prior SAR-resolved alert" check over a
+        bounded ego-graph node set, where per-account recency ordering
+        doesn't change the answer) -- NOT a drop-in replacement for a
+        caller that specifically needs each account's own most-recent-N."""
+        if not account_ids:
+            return []
+        stmt = (
+            select(Alert)
+            .where(Alert.primary_account_id.in_(account_ids))
+            .order_by(Alert.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
     def list_unassigned(self, *, limit: int = 100) -> list[Alert]:
         """Alerts with no case yet — the alert->case assignment queue
         (Phase 4 consumes this)."""

@@ -20,8 +20,10 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType, UserRole
 from db.models.investigation import Case
 from db.models.platform import User
-from db.repositories.investigation import CaseRepository
+from db.models.reference import Account
+from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.platform import UserRepository
+from db.repositories.reference import AccountRepository
 from db.session import get_db
 from foundation.config import Settings
 from foundation.security import TokenError, decode_access_token
@@ -120,3 +122,55 @@ def require_case_access(
     if user.role == UserRole.INVESTIGATOR and case.assigned_to != user.user_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not assigned to this case")
     return case
+
+
+def _load_scoped_account(account_id: str, case: Case, db: Session) -> tuple[Account, list[str]]:
+    """Shared core of `require_case_scoped_account`/`require_case_scoped_
+    account_with_ids` -- computes `case`'s scoped account-id set once,
+    validates `account_id` against it, and returns both the loaded
+    `Account` and that id list, so a caller that needs the full scope set
+    (e.g. to build a case-scoped graph) doesn't have to re-query it
+    (code-review finding, Phase 6: `api.routes.l2.get_account_graph`/
+    `investigation.transaction_search.search`'s account-scoped path were
+    both re-running this exact query after this dependency already had the
+    answer)."""
+    scoped_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
+    if account_id not in scoped_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not in this case's scope")
+    account = AccountRepository(db).get(account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    return account, scoped_ids
+
+
+def require_case_scoped_account(
+    account_id: str,
+    case: Case = Depends(require_case_access),
+    db: Session = Depends(get_db),
+) -> Account:
+    """404s if `account_id` isn't in `case`'s `case_accounts` scope (don't
+    leak "this account exists elsewhere in the system" to an investigator
+    who isn't scoped to it), else loads and returns the `Account` row.
+
+    Moved verbatim from `api.routes.cases` (ROADMAP Phase 6 — `api.routes.l2`
+    is its second real caller, meeting this codebase's own "promote on
+    second real caller" convention already used for e.g.
+    `HIGH_PAGERANK_THRESHOLD`/`CLOSING_REWARD`/`list_account_ids_for_case`).
+    No behavior change from the `cases.py` original."""
+    account, _ = _load_scoped_account(account_id, case, db)
+    return account
+
+
+def require_case_scoped_account_with_ids(
+    account_id: str,
+    case: Case = Depends(require_case_access),
+    db: Session = Depends(get_db),
+) -> tuple[Account, list[str]]:
+    """Sibling of `require_case_scoped_account` that also returns `case`'s
+    full scoped account-id list, for the handful of routes that need both
+    the validated `Account` and the full scope set in the same request
+    (code-review finding, Phase 6, see `_load_scoped_account`). Most
+    account-scoped routes should keep using the plain `require_case_scoped_
+    account` — only switch a route to this one when it would otherwise
+    re-run `CaseAccountRepository.list_account_ids_for_case` itself."""
+    return _load_scoped_account(account_id, case, db)

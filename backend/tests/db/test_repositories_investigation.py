@@ -254,6 +254,35 @@ def test_case_repository_set_status_for_transition_bundles_extra_fields(
     assert len(assigned_rows) == 1
 
 
+def test_case_repository_mark_graph_expanded(session: Session) -> None:
+    """`graph_expanded` -- audit-only, no domain-field change, mirroring
+    `AlertRepository.mark_opened`'s shape exactly (ROADMAP Phase 6, closing
+    the Phase 4 deferral note)."""
+    from db.repositories.platform import AuditLogRepository
+
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L2,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    repo = CaseRepository(session)
+    before = repo.get("CASE1")
+    assert before is not None
+    updated = repo.mark_graph_expanded("CASE1", actor_type=ActorType.INVESTIGATOR, actor_id="U1")
+    session.commit()
+
+    assert updated.status == before.status  # no domain-field change
+    actions = [r.action for r in AuditLogRepository(session).list_for_entity("case", "CASE1")]
+    assert "graph_expanded" in actions
+
+
 def test_evidence_repository_pin(session: Session) -> None:
     _seed(session)
     CaseRepository(session).create(

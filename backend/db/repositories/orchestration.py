@@ -94,25 +94,41 @@ class AiInteractionRepository(BaseRepository[AiInteraction]):
         return list(self.session.scalars(stmt))
 
     def list_for_case_and_agent(
-        self, case_id: str, agent: AiAgent, *, limit: int = 50
+        self, case_id: str, agent: AiAgent, *, limit: int = 500
     ) -> list[AiInteraction]:
         """Narrower than `list_for_case` -- also filters by `agent`.
 
         ROADMAP Phase 5's account-explanation cache (`orchestration.
-        account_explanation`) is the first real caller: it needs one
-        account's prior `RECOMMENDATION` interactions for this case, but
-        `facts["account_id"] == account_id` isn't a portable SQL predicate
-        (SQLite's JSON1 extension and Postgres's `jsonb` operators diverge,
-        and case-scale row counts -- at most a few dozen interactions per
-        case -- make filtering in Python over this list cheap), so that
-        last narrowing step is the caller's job, not this method's.
+        account_explanation`) is the first caller; ROADMAP Phase 6's
+        pattern-explanation cache (`orchestration.pattern_explanation`) is
+        the second, writing into the SAME `case_id`+`AiAgent.RECOMMENDATION`
+        namespace on a disjoint key (`facts["account_id"]` vs.
+        `facts["alert_id"]`). Both need THEIR OWN prior interactions for
+        this case, but `facts[key] == value` isn't a portable SQL predicate
+        (SQLite's JSON1 extension and Postgres's `jsonb` operators diverge),
+        so that last narrowing step is each caller's job (`orchestration.
+        llm_client.find_cached_interaction`), not this method's.
 
         Ordered by `created_at` descending *before* `.limit()` (code-review
-        finding, Phase 5: without this, once a case passed 50
-        `RECOMMENDATION` interactions the kept rows were an arbitrary
-        50-row slice -- not necessarily the most recent -- so `_find_cached`'s
-        `max(..., key=created_at)` over that slice could silently miss a
-        fresher row, e.g. one just written by a `force=True` call)."""
+        finding, Phase 5: without this, once a case passed the limit the
+        kept rows were an arbitrary slice -- not necessarily the most
+        recent -- so a cache lookup's `max(..., key=created_at)` over that
+        slice could silently miss a fresher row, e.g. one just written by a
+        `force=True` call).
+
+        `limit=500` (raised from Phase 5's original `50`, code-review
+        finding, Phase 6: with a second heavy writer now sharing this
+        namespace and no upsert -- every cache-miss or `force=True` call
+        inserts a NEW row, never replacing an old one -- a case combining
+        several accounts' explanations and several alerts' pattern
+        explanations across a deep-investigation session, plus repeated
+        `force=True` re-explains, could realistically exceed 50 combined
+        rows, at which point `LIMIT 50` would silently exclude an
+        older-but-still-valid cached row and cause a spurious cache miss +
+        LLM re-call. 500 is a documented judgment call, not derived from a
+        formula -- same posture as `investigation.network_risk`'s weights --
+        chosen to comfortably cover realistic combined volume for one case
+        without being unbounded."""
         stmt = (
             select(AiInteraction)
             .where(AiInteraction.case_id == case_id, AiInteraction.agent == agent)

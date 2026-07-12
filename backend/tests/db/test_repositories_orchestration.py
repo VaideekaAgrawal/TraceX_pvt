@@ -4,7 +4,7 @@ RelationshipRepository.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -145,6 +145,32 @@ def test_ai_interaction_repository_list_for_case_and_agent_orders_most_recent_fi
 
     results = repo.list_for_case_and_agent("CASE1", AiAgent.RECOMMENDATION)
     assert [i.id for i in results] == [newer.id, older.id]
+
+
+def test_ai_interaction_repository_list_for_case_and_agent_default_limit_covers_combined_volume(
+    session: Session,
+) -> None:
+    """Regression test (code-review finding, Phase 6): once
+    `orchestration.pattern_explanation` started writing into the same
+    `case_id`+`AiAgent.RECOMMENDATION` namespace `orchestration.
+    account_explanation` already used, the old `limit=50` default could
+    silently truncate a case's combined interaction history and cause a
+    spurious cache miss. Pinned here (60 > the old 50) so a future change
+    can't silently shrink the default back down without a test noticing."""
+    _seed(session)
+    repo = AiInteractionRepository(session)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    for i in range(60):
+        repo.create(
+            case_id="CASE1", agent=AiAgent.RECOMMENDATION, user_id="U1",
+            response_text=f"Explanation {i}.", model="claude-opus-4.8",
+            model_provider="openrouter", created_at=base + timedelta(hours=i),
+            actor_type=ActorType.AI, actor_id="RECOMMENDATION",
+        )
+    session.commit()
+
+    results = repo.list_for_case_and_agent("CASE1", AiAgent.RECOMMENDATION)
+    assert len(results) == 60  # would have been truncated to 50 under the old default
 
 
 def test_relationship_repository_round_trip(session: Session) -> None:

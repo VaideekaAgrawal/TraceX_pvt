@@ -167,6 +167,44 @@ def test_alert_repository_list_for_primary_account_orders_by_created_at_desc(
     assert repo.list_for_primary_account("NOPE") == []
 
 
+def test_alert_repository_list_for_primary_accounts_batched(session: Session) -> None:
+    """`list_for_primary_accounts` (code-review finding, Phase 6 -- added
+    so `investigation.graph_filters.annotate_nodes` doesn't call
+    `list_for_primary_account` once per ego-graph node): one `IN` query
+    covering every requested account at once."""
+    _seed_account_and_user(session)
+    AccountRepository(session).create(
+        account_id="A2", actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    AccountRepository(session).create(
+        account_id="A3", actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+    repo = AlertRepository(session)
+
+    for alert_id, primary in [("AL_A1", "A1"), ("AL_A2", "A2")]:
+        repo.create(
+            alert_id=alert_id,
+            detection_type=DetectionType.layering,
+            primary_account_id=primary,
+            account_ids=[primary],
+            score=0.5,
+            risk_score=40.0,
+            severity=RiskLevel.MEDIUM,
+            priority=Priority.P3,
+            status="open",
+            source="pipeline",
+            actor_type=ActorType.SYSTEM,
+            actor_id=None,
+        )
+    session.commit()
+
+    result = repo.list_for_primary_accounts(["A1", "A2", "A3"])
+    assert {a.alert_id for a in result} == {"AL_A1", "AL_A2"}
+    assert repo.list_for_primary_accounts(["A3"]) == []
+    assert repo.list_for_primary_accounts([]) == []
+
+
 def test_alert_repository_update_score_and_risk_score(session: Session) -> None:
     _seed_account_and_user(session)
     repo = AlertRepository(session)
