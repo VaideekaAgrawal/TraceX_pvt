@@ -140,3 +140,47 @@ def shape_money_flow(ego: dict[str, Any], center: str) -> dict[str, Any]:
             beneficiaries.values(), key=lambda x: x["total_amount"], reverse=True
         ),
     }
+
+
+def add_flow_percentages(shaped: dict[str, Any]) -> dict[str, Any]:
+    """Adds `pct_of_inflow`/`pct_of_outflow` to `shape_money_flow`'s
+    `sources`/`beneficiaries` entries (ROADMAP Phase 7, path-recommendation
+    data plumbing's "fund-flow %" fact group) -- each source's share of the
+    TOTAL inflow (sum of every source's `total_amount`) and each
+    beneficiary's share of the TOTAL outflow (sum of every beneficiary's
+    `total_amount`), as a 0-100 percentage.
+
+    Pure function over `shaped` (does not mutate its argument -- returns a
+    new dict, matching `shape_money_flow`'s own pure-function shape) so it
+    composes cleanly on top of that function's output without either one
+    needing to know about the other's caller. `0.0` (not a div-by-zero
+    crash) when a bucket's total is `0.0` -- an ego-graph with, say, no
+    inflow edges at all (a pure sink/source account) has nothing to take a
+    percentage OF, not an error."""
+    sources = shaped.get("sources", [])
+    beneficiaries = shaped.get("beneficiaries", [])
+
+    total_inflow = sum(s["total_amount"] for s in sources)
+    total_outflow = sum(b["total_amount"] for b in beneficiaries)
+
+    return {
+        **shaped,
+        "sources": [
+            {
+                **s,
+                "pct_of_inflow": round(s["total_amount"] / total_inflow * 100.0, 2)
+                if total_inflow > 0.0
+                else 0.0,
+            }
+            for s in sources
+        ],
+        "beneficiaries": [
+            {
+                **b,
+                "pct_of_outflow": round(b["total_amount"] / total_outflow * 100.0, 2)
+                if total_outflow > 0.0
+                else 0.0,
+            }
+            for b in beneficiaries
+        ],
+    }
