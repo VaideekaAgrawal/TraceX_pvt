@@ -1,9 +1,21 @@
 """
-Demo Data Studio orchestrator -- runs the four sub-generators in order
-(kyc_customers -> relationships -> historical_cases -> golden_scenarios),
-each gated by its own `ingestion_log` marker row so a second run is a true
-no-op (`db/ingest.py`'s exact pattern: "a file already logged with status
-'success' is not re-processed at all").
+Demo Data Studio orchestrator -- runs five sub-generators in order
+(kyc_customers -> relationships -> relationship_discovery ->
+historical_cases -> golden_scenarios), each gated by its own
+`ingestion_log` marker row so a second run is a true no-op (`db/ingest.py`'s
+exact pattern: "a file already logged with status 'success' is not
+re-processed at all").
+
+`relationship_discovery` (ROADMAP Phase 7) runs `investigation.
+relationship_discovery.discover_relationships` right after
+`seed_relationship_networks` -- the concrete live-verification hook that
+Phase 1B's 8 seeded shared-attribute clusters are actually rediscovered
+into real `relationships` rows, not just left as raw shared-attribute data
+on `customers`/`accounts`. Unlike the other four, it takes no `random.
+Random` instance (it's a deterministic pairwise comparison, not a
+generator with random draws) and doesn't consume `kyc_pool` directly --
+it queries the candidate pool itself (`CustomerRepository.
+list_relationship_candidate_pool`).
 
 `file_hash` for each marker is a literal descriptive string (e.g.
 `"demo-seed:kyc_customers:v1"`), **not** a real file hash -- deliberate
@@ -36,9 +48,11 @@ from demo_data.historical_cases import seed_historical_cases
 from demo_data.identifiers import demo_customer_id
 from demo_data.kyc_customers import seed_kyc_customers
 from demo_data.relationships import seed_relationship_networks
+from investigation.relationship_discovery import discover_relationships
 
 _KYC_MARKER = "demo-seed:kyc_customers:v1"
 _RELATIONSHIPS_MARKER = "demo-seed:relationships:v1"
+_RELATIONSHIP_DISCOVERY_MARKER = "demo-seed:relationship_discovery:v1"
 _HISTORICAL_CASES_MARKER = "demo-seed:historical_cases:v1"
 _GOLDEN_SCENARIOS_MARKER = "demo-seed:golden_scenarios:v1"
 
@@ -50,6 +64,7 @@ class DemoSeedSummary:
 
     kyc_customers_created: int = 0
     relationship_clusters_created: int = 0
+    relationships_discovered: int = 0
     historical_cases_created: int = 0
     golden_scenarios_created: int = 0
     already_seeded: list[str] = field(default_factory=list)
@@ -96,12 +111,14 @@ def _load_kyc_pool(session: Session, num_kyc_customers: int) -> list[Customer]:
 def run_demo_data_studio(
     session: Session, *, actor_type: ActorType, actor_id: str | None
 ) -> DemoSeedSummary:
-    """Orchestrate all four sub-generators. Each generator gets its own
-    independent `random.Random(DEMO_SEED + offset)` instance (not one shared
-    RNG threaded through all four) so a generator's output is reproducible
-    regardless of which of the other three did or didn't actually execute
-    this call (a shared RNG's output would depend on how many random draws
-    the earlier generators made, which changes based on short-circuiting)."""
+    """Orchestrate all five sub-generators. Each of the four RANDOM
+    generators gets its own independent `random.Random(DEMO_SEED + offset)`
+    instance (not one shared RNG threaded through all of them) so a
+    generator's output is reproducible regardless of which of the others
+    did or didn't actually execute this call (a shared RNG's output would
+    depend on how many random draws the earlier generators made, which
+    changes based on short-circuiting). `relationship_discovery` is
+    deterministic (no RNG) -- see module docstring."""
     cfg = DEFAULT_DEMO_DATA_CONFIG
     log_repo = IngestionLogRepository(session)
     summary = DemoSeedSummary()
@@ -133,6 +150,18 @@ def run_demo_data_studio(
             count=len(clusters), actor_type=actor_type, actor_id=actor_id,
         )
         summary.relationship_clusters_created = len(clusters)
+
+    if _marker_done(log_repo, _RELATIONSHIP_DISCOVERY_MARKER):
+        summary.already_seeded.append("relationship_discovery")
+    else:
+        stats = discover_relationships(session, actor_type=actor_type, actor_id=actor_id)
+        session.flush()
+        _mark_done(
+            log_repo, _RELATIONSHIP_DISCOVERY_MARKER,
+            filename="demo_data_studio/relationship_discovery",
+            count=stats.relationships_created, actor_type=actor_type, actor_id=actor_id,
+        )
+        summary.relationships_discovered = stats.relationships_created
 
     if _marker_done(log_repo, _HISTORICAL_CASES_MARKER):
         summary.already_seeded.append("historical_cases")

@@ -209,3 +209,37 @@ def test_relationship_repository_round_trip(session: Session) -> None:
     assert {r.id for r in repo.list_for_entity("C1")} == {relationship.id}
     assert {r.id for r in repo.list_for_entity("C2")} == {relationship.id}
     assert repo.list_for_entity("C3") == []
+
+
+def test_relationship_repository_canonicalizes_entity_order(session: Session) -> None:
+    """Regression test (code-review finding, Phase 7): `create`/`find_
+    existing` must canonicalize entity_a/entity_b themselves (lexicographic
+    sort) regardless of the order a caller passes them in -- previously only
+    a caller-side convention (`investigation.relationship_discovery.
+    _canonical_pair`), with nothing here preventing a future second writer
+    from inserting a reversed pair and silently defeating dedup."""
+    CustomerRepository(session).create(
+        customer_id="C1", name="Alice", entity_type=EntityType.INDIVIDUAL,
+        risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    CustomerRepository(session).create(
+        customer_id="C2", name="Bob", entity_type=EntityType.INDIVIDUAL,
+        risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    repo = RelationshipRepository(session)
+    # Passed in REVERSED (entity_a > entity_b) order on purpose.
+    relationship = repo.create(
+        entity_a="C2", entity_b="C1", shared_attribute="pan", value_hash="deadbeef",
+        confidence=0.95, method="shared_attribute_v1", actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    assert (relationship.entity_a, relationship.entity_b) == ("C1", "C2")
+    # find_existing must locate it regardless of which order it's queried in.
+    found_forward = repo.find_existing("C1", "C2", "pan")
+    found_reversed = repo.find_existing("C2", "C1", "pan")
+    assert found_forward is not None
+    assert found_reversed is not None
+    assert found_reversed.id == relationship.id

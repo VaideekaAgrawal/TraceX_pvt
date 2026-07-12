@@ -146,7 +146,17 @@ class RelationshipRepository(BaseRepository[Relationship]):
     """Relationship Explorer discovered edges. No `update()`: a discovered
     relationship is immutable once recorded (a changed match would be a new
     `discovered_at` row from a later Relationship Explorer run, not an edit
-    of the old evidence)."""
+    of the old evidence).
+
+    `entity_a`/`entity_b` are always stored/queried in canonical
+    (lexicographically sorted) order -- `create()`/`find_existing()` both
+    sort the pair themselves rather than trusting the caller to have already
+    done so (code-review finding, Phase 7: this was previously a documented
+    caller-convention only, enforced solely by `investigation.
+    relationship_discovery`'s own `_canonical_pair` helper with no check
+    here -- a future second writer that didn't replicate that exact sort
+    could insert a pair in reversed order and silently defeat `find_
+    existing`'s dedup)."""
 
     model = Relationship
     entity_type = "relationship"
@@ -165,6 +175,7 @@ class RelationshipRepository(BaseRepository[Relationship]):
         actor_type: ActorType,
         actor_id: str | None,
     ) -> Relationship:
+        entity_a, entity_b = sorted((entity_a, entity_b))
         relationship = Relationship(
             entity_a=entity_a,
             entity_b=entity_b,
@@ -185,5 +196,37 @@ class RelationshipRepository(BaseRepository[Relationship]):
         """Relationships where `customer_id` is either side of the pair."""
         stmt = select(Relationship).where(
             or_(Relationship.entity_a == customer_id, Relationship.entity_b == customer_id)
+        )
+        return list(self.session.scalars(stmt))
+
+    def find_existing(
+        self, entity_a: str, entity_b: str, shared_attribute: str
+    ) -> Relationship | None:
+        """Idempotency check for `investigation.relationship_discovery`
+        (ROADMAP Phase 7): a rerun of the discovery job must not create a
+        duplicate row for a pair/attribute-type combination it already
+        found. Canonicalizes `entity_a`/`entity_b` itself (see class
+        docstring) -- callers may pass either ordering."""
+        entity_a, entity_b = sorted((entity_a, entity_b))
+        stmt = select(Relationship).where(
+            Relationship.entity_a == entity_a,
+            Relationship.entity_b == entity_b,
+            Relationship.shared_attribute == shared_attribute,
+        )
+        return self.session.scalars(stmt).first()
+
+    def list_for_entities(self, customer_ids: list[str]) -> list[Relationship]:
+        """Batched sibling of `list_for_entity` -- avoids a per-customer
+        round trip when a caller (e.g. `investigation.relationship_graph.
+        build_case_relationship_graph`) already has a small, bounded list
+        of customer ids to resolve relationships for at once (same idiom as
+        `AlertRepository.list_for_primary_accounts`)."""
+        if not customer_ids:
+            return []
+        stmt = select(Relationship).where(
+            or_(
+                Relationship.entity_a.in_(customer_ids),
+                Relationship.entity_b.in_(customer_ids),
+            )
         )
         return list(self.session.scalars(stmt))

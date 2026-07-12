@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, or_, select
 
 from db.enums import (
     AccountStatus,
@@ -139,6 +139,39 @@ class CustomerRepository(BaseRepository[Customer]):
         stmt = select(Customer).where(Customer.customer_id.in_(customer_ids))
         return list(self.session.scalars(stmt))
 
+    def list_relationship_candidate_pool(self, *, limit: int) -> list[Customer]:
+        """Relationship Explorer v1 discovery's candidate pool (ROADMAP
+        Phase 7, `investigation.relationship_discovery`) — gated on `pan IS
+        NOT NULL OR income_bracket IS NOT NULL`, not every customer.
+
+        This is a real-data scale requirement, not just a perf shortcut:
+        166,207 real ingested customers vs. ~200 Phase-1B demo KYC
+        customers means an unbounded pairwise comparison is ~2.8x10^10
+        pairs (never happening). A customer with neither field on file also
+        has no genuine KYC-quality signal to corroborate a match on — the
+        same "wait on data" reasoning `docs/DATA_SCHEMA.md` already applies
+        to the device/IP attributes Relationship Explorer v1 defers
+        entirely, applied here to the real customer population instead of
+        a whole attribute.
+
+        `limit` is required, not defaulted (code-review finding, Phase 7:
+        an earlier `limit=5001` default silently mirrored `investigation.
+        relationship_discovery.MAX_CANDIDATE_POOL_SIZE + 1` — a different
+        module's constant — without referencing it, so the two values could
+        silently drift if that constant ever changed; the one real caller
+        already passes its own `MAX_CANDIDATE_POOL_SIZE + 1` explicitly, so
+        a default served no purpose but latent risk for a future caller).
+        Pass `MAX_CANDIDATE_POOL_SIZE + 1` to detect "the gated pool exceeds
+        the safety valve" (`len(result) > MAX_CANDIDATE_POOL_SIZE`) from
+        this single query's result, without a separate `COUNT(*)` round
+        trip."""
+        stmt = (
+            select(Customer)
+            .where(or_(Customer.pan.is_not(None), Customer.income_bracket.is_not(None)))
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt))
+
 
 class AccountRepository(BaseRepository[Account]):
     model = Account
@@ -219,6 +252,18 @@ class AccountRepository(BaseRepository[Account]):
         """All accounts belonging to one customer — the 1:N read the schema
         doc's ER overview calls out (`customers ──1:N── accounts`)."""
         stmt = select(Account).where(Account.customer_id == customer_id)
+        return list(self.session.scalars(stmt))
+
+    def list_by_customer_ids(self, customer_ids: list[str]) -> list[Account]:
+        """Batched sibling of `get_by_customer` — every account belonging to
+        ANY of `customer_ids` in one query (code-review finding, Phase 7:
+        `investigation.relationship_discovery._branch_cities` used to call
+        `get_by_customer` once per candidate-pool customer, the same N+1
+        shape `graph_filters.annotate_nodes`'s Phase 6 fix already replaced
+        elsewhere in this codebase with a batched `IN` query)."""
+        if not customer_ids:
+            return []
+        stmt = select(Account).where(Account.customer_id.in_(customer_ids))
         return list(self.session.scalars(stmt))
 
     def list_by_ids(self, account_ids: list[str]) -> list[Account]:

@@ -661,3 +661,27 @@ class CaseFeatureVectorRepository(BaseRepository[CaseFeatureVector]):
             action="case_feature_vector_updated",
             case_id=case_id,
         )
+
+    def list_resolved(
+        self, *, exclude_case_id: str | None = None, limit: int = 5000
+    ) -> list[CaseFeatureVector]:
+        """The Similar Historical Cases corpus (`investigation.
+        similar_cases.find_similar_cases`): every `case_feature_vector` row
+        with a non-null `outcome` -- an open/in-progress case never gets a
+        row here at all (see `investigation.cases.close_case`'s docstring
+        note: only a resolved case's vector is persisted), so no extra
+        "and status is closed" filter is needed on top of `outcome IS NOT
+        NULL`. `exclude_case_id` drops the query case itself out of its own
+        candidate corpus. `limit=5000` is a generous bounded-scan cap (same
+        posture as `investigation.case_graph.CASE_SCOPE_TRANSACTION_LIMIT`)
+        -- not a real constraint at current corpus size (~50-plus cases).
+        `ORDER BY case_id` (unique per row) makes the LIMIT deterministic --
+        without it, which rows survive the cap once the corpus exceeds
+        `limit` is DB-engine-dependent, which would make `find_similar_
+        cases`'s ranking non-reproducible across engines/runs (code-review
+        finding, Phase 7)."""
+        stmt = select(CaseFeatureVector).where(CaseFeatureVector.outcome.is_not(None))
+        if exclude_case_id is not None:
+            stmt = stmt.where(CaseFeatureVector.case_id != exclude_case_id)
+        stmt = stmt.order_by(CaseFeatureVector.case_id).limit(limit)
+        return list(self.session.scalars(stmt))

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from db.enums import ActorType, Channel
 from db.repositories.reference import AccountRepository, TransactionRepository
-from investigation.case_graph import build_case_graph_store, shape_money_flow
+from investigation.case_graph import add_flow_percentages, build_case_graph_store, shape_money_flow
 
 
 def _seed_accounts(session: Session, *account_ids: str) -> None:
@@ -91,3 +91,41 @@ def test_shape_money_flow_ignores_self_loop(session: Session) -> None:
     )
     assert shaped["sources"] == [{"account_id": "A", "total_amount": 20.0, "txn_count": 1}]
     assert shaped["beneficiaries"] == []
+
+
+def test_add_flow_percentages_computes_share_of_each_bucket_total(session: Session) -> None:
+    _seed_accounts(session, "A", "B", "C", "D")
+    session.commit()
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_txn(session, "T1", "A", "B", 75.0, ts)  # source A: 75% of B's inflow
+    _seed_txn(session, "T2", "C", "B", 25.0, ts)  # source C: 25% of B's inflow
+    _seed_txn(session, "T3", "B", "D", 40.0, ts)  # only beneficiary: 100% of B's outflow
+    session.commit()
+
+    store = build_case_graph_store(session, ["A", "B", "C", "D"])
+    ego = store.get_ego_graph("B", radius=1)
+    shaped = add_flow_percentages(shape_money_flow(ego, "B"))
+
+    sources_by_id = {s["account_id"]: s for s in shaped["sources"]}
+    assert sources_by_id["A"]["pct_of_inflow"] == 75.0
+    assert sources_by_id["C"]["pct_of_inflow"] == 25.0
+    assert shaped["beneficiaries"][0]["pct_of_outflow"] == 100.0
+    # Original fields untouched, just extended.
+    assert sources_by_id["A"]["total_amount"] == 75.0
+
+
+def test_add_flow_percentages_zero_total_is_zero_not_a_crash() -> None:
+    shaped = add_flow_percentages({"center": "B", "sources": [], "beneficiaries": []})
+    assert shaped == {"center": "B", "sources": [], "beneficiaries": []}
+
+
+def test_add_flow_percentages_does_not_mutate_input() -> None:
+    original = {
+        "center": "B",
+        "sources": [{"account_id": "A", "total_amount": 10.0, "txn_count": 1}],
+        "beneficiaries": [],
+    }
+    add_flow_percentages(original)
+    # The input dict's source entry must not have gained `pct_of_inflow`
+    # (pure function -- returns a new structure, doesn't mutate `shaped`).
+    assert "pct_of_inflow" not in original["sources"][0]

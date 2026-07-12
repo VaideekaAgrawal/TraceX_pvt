@@ -27,6 +27,7 @@ from db.enums import (
     CaseStatus,
     Channel,
     DetectionType,
+    EntityType,
     Priority,
     RiskLevel,
     UserRole,
@@ -34,9 +35,9 @@ from db.enums import (
 from db.models import Base
 from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
-from db.repositories.orchestration import AiInteractionRepository
+from db.repositories.orchestration import AiInteractionRepository, RelationshipRepository
 from db.repositories.platform import AuditLogRepository, UserRepository
-from db.repositories.reference import AccountRepository, TransactionRepository
+from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from db.session import build_engine, get_db
 from foundation.config import Settings
 from foundation.security import hash_password
@@ -346,6 +347,68 @@ def test_notes_create_and_list(client: TestClient, seeded: str) -> None:
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 1
     assert list_resp.json()[0]["body"] == "Reviewed the mule hop, escalating."
+
+
+def test_relationships_route_surfaces_hidden_one_hop_customer(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """ROADMAP Phase 7: Relationship Explorer v1 (`GET .../relationships`)
+    -- a customer with no shared transaction and no `case_accounts` row at
+    all (`CUST_HIDDEN`) must still surface as a node, connected by a
+    discovered `Relationship` edge, precisely the "hidden mule network"
+    reveal transactions alone can't provide."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    with db_sessionmaker() as db:
+        AccountRepository(db).create(
+            account_id="R_SRC", customer_id="CUST_IN_CASE",
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CustomerRepository(db).create(
+            customer_id="CUST_IN_CASE", name="In Case Customer", entity_type=EntityType.INDIVIDUAL,
+            risk_rating=RiskLevel.MEDIUM, pan="DEMOSHARED1D",
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CustomerRepository(db).create(
+            customer_id="CUST_HIDDEN", name="Hidden Linked Customer",
+            entity_type=EntityType.INDIVIDUAL, risk_rating=RiskLevel.MEDIUM, pan="DEMOSHARED1D",
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CustomerRepository(db).create(
+            customer_id="CUST_UNRELATED", name="Unrelated Customer",
+            entity_type=EntityType.INDIVIDUAL, risk_rating=RiskLevel.MEDIUM,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        RelationshipRepository(db).create(
+            entity_a="CUST_HIDDEN", entity_b="CUST_IN_CASE", shared_attribute="pan",
+            value_hash="deadbeef", confidence=0.95, method="shared_attribute_v1",
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CaseRepository(db).create(
+            case_id="RCASE1", primary_account_id="R_SRC", status=CaseStatus.IN_PROGRESS,
+            level=CaseLevel.L2, priority=Priority.P1, assigned_to="U_INV",
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        CaseAccountRepository(db).add_account(
+            case_id="RCASE1", account_id="R_SRC", actor_type=ActorType.SYSTEM, actor_id=None
+        )
+        db.commit()
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases/RCASE1/relationships", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["case_id"] == "RCASE1"
+
+    nodes_by_id = {n["customer_id"]: n for n in body["nodes"]}
+    assert nodes_by_id["CUST_IN_CASE"]["in_case_scope"] is True
+    assert nodes_by_id["CUST_HIDDEN"]["in_case_scope"] is False
+    assert "CUST_UNRELATED" not in nodes_by_id
+
+    assert len(body["edges"]) == 1
+    edge = body["edges"][0]
+    assert {edge["entity_a"], edge["entity_b"]} == {"CUST_HIDDEN", "CUST_IN_CASE"}
+    assert edge["shared_attribute"] == "pan"
+    assert edge["confidence"] == 0.95
 
 
 def test_unassigned_investigator_403_on_every_account_scoped_l2_route(

@@ -31,7 +31,12 @@ from db.enums import Channel, EvidenceType, NoteSource
 from db.models.investigation import Case
 from db.models.platform import User
 from db.models.reference import Account
-from db.repositories.investigation import CaseRepository, EvidenceRepository, NoteRepository
+from db.repositories.investigation import (
+    CaseAccountRepository,
+    CaseRepository,
+    EvidenceRepository,
+    NoteRepository,
+)
 from db.session import get_db
 from foundation.auth import (
     actor_type_for_role,
@@ -44,6 +49,7 @@ from foundation.auth import (
 from foundation.config import Settings
 from investigation import behavior_analysis, customer_profile, timeline, transaction_search
 from investigation.graph_filters import MAX_RADIUS, GraphFilters, get_filtered_ego_graph
+from investigation.relationship_graph import build_case_relationship_graph
 from orchestration import pattern_explanation
 
 router = APIRouter(prefix="/cases", tags=["l2"])
@@ -79,6 +85,28 @@ class NHopGraphResponse(BaseModel):
     radius: int
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+
+
+class RelationshipNode(BaseModel):
+    customer_id: str
+    name: str | None
+    in_case_scope: bool
+
+
+class RelationshipEdge(BaseModel):
+    id: int
+    entity_a: str
+    entity_b: str
+    shared_attribute: str
+    confidence: float
+    method: str
+    discovered_at: datetime
+
+
+class RelationshipGraphResponse(BaseModel):
+    case_id: str
+    nodes: list[RelationshipNode]
+    edges: list[RelationshipEdge]
 
 
 class SiblingAccountItem(BaseModel):
@@ -311,6 +339,28 @@ def get_account_graph(
     )
     db.commit()
     return NHopGraphResponse(**result)
+
+
+# ── Relationship Explorer v1 ──────────────────────────────────────────────
+
+
+@router.get("/{case_id}/relationships", response_model=RelationshipGraphResponse)
+def get_case_relationships(
+    case: Case = Depends(require_case_access), db: Session = Depends(get_db)
+) -> RelationshipGraphResponse:
+    """The Relationship Explorer full version this phase's ROADMAP entry
+    ties to this file (Phase 6 explicitly stubbed this route out --
+    "Relationship Explorer full version (Phase 7 stub only)"). Pure read
+    over already-discovered `relationships` rows (`investigation.
+    relationship_graph.build_case_relationship_graph`) -- this route never
+    runs discovery itself; that's a separate global batch job
+    (`investigation.relationship_discovery`, invoked via `scripts.
+    discover_relationships`/`demo_data.seed`, not HTTP-triggered this
+    phase). GET-only, read-only: no audit hook beyond `require_case_access`
+    since nothing is mutated."""
+    account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
+    result = build_case_relationship_graph(db, case.case_id, account_ids)
+    return RelationshipGraphResponse(**result)
 
 
 # ── Complete Customer Profile ─────────────────────────────────────────────

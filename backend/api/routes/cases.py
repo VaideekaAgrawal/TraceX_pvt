@@ -42,6 +42,7 @@ from investigation import account_facts, case_graph, previous_alerts
 from investigation.cases import close_case
 from investigation.fsm import InvalidTransitionError, transition_case
 from investigation.network_risk import compute_network_risk
+from investigation.similar_cases import find_similar_cases
 from orchestration.account_explanation import explain_account
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -147,6 +148,13 @@ class MoneyFlowNode(BaseModel):
     account_id: str
     total_amount: float
     txn_count: int
+    #: Share of total inflow (`sources`) / outflow (`beneficiaries`), 0-100.
+    #: (code-review finding, Phase 7: `investigation.path_facts` computes
+    #: this exact percentage from the same `shape_money_flow` output for its
+    #: fund-flow fact group, via `case_graph.add_flow_percentages` -- this
+    #: route wasn't surfacing it to the L1 UI even though the underlying
+    #: data was identical.)
+    pct_of_total: float
 
 
 class MoneyFlowResponse(BaseModel):
@@ -159,6 +167,19 @@ class NetworkRiskResponse(BaseModel):
     case_id: str
     network_risk_score: float | None
     network_risk_reasons: dict[str, Any] | None
+
+
+class SimilarCaseItem(BaseModel):
+    case_id: str
+    similarity: float
+    typology: str | None
+    outcome: str | None
+    computed_at: datetime
+
+
+class SimilarCasesResponse(BaseModel):
+    case_id: str
+    similar_cases: list[SimilarCaseItem]
 
 
 class ExplanationResponse(BaseModel):
@@ -378,8 +399,28 @@ def get_money_flow(
     account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
     graph = case_graph.build_case_graph_store(db, account_ids)
     ego = graph.get_ego_graph(account.account_id, radius=1)
-    shaped = case_graph.shape_money_flow(ego, account.account_id)
-    return MoneyFlowResponse(**shaped)
+    shaped = case_graph.add_flow_percentages(case_graph.shape_money_flow(ego, account.account_id))
+    return MoneyFlowResponse(
+        center=shaped["center"],
+        sources=[
+            MoneyFlowNode(
+                account_id=s["account_id"],
+                total_amount=s["total_amount"],
+                txn_count=s["txn_count"],
+                pct_of_total=s["pct_of_inflow"],
+            )
+            for s in shaped["sources"]
+        ],
+        beneficiaries=[
+            MoneyFlowNode(
+                account_id=b["account_id"],
+                total_amount=b["total_amount"],
+                txn_count=b["txn_count"],
+                pct_of_total=b["pct_of_outflow"],
+            )
+            for b in shaped["beneficiaries"]
+        ],
+    )
 
 
 # ── Network Risk Score ────────────────────────────────────────────────────
@@ -427,6 +468,44 @@ def recompute_network_risk(
     db: Session = Depends(get_db),
 ) -> NetworkRiskResponse:
     return _compute_and_respond(db, case, user)
+
+
+# ── Similar Historical Cases ──────────────────────────────────────────────
+
+
+@router.get("/{case_id}/similar-cases", response_model=SimilarCasesResponse)
+def get_similar_cases(
+    top_k: int = Query(default=5),
+    case: Case = Depends(require_case_access),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SimilarCasesResponse:
+    """Cosine similarity over the RL 16-dim feature vector
+    (`investigation.similar_cases`). GET-only, no `/recompute` sibling --
+    unlike Network Risk Score's stored-then-lazily-computed score, every
+    call here is already a live query (the query case's own vector is
+    computed on-the-fly, never persisted -- see that module's docstring),
+    so there is nothing to lazily cache."""
+    results = find_similar_cases(
+        db,
+        case.case_id,
+        top_k=top_k,
+        actor_type=actor_type_for_role(user.role),
+        actor_id=user.user_id,
+    )
+    return SimilarCasesResponse(
+        case_id=case.case_id,
+        similar_cases=[
+            SimilarCaseItem(
+                case_id=r.case_id,
+                similarity=r.similarity,
+                typology=r.typology,
+                outcome=str(r.outcome) if r.outcome is not None else None,
+                computed_at=r.computed_at,
+            )
+            for r in results
+        ],
+    )
 
 
 # ── AI account explanation ────────────────────────────────────────────────

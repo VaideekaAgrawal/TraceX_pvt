@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"kyc customers created:        {summary.kyc_customers_created}")
     print(f"relationship clusters created: {summary.relationship_clusters_created}")
+    print(f"relationships discovered:      {summary.relationships_discovered}")
     print(f"historical cases created:      {summary.historical_cases_created}")
     print(f"golden scenarios created:      {summary.golden_scenarios_created}")
     if summary.already_seeded:

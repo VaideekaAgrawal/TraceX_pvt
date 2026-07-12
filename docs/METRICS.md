@@ -109,6 +109,20 @@ Source: `scripts/run_detection_pipeline.py`/`scripts/train_detection_model.py` r
 | `graph_expanded` audit rows after one `GET .../graph` call | 1 (confirmed via `audit_log` query — closes the Phase 4 deferral) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | Pandas-NaN-vs-Pydantic-`None` crash on `GET .../graph` (real data, blank `from_bank`/`to_bank`) | Found live (no seeded test fixture had ever left these columns blank); fixed via `graph_filters._sanitize_edge`, confirmed 200 post-fix on the exact real transaction that previously 500'd | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 
+## 9. Reuse-driven intelligence (Phase 7)
+
+Source: `scripts/train_detection_model.py`/`run_detection_pipeline.py`/`generate_demo_data.py` run live against a throwaway copy of the real ingested dataset (166,207 customers / 518,573 accounts / 8,002 transactions), then the new routes (`GET .../similar-cases`, `GET .../relationships`, `GET .../money-flow`) driven over `TestClient`, plus `investigation.path_facts.compute_path_recommendation_facts` driven directly (no HTTP route).
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| Relationship Explorer candidate pool size (real data) | 213 (correctly gated to `pan IS NOT NULL OR income_bracket IS NOT NULL`, not the full 166,207 real customers) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| Relationships discovered (demo + real pool, one `generate_demo_data.py` run) | 5,382 total — branch: 1,620, income_bracket: 3,713, name: 40, pan: 9 (income_bracket/branch volume expected and by-design given their deliberately low 0.35/0.25 "coarse categorical" confidence over only ~6 buckets across ~200 customers) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| Similar Historical Cases similarity variance (real open case vs. 50-case demo corpus) | 0.9985 down to 0.9922 across top-5 (real variance, not pinned) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| `case_feature_vector` corpus growth after closing 2 real cases via the real decision endpoint | Both newly-closed cases correctly appeared in a third case's similar-cases results at similarity 1.0 (confirms `close_case`'s new upsert + live corpus growth, not just demo data) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| `GET .../money-flow` `pct_of_total` (real transaction data) | Sums to 100.0% per direction bucket (sources/beneficiaries) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| `compute_path_recommendation_facts` fund-flow % sum (real pipeline cases, 51-edge ego-graphs) | 100.0% per bucket across 15 sampled real cases, no crash/div-by-zero | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| Test count — Phase 7 merge | 410 tests | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+
 ---
 
 ## How to keep this file current
