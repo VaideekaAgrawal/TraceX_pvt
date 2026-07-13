@@ -127,7 +127,7 @@ def test_explain_account_first_call_writes_interaction_and_is_not_cached(
         calls.append(prompt)
         return "Fake explanation."
 
-    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(account_explanation, "_call_llm", _fake_call)
 
     result = account_explanation.explain_account(
         session, "CASE1", "A1",
@@ -158,7 +158,7 @@ def test_explain_account_second_call_is_cached_with_no_additional_llm_call(
         calls.append(prompt)
         return "Fake explanation."
 
-    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(account_explanation, "_call_llm", _fake_call)
 
     first = account_explanation.explain_account(
         session, "CASE1", "A1",
@@ -188,7 +188,7 @@ def test_explain_account_force_bypasses_cache(
         calls.append(prompt)
         return f"Explanation #{len(calls)}."
 
-    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(account_explanation, "_call_llm", _fake_call)
 
     first = account_explanation.explain_account(
         session, "CASE1", "A1",
@@ -217,7 +217,7 @@ def test_explain_account_facts_and_prompt_never_contain_narration_or_purpose(
         captured_prompts.append(prompt)
         return "Fake explanation."
 
-    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(account_explanation, "_call_llm", _fake_call)
 
     account_explanation.explain_account(
         session, "CASE1", "A1",
@@ -250,13 +250,13 @@ def test_explain_account_rejects_account_outside_case_scope(session: Session) ->
         )
 
 
-def test_call_openrouter_not_configured_raises_explanation_unavailable(session: Session) -> None:
+def test_call_llm_not_configured_raises_explanation_unavailable(session: Session) -> None:
     settings = Settings(env="dev", jwt_secret="test-secret", openrouter_api_key="")
     with pytest.raises(
         account_explanation.ExplanationUnavailableError,
         match=account_explanation._NOT_CONFIGURED_MESSAGE,
     ):
-        account_explanation._call_openrouter("hello", settings=settings)
+        account_explanation._call_llm("hello", settings=settings)
 
 
 def test_explain_account_failure_is_not_cached(session: Session) -> None:

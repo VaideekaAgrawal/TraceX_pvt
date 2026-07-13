@@ -51,10 +51,30 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     jwt_expiry_minutes: int = Field(default=60 * 8)
 
-    # ── LLM gateway (ROADMAP Phase 8) ──
+    # ── LLM gateway (ROADMAP Phase 8, committed decision 6) ──
+    # The gateway speaks the OpenAI chat-completions schema via the `openai`
+    # SDK, pointed at `llm_base_url`. That schema IS the portable provider
+    # interface (OpenRouter, vLLM, TGI and Ollama all serve it), so a
+    # bank-mandated on-prem swap is a base_url change, not a rewrite — which
+    # is why there is deliberately no further provider-abstraction layer.
     llm_provider: str = Field(default="openrouter")
+    llm_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_api_key: str = Field(default="")
-    llm_model: str = Field(default="anthropic/claude-opus-4.8")
+    # Verified against OpenRouter's GET /api/v1/models before being committed:
+    # this model reports both `tools` and `structured_outputs` in
+    # `supported_parameters`. Phase 8's whole substrate (tool catalog +
+    # structured grounding contract) is unusable without function-calling, so
+    # do not swap this default for a model that lacks it.
+    llm_model: str = Field(default="openai/gpt-5")
+
+    # ── PII (ROADMAP Phase 8, committed decision 9) ──
+    # Keys `Relationship.value_hash`'s HMAC-SHA256. A bare SHA256 of a
+    # low-entropy identifier (a PAN is 10 chars from a known alphabet) is
+    # brute-forceable if the DB ever leaks; keying it makes the digest
+    # useless without this secret. Relationship rows are derived, so rotating
+    # this key is a regenerate via `scripts/discover_relationships.py`, not a
+    # migration.
+    pii_hmac_key: str = Field(default="")
 
     # ── Graph engine ──
     graph_backend: str = Field(default="networkx")  # networkx | neo4j (future)
@@ -67,19 +87,31 @@ class Settings(BaseSettings):
         Called explicitly by the app factory, not at import time, so tests
         can construct Settings() without secrets configured.
 
-        Only checks `jwt_secret` — every phase up to and including Phase 2
-        needs it. `openrouter_api_key` is deliberately NOT checked here: no
-        code calls the LLM gateway yet (it doesn't exist until Phase 8), so
-        requiring it today would make any non-dev boot of the current
-        auth-only API fail for a secret nothing uses. Phase 8 should add its
-        own check at the point the LLM gateway is actually constructed, not
-        here (code review finding, Phase 2: this method was previously never
-        invoked anywhere, so this over-broad requirement was latent until
-        Phase 2 wired it into real app startup)."""
+        Phase 2 checked only `jwt_secret`, and deliberately deferred the LLM
+        key on the grounds that no code called the gateway yet — requiring a
+        secret nothing used would have broken non-dev boots of an auth-only
+        API for no benefit. Phase 8 is the phase that makes both secrets
+        load-bearing on the request path, so both are now required outside
+        `dev`:
+
+        - `openrouter_api_key` — without it every AI surface degrades to
+          "not configured" at the first investigator request rather than at
+          boot, which is exactly the kind of failure a pilot deployment
+          should not discover in front of a user.
+        - `pii_hmac_key` — without it `Relationship.value_hash` would fall
+          back to an unkeyed digest of a low-entropy identifier. Failing
+          closed at boot is the point: a silently-unkeyed hash is the bug.
+
+        Both keep an empty default so `dev` and the test suite construct
+        `Settings()` freely."""
         if self.env != "dev":
             missing = []
             if not self.jwt_secret:
                 missing.append("jwt_secret")
+            if not self.openrouter_api_key:
+                missing.append("openrouter_api_key")
+            if not self.pii_hmac_key:
+                missing.append("pii_hmac_key")
             if missing:
                 raise RuntimeError(
                     f"Missing required secrets for env={self.env}: {', '.join(missing)}"

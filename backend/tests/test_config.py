@@ -20,7 +20,7 @@ def test_database_url_default_points_to_repo_root_not_cwd():
 
 
 def test_validate_secrets_fails_loudly_when_missing_in_non_dev():
-    settings = Settings(env="prod", jwt_secret="", openrouter_api_key="")
+    settings = Settings(env="prod", jwt_secret="", openrouter_api_key="", pii_hmac_key="")
     with pytest.raises(RuntimeError, match="jwt_secret"):
         settings.validate_secrets()
 
@@ -30,12 +30,31 @@ def test_validate_secrets_passes_in_dev_without_secrets():
     settings.validate_secrets()  # must not raise
 
 
-def test_validate_secrets_ignores_missing_openrouter_key_in_non_dev():
-    # Regression test (code review, Phase 2): nothing calls the LLM gateway
-    # yet (it lands in Phase 8), so a non-dev boot of the current auth-only
-    # API must not fail over a secret no code uses — only jwt_secret is
-    # required today.
-    settings = Settings(env="prod", jwt_secret="real-secret", openrouter_api_key="")
+def test_validate_secrets_requires_llm_key_in_non_dev():
+    # ROADMAP Phase 8: Phase 2 deliberately did NOT require this, on the
+    # grounds that no code called the LLM gateway yet. Phase 8 is the phase
+    # that puts it on the request path, so a non-dev boot without it must now
+    # fail at startup rather than degrading every AI surface to "not
+    # configured" at the first investigator request.
+    settings = Settings(env="prod", jwt_secret="real", openrouter_api_key="", pii_hmac_key="k")
+    with pytest.raises(RuntimeError, match="openrouter_api_key"):
+        settings.validate_secrets()
+
+
+def test_validate_secrets_requires_pii_hmac_key_in_non_dev():
+    # ROADMAP Phase 8 (committed decision 9): without this key,
+    # `Relationship.value_hash` would fall back to an unkeyed SHA256 of a
+    # low-entropy identifier — brute-forceable if the DB leaks. Failing closed
+    # at boot is the point; a silently-unkeyed hash is the bug.
+    settings = Settings(env="prod", jwt_secret="real", openrouter_api_key="k", pii_hmac_key="")
+    with pytest.raises(RuntimeError, match="pii_hmac_key"):
+        settings.validate_secrets()
+
+
+def test_validate_secrets_passes_in_non_dev_with_all_secrets():
+    settings = Settings(
+        env="prod", jwt_secret="real", openrouter_api_key="k", pii_hmac_key="h"
+    )
     settings.validate_secrets()  # must not raise
 
 

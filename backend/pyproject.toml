@@ -43,12 +43,16 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "xgboost>=2.0.0",
     "joblib>=1.3.0",
-    # Phase 5: direct OpenRouter call in `orchestration.account_explanation`
-    # (ported from the archive's `_call_openrouter`) — also satisfies
-    # fastapi.testclient.TestClient's own httpx dependency (Phase 2's
-    # HTTP-round-trip auth tests), which previously pulled this in only via
-    # the `dev` extra. A core runtime dependency now that real request-path
-    # code imports it directly, not just tests.
+    # Phase 8 LLM gateway (committed decision 6): `orchestration.gateway`
+    # speaks the OpenAI chat-completions schema against a configurable
+    # `base_url` (OpenRouter today). That schema is the portable provider
+    # interface — vLLM/TGI/Ollama all serve it — so an on-prem swap is a
+    # config change, not a rewrite. This SDK replaces the Phase 5/6 raw-httpx
+    # POST; do NOT add a second provider SDK alongside it.
+    "openai>=1.40.0",
+    # Still direct: fastapi.testclient.TestClient depends on it (Phase 2's
+    # HTTP-round-trip auth tests), and the `openai` SDK is built on it too.
+    # Kept explicit rather than relied on transitively.
     "httpx>=0.27.0",
 ]
 
