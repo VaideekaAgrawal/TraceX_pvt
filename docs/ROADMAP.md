@@ -20,6 +20,34 @@
 
 ---
 
+## Committed decisions — AI substrate (planning session, 2026-07-13 — do not re-litigate)
+
+These lock Phase 8's previously-open questions and **refine decision 4 above**. They are grounded in the project's actual data (verified this session — see *Data reality* below), not in the abstract.
+
+6. **LLM gateway = the `openai` SDK against a configurable `base_url`; OpenRouter today.** Not the Anthropic SDK, not raw `httpx`. Rationale: the OpenAI chat-completions schema *is* the portable provider interface — OpenRouter, vLLM, TGI and Ollama all speak it — so a bank-mandated on-prem swap becomes a `base_url` change, not a rewrite. Deliberately **no further provider-abstraction layer** on top: it would buy nothing the SDK does not already give, and a lowest-common-denominator wrapper would forfeit tool-calling and structured outputs, which the whole substrate depends on. Model for the pitch: a best-quality proprietary model via OpenRouter (verify `tools` is in `supported_parameters` via `GET /api/v1/models` before committing the default string — do not assume). `orchestration/llm_client.py`'s raw-`httpx` POST is **replaced**, not wrapped.
+7. **Caching = response-level only.** The existing `find_cached_interaction` most-recent-wins lookup over `ai_interactions` is the entire caching story. Provider-native *prompt* caching is deliberately **not** designed for: it is vendor-specific and would forfeit exactly the portability decision 6 exists to buy. Do not reintroduce it.
+8. **Grounding is an enforced gate, not a prompt instruction.** Tools return structured fact dicts that accumulate into a per-interaction **fact bundle**; the model returns structured output in which every claim carries the fact key it came from; a **deterministic post-generation validator rejects any claim whose citation does not resolve to a fact in the bundle** (and, in Phase 9, any action not in the deterministic catalog). *The model cannot assert a number it was not handed.* `ai_interactions.facts` / `tools_called` / `rule_anchors` — schema-ready since Phase 1 and null ever since — become always-populated.
+9. **PII posture = zero egress, enforced by assertion, fail-closed.** This **refines decision 4**: not pseudonymize-and-re-hydrate. Tools are *shaped* so PII is never in the return value (`customer_id`, `risk_rating`, `pep_status`, `kyc_status`, `income_bracket` — never `name`/`pan`/`aadhaar`/`phone`), and a gate over every prompt-bound fact bundle **raises** on a PII value rather than silently stripping it. *"It never left our perimeter"* is a provable claim to a bank; *"we de-identified it"* is a materially weaker one. Tokenize/re-hydrate is **designed** in Phase 8 but **built in Phase 10**, where the Copilot genuinely needs an investigator to see a name.
+10. **Attacker-controllable free text stays out of every prompt.** `transactions.narration` / `purpose` are **0-populated in the real dataset** (verified) — so the exclusion costs zero features, and the Phase 5 regression test enforcing it stays green at no cost. The only *live* free-text surface is `notes.body` (investigator-written); its guardrail is a **Phase 10** problem, not Phase 8's.
+11. **Demo data is a first-class pitch asset, kept strictly separable.** The `DEMO-`-prefixed Phase 1B seed (KYC/PAN/phone/device/relationships + 7 golden scenarios) is what makes the Relationship Explorer, the L1 KYC surfaces, and Phase 9's recommendations demonstrable **at all** — without it the only discoverable relationships are `income_bracket`/`branch` noise at confidence 0.25–0.35 (Session 11 verified: 3,713 + 1,620 of them). Pitch framing is two-tier and **stated aloud**: *detection engine trained and validated at full scale on IBM's public AML benchmark; investigation features demonstrated on engineered scenarios with planted ground truth.* Never imply real bank data.
+
+### Data reality (verified 2026-07-13 — stop re-deriving this)
+
+Queried directly against `data/tracex.db`:
+
+| | |
+|---|---|
+| Customers | 166,207 — IBM HI-Small synthetic entities (`Corporation #33520`, `Sole Proprietorship #50438`) |
+| `customers.pan` / `aadhaar` / `phone` populated | **0** |
+| Transactions | 8,002 |
+| `transactions.narration` / `purpose` populated | **0** |
+
+**There is no real customer PII in this project.** The three sources are IBM AML HI-Small (a public synthetic benchmark), a hand-built India-adapted mock (`data/tracex_test_day1.csv` — accounts literally named `PMFRAUD01`), and the `DEMO-` Phase 1B seed. The 🔒PII columns registered in `db/pii.py` are aspirational except where the demo seed fills them.
+
+**Consequence:** PII egress during the pitch build is a **design and narrative** concern, not a legal one. Build the zero-egress path because it is what production requires and what the pitch claims — not because a data subject is at risk today. This also means Phase 8 can be built and experimented against freely without redaction being a blocker on its own construction.
+
+---
+
 ## Target architecture (greenfield skeleton)
 
 ```
@@ -174,31 +202,37 @@ Legend: **Status** = not started | in progress | done.
 **Status:** done
 
 ### Phase 8 — AI substrate (shared foundation for both agents)
-**Goal:** Build once what both the Recommendation Engine and Copilot stand on.
-**Depends on:** Phase 4 (audit), Phase 7 (structured facts)
+**Goal:** Build once what both the Recommendation Engine and Copilot stand on — and make *grounded, auditable, no-PII-egress* a property **enforced in code**, not promised in a prompt.
+**Depends on:** Phase 4 (audit), Phase 7 (structured facts) — both merged.
 **Branch:** phase/8-ai-substrate
+**Decisions:** 6–11 above are locked. Read them before starting; do not re-open them.
 **Scope (checklist):**
-- [ ] **LLM gateway** — provider-abstracted (OpenRouter now, self-host swap later), with ret/timeout/caching.
-- [ ] **PII redaction/tokenization middleware** — pseudonymize identities before egress, re-hydrate on return.
-- [ ] **Tool layer** — a fixed catalog of retrievable/computed tools scoped to a single case ID; never free-form DB/graph queries.
-- [ ] **Guardrail middleware** — sanitize attacker-controllable free text (narration, declared purpose) before it enters any prompt; enforce case-scoping via Phase 2 data-scoping.
-- [ ] **AI-action audit hook** — every AI call + tools used + facts returned logged to the Phase 4 audit trail.
-**Explicitly out of scope:** the agents themselves (Phases 9–10).
-**Reference:** §5 (AI Guardrails), decision 3 & 4.
+- [ ] **LLM gateway** (`orchestration/gateway.py`) — `openai` SDK against `settings.llm_base_url` (OpenRouter). SDK-native retry (`max_retries`) and timeout; typed exceptions (`RateLimitError` / `APIStatusError` / `APIConnectionError`) mapped onto the existing `ExplanationUnavailableError` contract, so the Phase 5 landmine (*a failed call persisted as a cached success, then served back as `cached: True` forever*) stays fixed. **Replaces** `orchestration/llm_client.py`'s raw-`httpx` POST; `account_explanation` / `pattern_explanation` migrate onto it with behavior unchanged.
+- [ ] **Settings + secrets** — add `llm_base_url`; extend `Settings.validate_secrets()` to require the LLM API key **and** a new `pii_hmac_key` in staging/prod (`foundation/config.py`'s own docstring already defers exactly this to Phase 8). Verify the default model string against OpenRouter's `GET /api/v1/models` for `tools` in `supported_parameters` before committing it — a model that silently lacks function-calling kills the whole substrate.
+- [ ] **Tool layer** (`orchestration/tools/`) — a **fixed** catalog. Each tool wraps an **already-built** Phase 5–7 function (no new computation), carries a strict JSON schema (`strict: true`, `additionalProperties: false`), and returns a structured fact dict — **never prose**. `case_id` is **bound at construction, never a model-supplied argument** — the model cannot choose which case it looks at. Account-id arguments go through the existing `require_case_scoped_account`, so an out-of-case request returns a tool **error**, not data: case-scoping enforced in code, not in the prompt. Catalog (all twelve already exist): case summary · account facts · money flow (with `pct_of_total`) · filtered ego-graph · network risk · similar cases · relationships · path-recommendation facts · timeline · behavior analysis · transaction search · previous alerts.
+- [ ] **Grounding contract** (`orchestration/grounding.py`) — the **centrepiece of this phase, not a sub-task**. Defines the per-interaction fact bundle; the structured-output schema in which every model claim carries the fact key it came from; and the **deterministic validator** that rejects any claim whose citation does not resolve. See decision 8.
+- [ ] **PII egress gate** (`orchestration/redaction.py`) — a fail-closed assertion over every prompt-bound fact bundle, checked against `db/pii.py::PII_COLUMNS`. **Raises** on a PII value; never silently strips (a silent strip cannot be proven; a raise can). Populates `ai_interactions.redacted`. Belt *and* braces: the tools are separately shaped so PII isn't in the return value to begin with. Note `Relationship.value_hash` already delivers this for free — the AI sees `shared_attribute: "pan", confidence: 0.95, 3 entities` and **never the PAN**.
+- [ ] **`_value_hash` → HMAC-SHA256** keyed on `pii_hmac_key` — resolves Session 11's deferred item (an unsalted SHA256 of a low-entropy identifier like a PAN is brute-forceable if the DB ever leaks). Relationship rows are *derived*, so this is a regenerate via `scripts/discover_relationships.py`, **not** a migration.
+- [ ] **Demo identifier safety** (`demo_data/kyc_customers.py`) — `_synthetic_pan` currently emits the **exact real PAN format** (5 letters + 4 digits + 1 letter), and PAN carries **no checksum**, so a generated value can collide with a real person's; `_synthetic_phone` likewise emits a real Indian mobile format. Make both deliberately format-**invalid** (keep the string length so the UI still reads right — the Relationship Explorer matches on *equality*, so format is functionally irrelevant). Aadhaar (`1`-prefixed → structurally impossible, real Aadhaar never starts 0 or 1) and email (`.invalid`, an IANA-reserved TLD) are **already safe** — leave them alone. Shipping valid-format PANs from an AML compliance product is indefensible in the room we are pitching to.
+- [ ] **AI-action audit** — `facts` / `tools_called` / `rule_anchors` always-populated **by the gateway**, not per-caller. The `audit_log` hash chain already fires automatically through `BaseRepository._create` (`action="ai_interaction_created"`) — this is **not** a new mechanism, it is filling three columns that have been sitting null since Phase 1.
+**Explicitly out of scope:** the agents themselves (Phases 9–10); provider-native prompt caching (decision 7); the pseudonymize/re-hydrate *implementation* (designed here, built in Phase 10); the `notes.body` free-text guardrail (Phase 10).
+**Deferred, deliberately:** stale `relationships` rows are never invalidated when the underlying shared value changes (Session 11). Not on the demo path — PAN exists only in the demo seed, which is regenerated wholesale — and fixing it properly means deciding whether to break the repository's append-only design. Logged, not fixed.
+**Reference:** §5 (AI Guardrails); decisions 3 & 4, as refined by decisions 6–11.
 **Status:** not started
 
 ### Phase 9 — Recommendation Engine (deterministic-guarded reasoner)
-**Goal:** The intelligent "what next" agent that reasons over full evidence + graph, defensibly.
-**Depends on:** Phase 8
+**Goal:** The intelligent "what next" agent that reasons over full evidence + graph, defensibly. **The rules define the action space; the LLM only ranks and explains within it — it can never invent an action, and (per decision 8) it can never assert a number it was not handed.**
+**Depends on:** Phase 8 (gateway, tool layer, grounding contract, PII gate)
 **Branch:** phase/9-recommendation-engine
 **Scope (checklist):**
-- [ ] Deterministic action catalog + rule set: valid next steps, each mapped to a typology + regulatory anchor (FATF rec / RBI expectation).
-- [ ] Ranking policy — deterministic/evidence-weighted first, structured so the RL feature vector can drive it later.
-- [ ] Reasoning + explanation over the case ego-graph & evidence, bounded by rules and grounded via Phase 8 tools (computed facts, not guesses).
-- [ ] **Cross-question dialogue** — investigator challenges a recommendation; engine re-invokes rules/tools and defends with cited facts.
-- [ ] Log every recommendation with its driving facts + anchor (auditable).
+- [ ] **Deterministic action catalog + rule set** — the valid next steps, each mapped to a typology **and** a regulatory anchor (FATF recommendation / RBI expectation). This catalog *is* the action space; nothing outside it can be recommended.
+- [ ] **Rule grounding** — a rule firing emits a **structured evidence record**, not a verdict string: rule id, the threshold tested, the **observed value**, the exact accounts/transactions that triggered it, the typology, the regulation. This is what populates `rule_anchors`, and it is what makes a recommendation reconstructable by a regulator *without trusting the model at all*.
+- [ ] **Ranking policy** — deterministic / evidence-weighted first, structured so the RL feature vector can drive it later.
+- [ ] **Reasoning + explanation** over the case ego-graph and evidence, bounded by the rules and grounded in Phase 8's tool-computed fact bundle.
+- [ ] **Structured output + validation gate** — recommendations returned as JSON: `action_id` (**must** exist in the catalog), rationale, `cited_facts` (**must** resolve in the fact bundle), `rule_anchor`, confidence. Anything failing either check is **rejected before it reaches the investigator** — the guardrail is a code path, not a prompt.
+- [ ] **Cross-question dialogue** — investigator challenges a recommendation; the engine re-invokes rules + tools and defends with cited facts, appended to the same audited `ai_interactions` thread.
 **Explicitly out of scope:** the personal/cross-case Copilot (Phase 10); workflow-pattern learning (roadmap, `docs/RL_USP.md`).
-**Reference:** §4.1 (Path Rec), decision 3, §5 (guardrails).
+**Reference:** §4.1 (Path Rec), decisions 3 & 8, §5 (guardrails).
 **Status:** not started
 
 ### Phase 10 — Investigation Copilot (personal workspace agent)
@@ -209,6 +243,8 @@ Legend: **Status** = not started | in progress | done.
 - [ ] Fixed tool catalog: find/filter *my* cases; "what changed since last login" digest (over the audit log); read/write case-specific notes; grounded Q&A over the current case ego-graph.
 - [ ] Hard RBAC scoping to the investigator's own cases (Phase 2 enforcement).
 - [ ] Guardrails from Phase 8 applied end-to-end; clearly-AI-labeled, facts independently viewable.
+- [ ] **PII pseudonymize / re-hydrate — inherited from Phase 8 (decision 9), built here.** This is the one place the zero-egress invariant legitimately has to bend: an investigator asking *"what else is Rajesh connected to?"* needs a name back. Deterministic per-request token map (`CUST_A1` ↔ `customer_id`), held in-request, re-hydrated on return, **never persisted**. Phase 8 designs it; Phase 10 is the first caller that actually needs it.
+- [ ] **`notes.body` free-text guardrail — inherited from Phase 8 (decision 10), built here.** `notes.body` is the project's only *live* attacker-influenced free-text surface (`narration`/`purpose` are 0-populated). The Copilot both reads and writes notes, so it needs its own explicit guardrail design — per `CLAUDE.md`, the existing per-account-explanation pattern **does not automatically transfer** to a feature that ingests free text.
 **Explicitly out of scope:** actions that mutate case decisions (Copilot assists; decisions stay with the investigator/Admin roles).
 **Reference:** §4.2 (Copilot), §5 (guardrails), decision 3.
 **Status:** not started

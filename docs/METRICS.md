@@ -125,6 +125,33 @@ Source: `scripts/train_detection_model.py`/`run_detection_pipeline.py`/`generate
 
 ---
 
+## 10. PII / data-reality audit (Phase 8 planning — Session 13)
+
+Queried directly against `data/tracex.db` (the IBM HI-Small ingest; **no demo seed applied to this DB**). Recorded here because Phase 8's entire PII posture, and the decision to keep `narration`/`purpose` out of prompts, rest on these numbers — a future session should not re-derive them, and **should re-check them if the ingest changes.**
+
+| Metric | Value | Measured | Source |
+|---|---|---|---|
+| Customers (IBM HI-Small ingest) | 166,207 | Session 13 (2026-07-13) | `docs/SESSION_LOG.md` Session 13 |
+| `customers.pan` populated | **0** | Session 13 (2026-07-13) | ditto |
+| `customers.aadhaar` populated | **0** | Session 13 (2026-07-13) | ditto |
+| `customers.phone` populated | **0** | Session 13 (2026-07-13) | ditto |
+| Transactions | 8,002 | Session 13 (2026-07-13) | ditto |
+| `transactions.narration` populated | **0** | Session 13 (2026-07-13) | ditto |
+| `transactions.purpose` populated | **0** | Session 13 (2026-07-13) | ditto |
+
+**Interpretation:** there is **no real customer PII in this project**. Customer "names" are IBM synthetic entities (`Corporation #33520`). The 🔒PII columns registered in `db/pii.py` are aspirational except where the `DEMO-` Phase 1B seed fills them. The attacker-controllable free-text fields the guardrail spec was written about (`narration`, `purpose`) **do not exist in the data at all** — excluding them from prompts costs zero features.
+
+### Demo identifier safety audit (Session 13)
+
+| Generator | Output shape | Verdict |
+|---|---|---|
+| `_synthetic_aadhaar` | `100000000000 + i` → 12 digits starting `1` | ✅ Safe — real Aadhaar never starts 0 or 1; structurally impossible to collide |
+| `_synthetic_email` | `…@example-demo.invalid` | ✅ Safe — `.invalid` is an IANA-reserved TLD, can never resolve |
+| `_synthetic_pan` | 5 letters + 4 digits + 1 letter | ⚠️ **Defect** — the exact real PAN format, and PAN has **no checksum**, so a generated value can collide with a real person's. Fix in Phase 8. |
+| `_synthetic_phone` | `9700000001`-style | ⚠️ **Defect** — a real Indian mobile format; can collide with a live number. Fix in Phase 8. |
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
