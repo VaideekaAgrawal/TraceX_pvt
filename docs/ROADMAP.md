@@ -1,6 +1,6 @@
 # TraceX Backend Refactor Roadmap
 
-**Status: filled in by Planning Session (2026-07-09).** This is the phase-by-phase execution plan that development sessions work from, derived from `SYSTEM_DEVELOPMENT_PLAN.md` and the five committed decisions below. It supersedes the empty template. Frontend runs in parallel on its own track later; this roadmap is **backend**.
+**Status: filled in by Planning Session (2026-07-09).** This is the phase-by-phase execution plan that development sessions work from, derived from `SYSTEM_DEVELOPMENT_PLAN.md` and the five committed decisions below. It supersedes the empty template. Frontend runs in parallel on its own track later; this roadmap is **backend**. **The frontend track now has its own roadmap: `docs/FRONTEND_ROADMAP.md` (Phases 13+, continuing this file's numbering).**
 
 **Budget:** ~21–24 sessions over 7–8 days (~3 combined sessions/day), backend-weighted, frontend parallel later. Phases are sized to 1–2 sessions each.
 
