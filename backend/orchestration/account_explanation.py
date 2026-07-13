@@ -45,6 +45,7 @@ from db.repositories.orchestration import AiInteractionRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from detection.scoring.ensemble import RoleClassifier
 from foundation.config import Settings
+from foundation.llm_gateway import generate_completion as _call_openrouter
 from investigation.account_facts import transaction_stats
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT, build_case_graph_store
 from orchestration.llm_client import (
@@ -53,7 +54,6 @@ from orchestration.llm_client import (
     find_cached_interaction,
     generate_and_persist_explanation,
 )
-from orchestration.llm_client import call_openrouter as _call_openrouter
 
 # `_call_openrouter`/`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`
 # are re-exported at module level (not just imported for internal use) --

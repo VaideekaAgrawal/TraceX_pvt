@@ -1,108 +1,58 @@
 """
-Shared OpenRouter chat-completions call — extracted from
-`orchestration.account_explanation` (ROADMAP Phase 6:
-`orchestration.pattern_explanation` is the second real caller of this exact
-HTTP-call logic, meeting this codebase's own "promote on second real caller"
-convention already used for `HIGH_PAGERANK_THRESHOLD`/`CLOSING_REWARD`/
-`list_account_ids_for_case`/`require_case_scoped_account`).
+Cache-lookup and generate-and-persist tail shared by `orchestration.
+account_explanation`/`orchestration.pattern_explanation` -- ROADMAP Phase 6
+extraction, narrowed further in Phase 8.
 
-**This is NOT the Phase 8 AI substrate/LLM gateway.** Repeating
-`account_explanation.py`'s own scope-boundary language verbatim: there is NO
-provider abstraction, NO tool-calling, NO guardrail middleware here — a
-direct `httpx` POST to OpenRouter. Phase 8 may replace or wrap this module;
-it should not itself grow gateway-shaped features later (if it starts
-needing multi-provider routing, tool calls, or free-text input, that need
-belongs to Phase 8, not an extension of this file).
+**Transport now lives in `foundation.llm_gateway`.** This module used to
+also own the direct OpenRouter `httpx` call (`call_openrouter`); as of
+ROADMAP Phase 8, that call is `foundation.llm_gateway.generate_completion`
+(provider-abstracted, retry/timeout-aware). `call_openrouter`/
+`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE` are re-exported here
+under their original names purely so `account_explanation.py`/
+`pattern_explanation.py` (and every test that imports them from here) keep
+working unchanged -- see each re-export below for exactly what it aliases.
 
-Every caller of `call_openrouter` is independently responsible for its own
-guardrail property (facts assembled server-side only, never attacker-
-controllable free text) — this module only knows how to make the call, not
-what's safe to put in the prompt that reaches it.
-
-Also holds `find_cached_interaction`/`generate_and_persist_explanation` --
-the shared cache-lookup and generate-and-persist tail
-`account_explanation.explain_account`/`pattern_explanation.explain_pattern`
-both need (code-review finding, Phase 6: those two flows were near-verbatim
-duplicates of each other; extracted here on the same "second real caller"
-precedent as `call_openrouter` itself, one layer up). `generate_and_persist_
+`find_cached_interaction`/`generate_and_persist_explanation` are unchanged
+in behavior from Phase 6/7 (this module's actual remaining scope): the
+shared `ai_interactions` cache-lookup and the timed-call-plus-persist tail
+`explain_account`/`explain_pattern` both need. `generate_and_persist_
 explanation` takes the actual LLM call as a `call_fn` parameter rather than
-calling `call_openrouter` itself, so each caller still passes its OWN
-module-local `_call_openrouter` reference — this is what keeps each
-module's existing `monkeypatch.setattr(account_explanation,
-"_call_openrouter", ...)`-style test seam working unchanged: `call_fn` is
-resolved in the CALLER's frame (picking up whatever that name currently
-refers to there, including a monkeypatched value) before this function ever
-sees it.
+calling the gateway itself, so each caller still passes its OWN module-local
+`_call_openrouter` reference -- this is what keeps each module's existing
+`monkeypatch.setattr(account_explanation, "_call_openrouter", ...)`-style
+test seam working unchanged: `call_fn` is resolved in the CALLER's frame
+(picking up whatever that name currently refers to there, including a
+monkeypatched value) before this function ever sees it.
 """
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Callable
 from typing import Any
 
-import httpx
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, AiAgent
 from db.models.orchestration import AiInteraction
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
+from foundation.llm_gateway import _NOT_CONFIGURED_MESSAGE  # noqa: F401
+from foundation.llm_gateway import GatewayError as ExplanationUnavailableError  # noqa: F401
+from foundation.llm_gateway import generate_completion as call_openrouter  # noqa: F401
 
-logger = logging.getLogger(__name__)
-
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_NOT_CONFIGURED_MESSAGE = "AI explanations not configured. Set openrouter_api_key."
-
-
-class ExplanationUnavailableError(Exception):
-    """Raised by `call_openrouter` when no explanation could be generated
-    (missing API key, network failure, non-2xx response, malformed body).
-    Every caller catches this and returns a visible message WITHOUT
-    persisting a cached/successful-looking record for it (code-review
-    finding, Phase 5, `orchestration.account_explanation`: the previous
-    "fails open by returning the error text" design got that error text
-    written to `ai_interactions` and then served back as `cached: True`,
-    indistinguishable from a real explanation, on every subsequent
-    non-force call — a transient outage could get permanently "cached" as
-    the answer). This same contract applies to every caller of this
-    module, not just the account-explanation path."""
-
-
-def call_openrouter(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
-    """Single OpenRouter chat-completions call (temperature=0.3, 20s
-    timeout) — ported near-verbatim from `archive/fund-flow-tracker/api/
-    server.py::_call_openrouter` via `orchestration.account_explanation`'s
-    Phase-5 port. Raises `ExplanationUnavailableError` on any failure
-    (missing key, network error, non-2xx response, malformed body) instead
-    of returning an error string — the caller is the layer that decides how
-    a failure is surfaced/not-cached; this function only knows how to make
-    the call."""
-    if not settings.openrouter_api_key:
-        raise ExplanationUnavailableError(_NOT_CONFIGURED_MESSAGE)
-    try:
-        response = httpx.post(
-            _OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:3000",
-                "X-Title": "TraceX AML",
-            },
-            json={
-                "model": settings.llm_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return str(content).strip()
-    except Exception as exc:  # noqa: BLE001 -- narrowed to ExplanationUnavailableError below
-        logger.warning("OpenRouter call failed: %s", exc)
-        raise ExplanationUnavailableError(f"Could not generate explanation: {exc}") from exc
+# `call_openrouter`/`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`
+# are re-exported at module level (not just imported for internal use) --
+# `account_explanation.py`/`pattern_explanation.py` import
+# `call_openrouter as _call_openrouter` from here, and both modules'
+# existing tests reference `ExplanationUnavailableError`/
+# `_NOT_CONFIGURED_MESSAGE` off the `account_explanation`/`pattern_
+# explanation` module objects (which re-export them again from here) --
+# see those modules' own docstrings. `foundation.llm_gateway.
+# generate_completion`'s signature (`prompt, *, settings, max_tokens=300,
+# provider=None`) is a strict superset of the old `call_openrouter(prompt,
+# *, settings, max_tokens=300)` signature, so this alias is a literal
+# drop-in replacement -- every existing `call_fn(prompt, settings=settings)`
+# call site needs zero changes.
 
 
 def find_cached_interaction(
@@ -137,19 +87,32 @@ def generate_and_persist_explanation(
     actor_type: ActorType,
     actor_id: str,
     rule_anchors: dict[str, Any] | None = None,
+    tools_called: list[dict[str, Any]] | None = None,
+    redacted: bool = False,
 ) -> AiInteraction:
     """Timed LLM call + `AiInteraction` persistence -- the shared tail of
     `account_explanation.explain_account`/`pattern_explanation.
     explain_pattern`'s near-identical flows (code-review finding, Phase 6).
 
-    Calls `call_fn(prompt, settings=settings)` rather than `call_openrouter`
+    Calls `call_fn(prompt, settings=settings)` rather than the gateway
     directly -- see module docstring for why (preserves each caller's own
     monkeypatch-at-`_call_openrouter` test seam). Raises
     `ExplanationUnavailableError` on failure, propagated from `call_fn` and
     NOT caught here -- the caller decides how to surface it (matching
     `call_openrouter`'s own "the caller decides" contract). Does NOT commit
     -- caller owns the transaction boundary, matching every other
-    investigation/orchestration-layer function."""
+    investigation/orchestration-layer function.
+
+    `tools_called`/`redacted` (ROADMAP Phase 8, both new, both defaulted so
+    the two existing callers are byte-for-byte unaffected if they don't
+    pass them): threaded straight through to `AiInteractionRepository.
+    create(...)` -- `tools_called` records which fixed-catalog tools (see
+    `orchestration.tools`) a future agent called to assemble `facts`
+    (`None`/empty for the current two callers, which assemble facts via
+    direct repository reads, not the tool layer); `redacted` records
+    whether `prompt` passed through `foundation.pii_redaction.redact_facts`
+    before reaching the LLM (replaces this call's previous hardcoded
+    `redacted=False`)."""
     start = time.monotonic()
     explanation = call_fn(prompt, settings=settings)
     latency_ms = int((time.monotonic() - start) * 1000)
@@ -164,7 +127,8 @@ def generate_and_persist_explanation(
         response_text=explanation,
         model=settings.llm_model,
         model_provider=settings.llm_provider,
-        redacted=False,
+        tools_called=tools_called,
+        redacted=redacted,
         latency_ms=latency_ms,
         actor_type=actor_type,
         actor_id=actor_id,

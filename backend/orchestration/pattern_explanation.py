@@ -73,12 +73,12 @@ from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
+from foundation.llm_gateway import generate_completion as _call_openrouter
 from orchestration.llm_client import (
     ExplanationUnavailableError,
     find_cached_interaction,
     generate_and_persist_explanation,
 )
-from orchestration.llm_client import call_openrouter as _call_openrouter
 
 
 def compute_pattern_signature(detection_type: str, account_ids: list[str]) -> str:
