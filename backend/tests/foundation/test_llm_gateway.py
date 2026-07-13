@@ -95,6 +95,29 @@ def test_non_retryable_error_raises_immediately_without_retry() -> None:
     assert provider.calls == 1  # no retry attempted
 
 
+def test_provider_error_is_logged_on_each_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression test (code-review finding): logging was dropped during the
+    # extraction from the old orchestration/llm_client.py::call_openrouter
+    # (which logged every failure via logger.warning) into
+    # foundation/llm_gateway.py -- LLM outages produced zero server-side
+    # log signal. Confirm both the retrying-attempt and the final-failure
+    # cases each emit a warning. Monkeypatches `llm_gateway.logger.warning`
+    # directly rather than relying on `caplog`'s propagation-through-the-
+    # logger-hierarchy behavior, which proved order-dependent across the
+    # full test suite (passed in isolation, failed when run after other
+    # test modules that touch global logging state) -- this is
+    # deterministic regardless of what else in the suite has run.
+    warnings_logged: list[str] = []
+    monkeypatch.setattr(
+        llm_gateway.logger, "warning", lambda msg, *args, **kwargs: warnings_logged.append(msg)
+    )
+
+    provider = _FakeProvider(fail_times=10, retryable=True)
+    with pytest.raises(GatewayError):
+        generate_completion("hello", settings=_settings(), provider=provider)
+    assert len(warnings_logged) == llm_gateway._MAX_ATTEMPTS
+
+
 def test_openrouter_provider_missing_api_key_raises_non_retryable() -> None:
     provider = OpenRouterProvider(api_key="")
     with pytest.raises(ProviderError) as exc_info:
@@ -140,6 +163,24 @@ def test_openrouter_provider_classifies_other_4xx_as_non_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(llm_gateway.httpx, "post", lambda *a, **k: _FakeResponse(401, {}))
+    provider = OpenRouterProvider(api_key="test-key")
+    with pytest.raises(ProviderError) as exc_info:
+        provider.complete("hello", model="m", max_tokens=10, temperature=0.3, timeout=1.0)
+    assert exc_info.value.retryable is False
+
+
+def test_openrouter_provider_null_choice_element_is_non_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression test (code-review finding, PLAUSIBLE): a response body
+    # like {"choices": [null]} is valid JSON with the key/index present,
+    # but the null element raises TypeError on the next ["message"]
+    # subscript -- not KeyError/IndexError. Previously uncaught, this
+    # propagated past the retry loop and past callers' `except
+    # ExplanationUnavailableError` as an unhandled crash.
+    monkeypatch.setattr(
+        llm_gateway.httpx, "post", lambda *a, **k: _FakeResponse(200, {"choices": [None]})
+    )
     provider = OpenRouterProvider(api_key="test-key")
     with pytest.raises(ProviderError) as exc_info:
         provider.complete("hello", model="m", max_tokens=10, temperature=0.3, timeout=1.0)

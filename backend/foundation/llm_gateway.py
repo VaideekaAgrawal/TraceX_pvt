@@ -23,6 +23,7 @@ a guaranteed-identical failure.
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -30,6 +31,8 @@ from typing import Protocol
 import httpx
 
 from foundation.config import Settings
+
+logger = logging.getLogger(__name__)
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _NOT_CONFIGURED_MESSAGE = "AI explanations not configured. Set openrouter_api_key."
@@ -126,7 +129,11 @@ class OpenRouterProvider:
 
         try:
             content = response.json()["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError) as exc:
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            # `TypeError` covers a plausible-but-malformed shape like
+            # `{"choices": [null]}` -- valid JSON, present key/index, but a
+            # `None` element raises `TypeError` on the next `["message"]`
+            # subscript, not `KeyError`/`IndexError` (code-review finding).
             raise ProviderError(
                 f"OpenRouter response malformed: {exc}", retryable=False
             ) from exc
@@ -186,7 +193,15 @@ def generate_completion(
             last_exc = exc
             is_last_attempt = attempt == _MAX_ATTEMPTS - 1
             if not exc.retryable or is_last_attempt:
+                logger.warning(
+                    "LLM gateway call failed permanently (attempt %d/%d, retryable=%s): %s",
+                    attempt + 1, _MAX_ATTEMPTS, exc.retryable, exc,
+                )
                 raise GatewayError(str(exc)) from exc
+            logger.warning(
+                "LLM gateway call failed, retrying (attempt %d/%d): %s",
+                attempt + 1, _MAX_ATTEMPTS, exc,
+            )
             _sleep(min(_MAX_DELAY_SECONDS, _BASE_DELAY_SECONDS * 2**attempt))
 
     # Unreachable (the loop above always either returns or raises), but

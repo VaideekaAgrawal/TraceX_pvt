@@ -40,6 +40,20 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     settings = get_settings()
+    if not settings.pii_hmac_secret:
+        # Code-review finding (ROADMAP Phase 8): without this check, an
+        # unset PII_HMAC_SECRET crashed the relationship_discovery stage
+        # with an unhandled ValueError deep inside
+        # foundation.hashing.hmac_sha256_hex instead of a clean error --
+        # matches scripts/discover_relationships.py's/scripts.
+        # reconcile_relationship_hashes.py's identical guard.
+        print(
+            "error: PII_HMAC_SECRET is not set -- required for the relationship_discovery "
+            "stage's value_hash.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     session = SessionLocal()
     try:
         summary = run_demo_data_studio(

@@ -101,6 +101,18 @@ class DiscoveryStats:
     relationships_skipped_existing: int
 
 
+def print_discovery_stats(stats: DiscoveryStats) -> None:
+    """Shared CLI-output formatting for `DiscoveryStats` -- both `scripts.
+    discover_relationships` and `scripts.reconcile_relationship_hashes`
+    print the exact same 4 lines (code-review finding: this used to be
+    copy-pasted verbatim in both scripts, a drift risk if `DiscoveryStats`
+    ever gains a field)."""
+    print(f"candidate_pool_size={stats.candidate_pool_size}")
+    print(f"pairs_compared={stats.pairs_compared}")
+    print(f"relationships_created={stats.relationships_created}")
+    print(f"relationships_skipped_existing={stats.relationships_skipped_existing}")
+
+
 def _value_hash(value: str, *, secret: str) -> str:
     return hmac_sha256_hex(value, secret=secret)
 

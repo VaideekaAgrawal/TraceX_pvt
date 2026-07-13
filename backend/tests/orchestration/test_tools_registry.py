@@ -84,6 +84,31 @@ def test_tool_invoker_accumulates_tools_called_across_calls(session: Session) ->
         del _REGISTRY["test_only_accumulate_tool"]
 
 
+def test_register_tool_rejects_wrapper_whose_second_positional_param_is_not_case_id() -> None:
+    # Regression test (code-review finding): the case_id-cannot-be-overridden
+    # guarantee is structural only if every registered wrapper's second
+    # positional parameter is literally named `case_id` -- previously an
+    # unenforced convention. A malformed wrapper must fail loudly at
+    # decoration time, not silently lose that guarantee.
+    with pytest.raises(ValueError, match="case_id"):
+
+        @register_tool("test_only_malformed_tool", "wrong param name")
+        def _bad_fn(session: Session, not_case_id: str, **kwargs: object) -> None:
+            return None
+
+    assert "test_only_malformed_tool" not in _REGISTRY
+
+
+def test_register_tool_rejects_wrapper_with_too_few_positional_params() -> None:
+    with pytest.raises(ValueError, match="case_id"):
+
+        @register_tool("test_only_one_param_tool", "missing case_id entirely")
+        def _bad_fn(session: Session, **kwargs: object) -> None:
+            return None
+
+    assert "test_only_one_param_tool" not in _REGISTRY
+
+
 def test_tool_invoker_does_not_record_a_failed_call(session: Session) -> None:
     @register_tool("test_only_failing_tool", "for this test only")
     def _fn(session: Session, case_id: str, *, actor_type: ActorType, actor_id: str | None) -> None:

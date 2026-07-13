@@ -4,13 +4,27 @@ and a scope-violation case for the wrappers that add their own
 out-of-case-scope check."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.orm import Session
 
-from db.enums import ActorType, CaseLevel, CaseStatus, Channel, EntityType, Priority, RiskLevel
-from db.repositories.investigation import CaseAccountRepository, CaseRepository
+from db.enums import (
+    ActorType,
+    CaseLevel,
+    CaseResolution,
+    CaseStatus,
+    Channel,
+    EntityType,
+    Priority,
+    RiskLevel,
+)
+from db.repositories.investigation import (
+    CaseAccountRepository,
+    CaseFeatureVectorRepository,
+    CaseRepository,
+)
 from db.repositories.orchestration import RelationshipRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from orchestration.tools import ToolInvoker
@@ -79,6 +93,41 @@ def test_similar_cases_tool_unknown_case_raises(session: Session) -> None:
         _invoker(session, "NOT_A_CASE").call("similar_cases")
 
 
+def test_similar_cases_tool_result_is_json_dumps_able(session: Session) -> None:
+    # Regression test (code-review finding): the wrapper used to return the
+    # raw `SimilarCase` dataclass list -- `computed_at` (datetime) and
+    # `outcome` (CaseResolution enum) aren't JSON-native, so a future
+    # caller folding this into `AiInteraction.facts` (a JSON column) would
+    # crash at `session.flush()`. Seed a SECOND, resolved case directly
+    # into the similarity corpus (find_similar_cases excludes the query
+    # case's own id from its corpus) so this actually exercises a
+    # non-empty result with both fields populated, not just an empty-list
+    # happy path.
+    _seed(session)
+    CaseRepository(session).create(
+        case_id="CASE2", primary_account_id="A2", status=CaseStatus.CLOSED_FP,
+        level=CaseLevel.L1, priority=Priority.P2, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    CaseFeatureVectorRepository(session).upsert(
+        case_id="CASE2",
+        vector=[0.0] * 16,
+        typology="layering",
+        outcome=CaseResolution.FALSE_POSITIVE,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    result = _invoker(session, "CASE1").call("similar_cases", top_k=5)
+    assert len(result) == 1
+    # json.dumps must not raise -- the actual regression assertion.
+    dumped = json.dumps(result)
+    assert isinstance(dumped, str)
+    assert result[0]["case_id"] == "CASE2"
+    assert isinstance(result[0]["computed_at"], str)
+    assert result[0]["outcome"] == "FALSE_POSITIVE"
+
+
 def test_path_recommendation_facts_tool_happy_path(session: Session) -> None:
     _seed(session)
     result = _invoker(session).call("path_recommendation_facts")
@@ -87,6 +136,28 @@ def test_path_recommendation_facts_tool_happy_path(session: Session) -> None:
     assert "fund_flow" in result
     assert "shared_attribute_adjacency" in result
     assert "prior_sar_adjacency" in result
+
+
+def test_path_recommendation_facts_tool_result_is_json_dumps_able(session: Session) -> None:
+    # Regression test (code-review finding): `dataclasses.asdict(...)` alone
+    # does not stringify a raw `datetime` nested inside the result --
+    # `SharedAttributeAdjacencyFact.discovered_at` -- so seed a Relationship
+    # between this case's own two customers (CUST1/CUST2, both in-scope) to
+    # actually populate `shared_attribute_adjacency` with a non-empty,
+    # datetime-bearing entry rather than exercising an empty-list happy path.
+    _seed(session)
+    RelationshipRepository(session).create(
+        entity_a="CUST1", entity_b="CUST2", shared_attribute="income_bracket",
+        value_hash="hash2", confidence=0.35, method="shared_attribute_v1",
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    result = _invoker(session).call("path_recommendation_facts")
+    assert len(result["shared_attribute_adjacency"]) == 1
+    dumped = json.dumps(result)
+    assert isinstance(dumped, str)
+    assert isinstance(result["shared_attribute_adjacency"][0]["discovered_at"], str)
 
 
 def test_relationship_graph_tool_happy_path(session: Session) -> None:
@@ -102,6 +173,25 @@ def test_relationship_graph_tool_happy_path(session: Session) -> None:
     assert result["case_id"] == "CASE1"
     node_ids = {n["customer_id"] for n in result["nodes"]}
     assert "CUST_OUT" in node_ids  # the 1-hop reveal
+
+
+def test_relationship_graph_tool_result_is_json_dumps_able(session: Session) -> None:
+    # Regression test (code-review finding): the result's `edges` carry a
+    # raw `Relationship.discovered_at` datetime -- same class of gap as
+    # path_recommendation_facts.
+    _seed(session)
+    RelationshipRepository(session).create(
+        entity_a="CUST1", entity_b="CUST_OUT", shared_attribute="pan",
+        value_hash="hash1", confidence=0.95, method="shared_attribute_v1",
+        actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    result = _invoker(session).call("relationship_graph")
+    assert len(result["edges"]) == 1
+    dumped = json.dumps(result)
+    assert isinstance(dumped, str)
+    assert isinstance(result["edges"][0]["discovered_at"], str)
 
 
 def test_ego_graph_tool_happy_path(session: Session) -> None:

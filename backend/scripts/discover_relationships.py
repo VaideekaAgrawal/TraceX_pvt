@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 
 from db.enums import ActorType
 from db.session import SessionLocal
 from foundation.config import get_settings
-from investigation.relationship_discovery import discover_relationships
+from investigation.relationship_discovery import discover_relationships, print_discovery_stats
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.parse_args(argv)
 
     settings = get_settings()
+    if not settings.pii_hmac_secret:
+        # Code-review finding: without this check, an unset PII_HMAC_SECRET
+        # crashed with an unhandled ValueError deep inside
+        # foundation.hashing.hmac_sha256_hex instead of a clean error --
+        # matches scripts/reconcile_relationship_hashes.py's identical guard.
+        print(
+            "error: PII_HMAC_SECRET is not set -- required to compute relationships."
+            "value_hash.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     session = SessionLocal()
     try:
         stats = discover_relationships(
@@ -46,10 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         session.close()
 
-    print(f"candidate_pool_size={stats.candidate_pool_size}")
-    print(f"pairs_compared={stats.pairs_compared}")
-    print(f"relationships_created={stats.relationships_created}")
-    print(f"relationships_skipped_existing={stats.relationships_skipped_existing}")
+    print_discovery_stats(stats)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ from db.enums import ActorType
 from db.repositories.orchestration import RelationshipRepository
 from db.session import SessionLocal
 from foundation.config import get_settings
-from investigation.relationship_discovery import discover_relationships
+from investigation.relationship_discovery import discover_relationships, print_discovery_stats
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +74,17 @@ def main(argv: list[str] | None = None) -> None:
     session = SessionLocal()
     try:
         relationship_repo = RelationshipRepository(session)
-        before_count = len(relationship_repo.list(limit=10_000_000))
-        print(f"relationships before reconciliation: {before_count}")
 
+        # `cleared` (clear_all()'s own return value) IS the before-count --
+        # no separate full-table load needed just to take a len() of it
+        # (code-review finding: this used to run
+        # `len(relationship_repo.list(limit=10_000_000))` twice, a full
+        # ORM-hydrating table load purely for a count that was already
+        # available for free both times -- see `stats.relationships_created`
+        # below for the after-count, since the table starts empty post-clear).
         cleared = relationship_repo.clear_all(actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
         session.commit()
+        print(f"relationships before reconciliation: {cleared}")
         print(f"cleared {cleared} relationships row(s)")
 
         stats = discover_relationships(
@@ -88,16 +94,11 @@ def main(argv: list[str] | None = None) -> None:
             secret=settings.pii_hmac_secret,
         )
         session.commit()
-
-        after_count = len(relationship_repo.list(limit=10_000_000))
-        print(f"relationships after reconciliation:  {after_count}")
+        print(f"relationships after reconciliation:  {stats.relationships_created}")
     finally:
         session.close()
 
-    print(f"candidate_pool_size={stats.candidate_pool_size}")
-    print(f"pairs_compared={stats.pairs_compared}")
-    print(f"relationships_created={stats.relationships_created}")
-    print(f"relationships_skipped_existing={stats.relationships_skipped_existing}")
+    print_discovery_stats(stats)
 
 
 if __name__ == "__main__":

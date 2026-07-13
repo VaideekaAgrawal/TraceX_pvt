@@ -19,6 +19,19 @@ shape_money_flow` -- trivial future additions, not required for what
 Phase 9 needs per the ROADMAP (graph metrics, fund-flow %, txn aggregates,
 prior-SAR/shared-entity lookups), and out of this phase's scope to add
 speculatively.
+
+**JSON-safety** (code-review finding: `AiInteraction.facts` is a JSON
+column, so any tool output a future caller folds into `facts=` must
+actually be `json.dumps`-able, not just "looks like a dict"): every tool
+whose underlying return value carries a raw `datetime`/enum member --
+`similar_cases` (`SimilarCase.computed_at`/`.outcome`),
+`path_recommendation_facts` (`SharedAttributeAdjacencyFact.discovered_at`,
+nested inside the dataclass `asdict()` doesn't stringify), and
+`relationship_graph` (`Relationship.discovered_at` inside its dict output)
+-- is run through `db.repositories._audit.to_jsonable` before returning
+(the same recursive Decimal/datetime/Enum-to-JSON-native converter the
+audit hash-chain already relies on -- reused here rather than writing a
+second one, per this codebase's own reuse-before-rebuild posture).
 """
 from __future__ import annotations
 
@@ -28,6 +41,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType
+from db.repositories._audit import to_jsonable
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.reference import TransactionRepository
 from investigation.account_facts import transaction_stats
@@ -38,19 +52,27 @@ from investigation.network_risk import compute_network_risk
 from investigation.path_facts import compute_path_recommendation_facts
 from investigation.previous_alerts import summarize as previous_alerts_summarize
 from investigation.relationship_graph import build_case_relationship_graph
-from investigation.similar_cases import SimilarCase, find_similar_cases
+from investigation.similar_cases import find_similar_cases
 from investigation.transaction_search import search as transaction_search
 from orchestration.tools.registry import register_tool
 
 
-def _require_account_in_case_scope(session: Session, case_id: str, account_id: str) -> None:
+def _require_account_in_case_scope(session: Session, case_id: str, account_id: str) -> list[str]:
     """Shared scope-boundary check for the wrappers whose underlying
     function does NOT validate this itself -- mirrors `orchestration.
     account_explanation.explain_account`'s existing
-    `account_id not in case_account_ids -> ValueError` precedent exactly."""
-    case_account_ids = set(CaseAccountRepository(session).list_account_ids_for_case(case_id))
+    `account_id not in case_account_ids -> ValueError` precedent exactly.
+
+    Returns the case's scoped account-id list (not just `None`) so a caller
+    that also needs that list right after the check (e.g. `_ego_graph_tool`,
+    which passes it into `get_filtered_ego_graph`) doesn't have to issue a
+    second, redundant `list_account_ids_for_case` query -- code-review
+    finding: this wrapper used to duplicate this exact check inline instead
+    of calling the shared helper, specifically to get this return value."""
+    case_account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
     if account_id not in case_account_ids:
         raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
+    return case_account_ids
 
 
 @register_tool(
@@ -65,12 +87,18 @@ def _similar_cases_tool(
     actor_type: ActorType,
     actor_id: str | None,
     top_k: int = 5,
-) -> list[SimilarCase]:
+) -> list[dict[str, Any]]:
     """Self-validating -- `find_similar_cases` raises `ValueError` on an
-    unknown `case_id` itself."""
-    return find_similar_cases(
+    unknown `case_id` itself. Converted to a list of JSON-safe dicts --
+    `SimilarCase.computed_at` is a raw `datetime` and `.outcome` a raw
+    `CaseResolution` enum member, neither JSON-serializable as-is
+    (code-review finding: the previous version returned the raw dataclass
+    list, which would crash `session.flush()` if ever folded into an
+    `AiInteraction.facts` JSON column)."""
+    results = find_similar_cases(
         session, case_id, top_k=top_k, actor_type=actor_type, actor_id=actor_id
     )
+    return [to_jsonable(dataclasses.asdict(r)) for r in results]
 
 
 @register_tool(
@@ -83,11 +111,13 @@ def _path_recommendation_facts_tool(
     session: Session, case_id: str, *, actor_type: ActorType, actor_id: str | None
 ) -> dict[str, Any]:
     """Self-validating -- `compute_path_recommendation_facts` raises
-    `ValueError` on an unknown `case_id` itself. Converted via `dataclasses.
-    asdict(...)` for JSON-safety (the underlying function returns a plain
-    dataclass, not something JSON-serializable as-is)."""
+    `ValueError` on an unknown `case_id` itself. `dataclasses.asdict(...)`
+    alone is NOT sufficient for JSON-safety here (code-review finding): it
+    doesn't stringify a raw `datetime` nested inside the result
+    (`SharedAttributeAdjacencyFact.discovered_at`) -- `to_jsonable` runs
+    over the whole `asdict()` output afterward to fix that."""
     facts = compute_path_recommendation_facts(session, case_id)
-    return dataclasses.asdict(facts)
+    return to_jsonable(dataclasses.asdict(facts))
 
 
 @register_tool(
@@ -101,9 +131,12 @@ def _relationship_graph_tool(
 ) -> dict[str, Any]:
     """Self-validating -- `build_case_relationship_graph` raises
     `ValueError` on an unknown `case_id` itself. Fetches `case_account_ids`
-    itself via `CaseAccountRepository.list_account_ids_for_case`."""
+    itself via `CaseAccountRepository.list_account_ids_for_case`. Run
+    through `to_jsonable` before returning -- the result's `edges` carry a
+    raw `Relationship.discovered_at` `datetime` (code-review finding, same
+    class of gap as `path_recommendation_facts`)."""
     case_account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
-    return build_case_relationship_graph(session, case_id, case_account_ids)
+    return to_jsonable(build_case_relationship_graph(session, case_id, case_account_ids))
 
 
 @register_tool(
@@ -125,9 +158,7 @@ def _ego_graph_tool(
     `account_id` with no scope check of its own (it's designed to be called
     from an already-scope-checked HTTP route dependency), so this wrapper
     IS the scope boundary here."""
-    case_account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
-    if account_id not in case_account_ids:
-        raise ValueError(f"account {account_id!r} is not in case {case_id!r}'s scope")
+    case_account_ids = _require_account_in_case_scope(session, case_id, account_id)
     return get_filtered_ego_graph(
         session,
         case_id,

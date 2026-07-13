@@ -64,7 +64,7 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 5 merge | 304 tests, 97% coverage | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Test count — Phase 6 merge | ~~369 tests (pre-code-review)~~ → 379 tests, 97% coverage (post-code-review-fixes + live-verify NaN fix) — 2026-07-12 | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
 | Test count — Phase 7 merge | 410 tests | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
-| Test count — Phase 8 (AI substrate) | 481 tests, 98% coverage | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12, `docs/ROADMAP.md` Phase 8 |
+| Test count — Phase 8 (AI substrate) | ~~481 tests, 98% coverage (pre-code-review)~~ → 488 tests, 97% coverage (post-code-review-fixes: JSON-safety, missing-secret guards, TypeError classification, signature validation, dedup) — 2026-07-13 | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12, `docs/ROADMAP.md` Phase 8 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
@@ -74,7 +74,7 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 6 (full suite, incl. coverage, post-fixes) | ~5.9 min (353.14s, 379 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
-| Local pytest run time — Phase 8 (full suite, incl. coverage) | ~15.0 min (901.02s, 481 tests) — noticeably slower than Phase 6/7 due to coverage-instrumentation overhead on the ML-heavy detection tests, not a regression in the tests themselves (non-coverage run of the same suite: 492.34s) | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12 |
+| Local pytest run time — Phase 8 (full suite, incl. coverage) | ~~~15.0 min (901.02s, 481 tests, pre-code-review)~~ → ~14.9 min (893.77s, 488 tests, post-code-review-fixes) — 2026-07-13. Noticeably slower than Phase 6/7 due to coverage-instrumentation overhead on the ML-heavy detection tests, not a regression in the tests themselves (non-coverage run of the same suite: 492.34s) | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
