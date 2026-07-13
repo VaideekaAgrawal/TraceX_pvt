@@ -243,3 +243,34 @@ def test_relationship_repository_canonicalizes_entity_order(session: Session) ->
     assert found_forward is not None
     assert found_reversed is not None
     assert found_reversed.id == relationship.id
+
+
+def test_relationship_repository_clear_all_deletes_every_row_and_audits(
+    session: Session,
+) -> None:
+    """`clear_all` -- ROADMAP Phase 8, exists solely for the one-time HMAC
+    reconciliation script (`scripts/reconcile_relationship_hashes.py`).
+    Not exercised via any other code path."""
+    CustomerRepository(session).create(
+        customer_id="C1", name="Alice", entity_type=EntityType.INDIVIDUAL,
+        risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    CustomerRepository(session).create(
+        customer_id="C2", name="Bob", entity_type=EntityType.INDIVIDUAL,
+        risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+
+    repo = RelationshipRepository(session)
+    repo.create(
+        entity_a="C1", entity_b="C2", shared_attribute="pan", value_hash="deadbeef",
+        confidence=0.95, method="shared_attribute_v1", actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+    session.commit()
+    assert len(repo.list_for_entity("C1")) == 1
+
+    deleted_count = repo.clear_all(actor_type=ActorType.SYSTEM, actor_id="reconcile-cli")
+    session.commit()
+
+    assert deleted_count == 1
+    assert repo.list_for_entity("C1") == []

@@ -45,14 +45,25 @@ existing one-cluster-one-attribute demo-data precedent):
 | income_bracket   | exact, both non-null                           | 0.35            |
 | branch           | exact on `Account.branch_city`, >=1 shared city| 0.25            |
 
-`value_hash` is a one-way sha256 of the normalized value (pan/
-income_bracket/branch); for `name`, sha256 of the normalized-and-sorted pair
-(`f"{min(a,b)}::{max(a,b)}"`) since there's no single shared literal value.
-`method = "shared_attribute_v1"` on every row.
+`value_hash` is an HMAC-SHA256 (`foundation.hashing.hmac_sha256_hex`, keyed
+by `Settings.pii_hmac_secret`) of the normalized value (pan/income_bracket/
+branch); for `name`, of the normalized-and-sorted pair (`f"{min(a,b)}::
+{max(a,b)}"`) since there's no single shared literal value. `method =
+"shared_attribute_v1"` on every row.
+
+**HMAC, not a bare hash** (ROADMAP Phase 8 fix, code-review finding, Phase
+7): `value_hash` used to be an unsalted `hashlib.sha256(value)` -- for
+low-entropy PII like a 10-character PAN, that's brute-forceable/rainbow-
+tableable if the DB ever leaks. Keying the hash with an application secret
+(`secret`, required, no default -- see `discover_relationships`) makes that
+infeasible without also compromising the secret. Because `Relationship`
+rows are immutable-by-design (`RelationshipRepository` has no `update`/
+`delete`), switching the hash function is a one-time reconciliation, not an
+in-place migration: `scripts/reconcile_relationship_hashes.py` clears every
+existing row and reruns discovery under the new HMAC.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import combinations
@@ -63,6 +74,7 @@ from db.enums import ActorType
 from db.models.reference import Customer
 from db.repositories.orchestration import RelationshipRepository
 from db.repositories.reference import AccountRepository, CustomerRepository
+from foundation.hashing import hmac_sha256_hex
 
 #: Safety valve, not the primary mechanism -- see module docstring.
 MAX_CANDIDATE_POOL_SIZE = 5000
@@ -89,13 +101,13 @@ class DiscoveryStats:
     relationships_skipped_existing: int
 
 
-def _value_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _value_hash(value: str, *, secret: str) -> str:
+    return hmac_sha256_hex(value, secret=secret)
 
 
-def _name_pair_hash(name_a: str, name_b: str) -> str:
+def _name_pair_hash(name_a: str, name_b: str, *, secret: str) -> str:
     lo, hi = sorted((name_a, name_b))
-    return _value_hash(f"{lo}::{hi}")
+    return _value_hash(f"{lo}::{hi}", secret=secret)
 
 
 def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[str]]:
@@ -114,7 +126,7 @@ def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[s
 
 
 def _matches_for_pair(
-    a: Customer, b: Customer, branch_cities: dict[str, set[str]]
+    a: Customer, b: Customer, branch_cities: dict[str, set[str]], *, secret: str
 ) -> list[tuple[str, str, float]]:
     """Every `(shared_attribute, value_hash, confidence)` this pair matches
     on -- zero, one, or several (a pair can match on more than one
@@ -125,15 +137,21 @@ def _matches_for_pair(
     if a.pan and b.pan:
         norm_a, norm_b = a.pan.strip().upper(), b.pan.strip().upper()
         if norm_a == norm_b:
-            matches.append(("pan", _value_hash(norm_a), _PAN_CONFIDENCE))
+            matches.append(("pan", _value_hash(norm_a, secret=secret), _PAN_CONFIDENCE))
 
     ratio = SequenceMatcher(None, a.name, b.name).ratio()
     if ratio >= _NAME_MATCH_THRESHOLD:
-        matches.append(("name", _name_pair_hash(a.name, b.name), round(ratio, 2)))
+        matches.append(
+            ("name", _name_pair_hash(a.name, b.name, secret=secret), round(ratio, 2))
+        )
 
     if a.income_bracket and b.income_bracket and a.income_bracket == b.income_bracket:
         matches.append(
-            ("income_bracket", _value_hash(a.income_bracket), _INCOME_BRACKET_CONFIDENCE)
+            (
+                "income_bracket",
+                _value_hash(a.income_bracket, secret=secret),
+                _INCOME_BRACKET_CONFIDENCE,
+            )
         )
 
     shared_cities = branch_cities.get(a.customer_id, set()) & branch_cities.get(
@@ -144,13 +162,15 @@ def _matches_for_pair(
         # at demo/current-data scale -- one row per attribute TYPE (not per
         # matched value), hashing the lexicographically-first shared city
         # so the result is deterministic regardless of set iteration order.
-        matches.append(("branch", _value_hash(sorted(shared_cities)[0]), _BRANCH_CONFIDENCE))
+        matches.append(
+            ("branch", _value_hash(sorted(shared_cities)[0], secret=secret), _BRANCH_CONFIDENCE)
+        )
 
     return matches
 
 
 def discover_relationships(
-    session: Session, *, actor_type: ActorType, actor_id: str | None
+    session: Session, *, actor_type: ActorType, actor_id: str | None, secret: str
 ) -> DiscoveryStats:
     """The batch discovery job: pulls the gated candidate pool
     (`CustomerRepository.list_relationship_candidate_pool`), does the
@@ -158,6 +178,11 @@ def discover_relationships(
     `Relationship` rows via `find_existing`-guarded `create()` so a rerun
     is idempotent (zero new rows for a pair/attribute combination already
     discovered).
+
+    `secret` (required, keyword-only, no default) keys every `value_hash`
+    via `foundation.hashing.hmac_sha256_hex` -- see module docstring for why
+    this is an HMAC and not a bare hash. Every real caller passes `Settings.
+    pii_hmac_secret`.
 
     Raises `ValueError` if the gated pool exceeds `MAX_CANDIDATE_POOL_SIZE`
     -- see module docstring's "safety valve, not the primary mechanism"."""
@@ -188,7 +213,9 @@ def discover_relationships(
         # be a caller-side responsibility via a local `_canonical_pair`
         # helper here, now centralized in the repository so it can't be
         # skipped by a future second writer).
-        for shared_attribute, value_hash, confidence in _matches_for_pair(a, b, branch_cities):
+        for shared_attribute, value_hash, confidence in _matches_for_pair(
+            a, b, branch_cities, secret=secret
+        ):
             if (
                 relationship_repo.find_existing(a.customer_id, b.customer_id, shared_attribute)
                 is not None

@@ -13,6 +13,7 @@ from sqlalchemy import or_, select
 from db.enums import ActorType, AiAgent
 from db.models.base import utcnow
 from db.models.orchestration import AiInteraction, Relationship
+from db.repositories._audit import append_audit_log
 from db.repositories.base import BaseRepository
 
 
@@ -230,3 +231,24 @@ class RelationshipRepository(BaseRepository[Relationship]):
             )
         )
         return list(self.session.scalars(stmt))
+
+    def clear_all(self, *, actor_type: ActorType, actor_id: str | None) -> int:
+        """NOT a general delete -- `Relationship` rows are immutable-once-
+        recorded by design (see class docstring). Exists solely for the
+        one-time ROADMAP Phase 8 HMAC-reconciliation script
+        (`scripts/reconcile_relationship_hashes.py`), which must clear
+        every row hashed under the old unsalted `value_hash` scheme before
+        rerunning discovery under the new HMAC one. Not called from any
+        other code path. Returns the number of rows deleted."""
+        count = self.session.query(Relationship).delete()
+        self.session.flush()
+        append_audit_log(
+            self.session,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="relationships_cleared_for_hmac_reconciliation",
+            entity_type=self.entity_type,
+            entity_id=None,
+            details={"rows_deleted": count},
+        )
+        return count

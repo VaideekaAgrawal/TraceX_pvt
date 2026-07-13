@@ -23,6 +23,7 @@ import sys
 from db.enums import ActorType
 from db.session import SessionLocal
 from demo_data.seed import run_demo_data_studio
+from foundation.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--actor-id", default="demo-data-studio-cli")
     args = parser.parse_args(argv)
 
+    settings = get_settings()
     session = SessionLocal()
     try:
         summary = run_demo_data_studio(
-            session, actor_type=ActorType.SYSTEM, actor_id=args.actor_id
+            session,
+            actor_type=ActorType.SYSTEM,
+            actor_id=args.actor_id,
+            secret=settings.pii_hmac_secret,
         )
         session.commit()
     except ValueError as exc:
