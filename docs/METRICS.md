@@ -72,6 +72,8 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 6 (full suite, incl. coverage, post-fixes) | ~5.9 min (353.14s, 379 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Test count — Phase 8 slice 1 (LLM gateway) | 412 → **422 tests** (+10: `tests/orchestration/test_gateway.py`) | Session 14 (2026-07-13) | this session |
+| Local pytest run time — Phase 8 slice 1 (full suite) | ~6.4 min (382.09s, 422 tests) | Session 14 (2026-07-13) | this session |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -149,6 +151,54 @@ Queried directly against `data/tracex.db` (the IBM HI-Small ingest; **no demo se
 | `_synthetic_email` | `…@example-demo.invalid` | ✅ Safe — `.invalid` is an IANA-reserved TLD, can never resolve |
 | `_synthetic_pan` | 5 letters + 4 digits + 1 letter | ⚠️ **Defect** — the exact real PAN format, and PAN has **no checksum**, so a generated value can collide with a real person's. Fix in Phase 8. |
 | `_synthetic_phone` | `9700000001`-style | ⚠️ **Defect** — a real Indian mobile format; can collide with a live number. Fix in Phase 8. |
+
+---
+
+## 11. LLM model selection — measured, not priced (Phase 8 slice 1 — Session 14)
+
+**The headline finding: per-token price is a misleading proxy for cost here, and picking on it alone selects the worst option.**
+
+All figures are live calls through `orchestration/gateway.py` to OpenRouter, using the **real** `account_explanation._build_prompt` output (321–519 prompt tokens) at `max_tokens=1500`, `temperature=0.3`. Cost is computed from OpenRouter's published $/M rates against the tokens each model actually consumed.
+
+| Model | Latency | Reasoning tok | Visible tok | **$/explanation** | Verdict |
+|---|---|---|---|---|---|
+| `openai/gpt-5` | 21.6s | 1280 | 220 | **$0.0154** | ❌ Worst: dearest *and* 3.5x slowest |
+| `anthropic/claude-opus-4.8` | 6.5s | 0 | 370 | $0.0118 | Highest ceiling, dear |
+| **`anthropic/claude-sonnet-4.5`** | **6.1s** | 0 | 201 | **$0.0041** | ✅ **Chosen default** |
+| `openai/gpt-5-mini` | 25.2s | 576 | 303 | $0.0018 | Cheap but slowest |
+| `google/gemini-2.5-flash` | 2.0s | 0 | 174 | $0.00054 | Cheapest + fastest |
+
+**Why sticker price lies.** `openai/gpt-5` bills at $1.25/$10 per M vs Opus 4.8's $5/$25 — nominally 4x cheaper input, 2.5x cheaper output. But it is a **reasoning model**: its hidden reasoning tokens are billed as *output* tokens, and it spent 1280 of them to emit 220 visible ones. Net result: **GPT-5 costs 30% MORE per explanation than Opus 4.8 and takes 3.3x as long.** Never select a model here on $/token; measure **$/explanation**.
+
+**Second-order trap: `max_tokens` is shared between reasoning and content.** On a reasoning model the reasoning is drawn from the same budget as the answer, so a too-small cap yields a *silently empty* response (HTTP 200, `finish_reason: "length"`, `content: null`) rather than an error. At the inherited `max_tokens=300`, `openai/gpt-5` returned **zero visible tokens on every call** — the explanation feature was 100% broken, not degraded.
+
+### `max_tokens=300` was a latent truncation bug (fixed → 800)
+
+Independent of model choice. The 300 default was inherited from the Phase 5 archive port and **no test could ever have caught it, because every pre-Phase-8 test mocked the LLM call** and therefore never observed a real completion length.
+
+| Model | Visible tokens on the real prompt | Behavior at the old `max_tokens=300` |
+|---|---|---|
+| `google/gemini-2.5-flash` | 174 | fits |
+| `anthropic/claude-sonnet-4.5` | 201 | fits |
+| `anthropic/claude-opus-4.8` | 370 | ⚠️ **truncated mid-sentence** |
+| `openai/gpt-5` | 220 (+1280 reasoning) | ❌ **empty response, every call** |
+
+Raised to `_DEFAULT_MAX_TOKENS = 800` in `orchestration/gateway.py`, with a regression test asserting ≥500. Costs nothing when unused — providers bill tokens generated, not tokens allowed.
+
+### Live end-to-end verification (Sonnet 4.5, real OpenRouter)
+
+| Check | Result |
+|---|---|
+| `explain_account` cold call | 8.0s, real explanation returned, `cached=False` |
+| Second call (cache) | 0ms, `cached=True`, byte-identical |
+| `ai_interactions` rows written | 1 — a cache hit does not re-write |
+| Failure path (real 401 from a bad key) | Raises, **0 rows written** — the Phase 5 landmine holds: a failed call can never be served back as `cached: True` |
+| Recovery after failure | Next good call succeeds; the failure did not poison the cache |
+| `narration`/`purpose` in prompt-bound facts | **None** — decision 10 holds |
+
+### Test-isolation bug found and fixed (billed API calls from `pytest`)
+
+Adding a real `backend/.env` surfaced that the API test fixtures built `Settings(env="dev", jwt_secret="test-secret")` **without** overriding the LLM key — so pydantic-settings fell through to `.env`. Consequences: the two "not configured" regression tests stopped exercising the not-configured path, **`pytest` made real billed calls to OpenRouter**, and the suite's behavior depended on whether the developer happened to have a `.env` (CI and local silently testing different code). Fixed with an autouse `isolate_settings_from_developer_env` fixture in `tests/conftest.py` that unsets `env_file` and the eight relevant env vars for the whole suite.
 
 ---
 

@@ -57,6 +57,22 @@ _NOT_CONFIGURED_MESSAGE = "AI explanations not configured. Set openrouter_api_ke
 # behavior is unchanged by the port. Low temperature because these outputs are
 # meant to restate server-computed facts, not to be creative about them.
 _TEMPERATURE = 0.3
+
+# Raised from the inherited 300 (ROADMAP Phase 8). 300 was a latent truncation
+# bug that no test could catch, because every test before this phase mocked the
+# LLM call and therefore never observed a real completion length. Measured
+# against the real `account_explanation` prompt: Sonnet 4.5 emits ~201 visible
+# tokens and Opus 4.8 ~370 — so the old cap silently cut Opus off mid-sentence,
+# and a reasoning model (whose reasoning tokens are drawn from this same budget)
+# returned nothing at all. 800 leaves headroom for a longer explanation without
+# capping a legitimate one. Costs nothing when unused: providers bill tokens
+# generated, not tokens allowed.
+_DEFAULT_MAX_TOKENS = 800
+
+# The 20s inherited timeout is also measured, not guessed: a real Sonnet 4.5 call
+# on this prompt takes ~6s. Kept at 20s (3x headroom) — but note a *reasoning*
+# model can exceed it (gpt-5 took 21.6s), which is one more reason the default
+# model must be a non-reasoning one.
 _TIMEOUT_SECONDS = 20.0
 # SDK-native retry, replacing the old code's "no retry at all". The SDK retries
 # connection errors, 408/409/429 and 5xx with exponential backoff; anything
@@ -79,7 +95,7 @@ class ExplanationUnavailableError(Exception):
     return value."""
 
 
-def call_llm(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
+def call_llm(prompt: str, *, settings: Settings, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
     """Single chat-completions call through the `openai` SDK against
     `settings.llm_base_url`.
 

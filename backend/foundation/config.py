@@ -60,12 +60,22 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="openrouter")
     llm_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_api_key: str = Field(default="")
-    # Verified against OpenRouter's GET /api/v1/models before being committed:
-    # this model reports both `tools` and `structured_outputs` in
-    # `supported_parameters`. Phase 8's whole substrate (tool catalog +
-    # structured grounding contract) is unusable without function-calling, so
-    # do not swap this default for a model that lacks it.
-    llm_model: str = Field(default="openai/gpt-5")
+    # Chosen on measured behavior against the REAL account-explanation prompt,
+    # not on sticker price (docs/METRICS.md §11). Two things that per-token
+    # pricing hides, both verified live against OpenRouter:
+    #
+    #   1. Reasoning models bill their hidden reasoning as output tokens, and
+    #      `max_tokens` is shared between reasoning and visible content. On this
+    #      prompt `openai/gpt-5` spent 1280 tokens reasoning to emit 220 visible
+    #      ones — making it BOTH slower (21.6s vs 6.1s) and more expensive
+    #      ($0.0154 vs $0.0041/call) than this non-reasoning model, despite a
+    #      "cheaper" headline rate. Do not pick a reasoning model here on the
+    #      strength of its $/token alone; measure $/explanation.
+    #   2. Verified this model reports both `tools` and `structured_outputs` in
+    #      `supported_parameters` via `GET {llm_base_url}/models`. Phase 8's
+    #      substrate (tool catalog + structured grounding contract) is unusable
+    #      without function-calling — never swap in a model lacking it.
+    llm_model: str = Field(default="anthropic/claude-sonnet-4.5")
 
     # ── PII (ROADMAP Phase 8, committed decision 9) ──
     # Keys `Relationship.value_hash`'s HMAC-SHA256. A bare SHA256 of a

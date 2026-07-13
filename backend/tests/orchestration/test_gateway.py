@@ -122,6 +122,22 @@ def test_call_llm_sends_expected_request(stub: type[_StubState]) -> None:
     assert stub.seen_payload["messages"] == [{"role": "user", "content": "why is A1 risky?"}]
 
 
+def test_call_llm_default_max_tokens_leaves_room_for_a_full_explanation(
+    stub: type[_StubState],
+) -> None:
+    # Regression test (ROADMAP Phase 8). The inherited default was 300, which
+    # was a latent truncation bug invisible to every pre-Phase-8 test because
+    # they all mocked the call and never saw a real completion length. Measured
+    # live: the real `account_explanation` prompt draws ~201 visible tokens from
+    # Sonnet 4.5 and ~370 from Opus 4.8 — so 300 silently cut Opus off
+    # mid-sentence. Anything at or below ~400 will start truncating real
+    # explanations again; this asserts the headroom, not the exact number.
+    stub.body = _completion("ok")
+    gateway.call_llm("why?", settings=_settings(stub))
+    assert stub.seen_payload["max_tokens"] == gateway._DEFAULT_MAX_TOKENS
+    assert gateway._DEFAULT_MAX_TOKENS >= 500
+
+
 def test_call_llm_without_api_key_raises_and_never_calls_out(stub: type[_StubState]) -> None:
     settings = _settings(stub, openrouter_api_key="")
     with pytest.raises(gateway.ExplanationUnavailableError, match=gateway._NOT_CONFIGURED_MESSAGE):
