@@ -46,7 +46,11 @@ Do not re-read all of these in full every session. `docs/SESSION_LOG.md` + the c
 
 ## Subagents
 
-Custom project subagents live in `.claude/agents/`:
+Custom project subagents are defined in `.claude/agents/` (`spec-guardian`, `tracex-backend`, `tracex-frontend`), but **in some Claude Code environments the `Agent` tool's `subagent_type` lookup is a hardcoded built-in list and does not resolve project-level `.claude/agents/*.md` files** — calling `Agent(subagent_type: "tracex-backend", ...)` fails with `Agent type 'tracex-backend' not found. Available agents: claude, claude-code-guide, Explore, general-purpose, Plan, statusline-setup`, even though the file exists with valid frontmatter. This is a confirmed upstream bug (github.com/anthropics/claude-code issue #59881, reproduced with the identical symptom, closed "not planned" — not something fixable from this repo). Hit twice already (Sessions 9 and 10, per `docs/SESSION_LOG.md`).
+
+**Do not spend time re-diagnosing this if it recurs.** Try `subagent_type: "tracex-backend"`/`"tracex-frontend"`/`"spec-guardian"` once; if it 404s with that exact error, skip straight to the workaround: dispatch a `general-purpose` agent and paste the relevant `.claude/agents/<name>.md` file's full body (the role instructions after the frontmatter) as a preamble in the prompt, framed as "you are acting as this repo's `<name>` role, reproduced here verbatim." This has worked cleanly in every phase so far.
+
+Each agent's intended role, for whichever path ends up invoking it:
 - **`spec-guardian`** — read-only checker. Run it before merging a phase to confirm the diff doesn't reintroduce a known landmine (above), doesn't contradict `SYSTEM_DEVELOPMENT_PLAN.md`'s design reasoning, and doesn't silently expand scope beyond the current roadmap phase.
 - **`tracex-backend`** — implements backend (Python/FastAPI/services) changes for a given roadmap task, with the landmines and guardrail patterns above pre-loaded so it doesn't need to re-derive them.
 - **`tracex-frontend`** — implements frontend (Next.js/TypeScript) changes for a given roadmap task, with the current page inventory and the target L1/L2 investigation-workspace UX direction pre-loaded.
