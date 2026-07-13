@@ -63,6 +63,8 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Test count — Phase 1B merge | 275 tests | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Test count — Phase 5 merge | 304 tests, 97% coverage | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Test count — Phase 6 merge | ~~369 tests (pre-code-review)~~ → 379 tests, 97% coverage (post-code-review-fixes + live-verify NaN fix) — 2026-07-12 | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Test count — Phase 7 merge | 410 tests | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+| Test count — Phase 8 (AI substrate) | 481 tests, 98% coverage | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12, `docs/ROADMAP.md` Phase 8 |
 | CI duration — Phase 0 (branch push) | not recorded numerically | Session 3 (2026-07-09) | — |
 | CI duration — Phase 2 (branch push / PR) | 20m35s / 14m32s | Session 5 (2026-07-09) | `docs/SESSION_LOG.md` Session 5 |
 | CI duration — Phase 3 (branch push / PR) | 20m12s / 20m9s (slower than Phase 1/2 due to new ML dependency install, not a regression) | Session 6 (2026-07-10) | `docs/SESSION_LOG.md` Session 6 |
@@ -72,6 +74,7 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 6 (full suite, incl. coverage, post-fixes) | ~5.9 min (353.14s, 379 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
+| Local pytest run time — Phase 8 (full suite, incl. coverage) | ~15.0 min (901.02s, 481 tests) — noticeably slower than Phase 6/7 due to coverage-instrumentation overhead on the ML-heavy detection tests, not a regression in the tests themselves (non-coverage run of the same suite: 492.34s) | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12 |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -122,6 +125,16 @@ Source: `scripts/train_detection_model.py`/`run_detection_pipeline.py`/`generate
 | `GET .../money-flow` `pct_of_total` (real transaction data) | Sums to 100.0% per direction bucket (sources/beneficiaries) | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
 | `compute_path_recommendation_facts` fund-flow % sum (real pipeline cases, 51-edge ego-graphs) | 100.0% per bucket across 15 sampled real cases, no crash/div-by-zero | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
 | Test count — Phase 7 merge | 410 tests | Session 11 (2026-07-12) | `docs/SESSION_LOG.md` Session 11 |
+
+## 10. AI substrate (Phase 8)
+
+Source: `scripts/train_detection_model.py`/`run_detection_pipeline.py`/`generate_demo_data.py`/`reconcile_relationship_hashes.py`/`verify_ai_substrate.py` run live against a throwaway copy of the real ingested dataset (166,207 customers / 518,573 accounts / 8,002 transactions).
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| Relationships discovered (real+demo pool, HMAC-keyed `value_hash`, one `generate_demo_data.py` run) | 5,382 (same order of magnitude as Phase 7's pre-HMAC-fix figure — confirms the hash-function swap didn't change match logic) | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12 |
+| `scripts/reconcile_relationship_hashes.py --yes` (same DB, after `generate_demo_data.py` fully completed) | cleared 5,382 rows → rediscovered 6,127 under the new HMAC; candidate pool still correctly gated to 213 (not the full 166,207 real customers). The 5,382→6,127 increase is explained by `demo_data/seed.py`'s fixed 5-stage order (`relationship_discovery` is stage 3, before `golden_scenarios`/stage 5 adds its own PAN-bearing customers) — the reconcile run saw the fuller post-golden-scenarios pool, not a Phase 8 regression | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12 |
+| `scripts/verify_ai_substrate.py` against a real pipeline-generated case (`CASE-20260713-024DF0E0`) | `ToolInvoker` 3-call sequence (`similar_cases`→5 results, `path_recommendation_facts`→55 fund-flow facts, `network_risk`→score 32, lazy-computed+persisted) all accumulated in `tools_called`; guardrail sanitization + PII redact/rehydrate round-trip both correct; `AiInteraction` row `id=1` persisted with `redacted=True` and populated `tools_called` — the first such row ever produced in this repo | Session 12 (2026-07-13) | `docs/SESSION_LOG.md` Session 12, `docs/ROADMAP.md` Phase 8 |
 
 ---
 
