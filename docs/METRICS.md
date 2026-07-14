@@ -152,6 +152,23 @@ Queried directly against `data/tracex.db` (the IBM HI-Small ingest; **no demo se
 
 ---
 
+## 11. Frontend Phase 13 (scaffold, auth, global shell) — Session 17
+
+`/code-review` (high effort: 8 finder angles + 1-vote verify) and `/verify` (live, against a real backend + throwaway seeded user) run against the full `phase/13-frontend-scaffold-auth` diff before merge.
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| Code-review candidates surfaced (8 finder angles) | 17 distinct | Session 17 (2026-07-14) | `docs/SESSION_LOG.md` Session 17 |
+| Code-review candidates confirmed after 1-vote verify | 15 of 17 (1 refuted, 1 duplicate-merged) | Session 17 (2026-07-14) | ditto |
+| Findings reported/fixed (capped, severity-ranked) | 10 of 10 fixed | Session 17 (2026-07-14) | ditto |
+| Additional bug found by live `/verify` adversarial probing (post-fix) | 1 (open-redirect fix bypassable via URL-normalization: `/\host`, embedded tab/CR) — fixed same session | Session 17 (2026-07-14) | ditto |
+| `npm run build` / `npm run lint` | clean | Session 17 (2026-07-14) | ditto |
+| Live-verified: backend 5xx/outage while a session is valid | Session preserved, no force-logout, no cookie deletion (previously: destroyed a valid session) | Session 17 (2026-07-14) | ditto |
+| Live-verified: login while backend is down | 502 "service unavailable" (previously: misleading 401 "invalid credentials") | Session 17 (2026-07-14) | ditto |
+| Live-verified: invalid cookie deep in the app → re-login | `next` destination preserved end-to-end through `/api/auth/session-expired` (previously: dropped, fell back to `/dashboard`) | Session 17 (2026-07-14) | ditto |
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
