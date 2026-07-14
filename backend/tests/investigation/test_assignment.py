@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType, CaseLevel, CaseStatus, Priority, UserRole
 from db.models.base import utcnow
 from db.repositories.investigation import CaseRepository
-from db.repositories.platform import UserRepository
+from db.repositories.platform import AuditLogRepository, UserRepository
 from db.repositories.reference import AccountRepository
 from investigation.assignment import (
     NoEligibleInvestigatorError,
+    assign_case_to,
     auto_assign,
     compute_workload,
     list_overdue_cases,
@@ -270,3 +271,114 @@ def test_auto_assign_accepts_precomputed_workload_and_mutates_it(session: Sessio
     session.commit()
     assert updated_b.assigned_to == "U2"
     assert workload == {"U1": 1, "U2": 1}
+
+
+# ── ROADMAP Phase 14: assign_case_to (manual Admin/Compliance assignment) ──
+
+
+def test_assign_case_to_transitions_new_to_assigned_with_sla(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "NEWCASE", priority=Priority.P2)
+    session.commit()
+
+    case = CaseRepository(session).get("NEWCASE")
+    assert case is not None
+    before = utcnow()
+    updated = assign_case_to(
+        session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.status == CaseStatus.ASSIGNED
+    assert updated.assigned_to == "U1"
+    assert updated.sla_due_at is not None
+    actual = updated.sla_due_at.replace(tzinfo=None)
+    expected_min = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) - timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    expected_max = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) + timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    assert expected_min <= actual <= expected_max
+
+    rows = AuditLogRepository(session).list_for_case("NEWCASE")
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    assert len(assigned_rows) == 1
+
+
+def test_assign_case_to_reassigns_already_open_case_without_status_change(
+    session: Session,
+) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U2")
+    _seed_case(session, "CASE1", status=CaseStatus.IN_PROGRESS, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    updated = assign_case_to(
+        session, case, investigator_id="U2", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.status == CaseStatus.IN_PROGRESS  # unchanged
+    assert updated.assigned_to == "U2"
+
+    rows = AuditLogRepository(session).list_for_case("CASE1")
+    reassigned_rows = [r for r in rows if r.action == "case_reassigned"]
+    assert len(reassigned_rows) == 1
+    assert reassigned_rows[0].details is not None
+    assert reassigned_rows[0].details["after"].get("assigned_to") == "U2"
+
+
+def test_assign_case_to_same_investigator_still_writes_case_reassigned_row(
+    session: Session,
+) -> None:
+    """No special-cased no-op -- reassigning to the SAME investigator still
+    produces a `case_reassigned` audit row (mirrors `AlertRepository.
+    mark_opened`'s audit-only-write precedent)."""
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.ASSIGNED, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    updated = assign_case_to(
+        session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.assigned_to == "U1"
+    rows = AuditLogRepository(session).list_for_case("CASE1")
+    assert len([r for r in rows if r.action == "case_reassigned"]) == 1
+
+
+def test_assign_case_to_raises_on_terminal_status(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.CLOSED_FP, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    with pytest.raises(ValueError, match="terminal"):
+        assign_case_to(
+            session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+        )
+
+
+def test_assign_case_to_raises_on_monitoring_status(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.MONITORING, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    with pytest.raises(ValueError, match="terminal"):
+        assign_case_to(
+            session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+        )

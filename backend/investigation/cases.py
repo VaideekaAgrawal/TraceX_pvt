@@ -29,7 +29,7 @@ from db.repositories.investigation import (
     CaseRepository,
 )
 from detection.rl.bandit import LinUCBAgent
-from investigation.assignment import auto_assign
+from investigation.assignment import assign_case_to, auto_assign
 from investigation.fsm import transition_case
 from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
 
@@ -45,6 +45,7 @@ def create_case_from_alert(
     actor_type: ActorType,
     actor_id: str | None,
     workload: dict[str, int] | None = None,
+    assigned_to: str | None = None,
 ) -> Case:
     """Create a `Case` (status=NEW, level=L1 -- every case starts at
     triage) from `alert`, link every account in the alert's pattern into
@@ -55,7 +56,15 @@ def create_case_from_alert(
     `workload` is forwarded unchanged to `auto_assign` (see its docstring)
     so a batch caller looping over many alerts can pass the same
     incrementally-maintained dict through every call instead of a fresh
-    aggregate query per case (code-review finding, Phase 4)."""
+    aggregate query per case (code-review finding, Phase 4).
+
+    `assigned_to` (ROADMAP Phase 14: `PATCH /alerts/{alert_id}/assign`,
+    manually assigning an alert that has no case yet) defaults to `None` so
+    every existing caller (the pipeline script) is unaffected. When given,
+    the NEW->ASSIGNED handoff goes through `investigation.assignment.
+    assign_case_to` (a specific investigator) instead of `auto_assign`
+    (workload-based pick) -- `workload` is then ignored, since there's no
+    pick to make."""
     case_repo = CaseRepository(session)
     case_account_repo = CaseAccountRepository(session)
     alert_repo = AlertRepository(session)
@@ -89,6 +98,15 @@ def create_case_from_alert(
         actor_type=actor_type,
         actor_id=actor_id,
     )
+
+    if assigned_to is not None:
+        return assign_case_to(
+            session,
+            case,
+            investigator_id=assigned_to,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
 
     return auto_assign(
         session, case, actor_type=actor_type, actor_id=actor_id, workload=workload

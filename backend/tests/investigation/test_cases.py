@@ -19,7 +19,7 @@ from db.repositories.detection import (
     RlArmStateRepository,
 )
 from db.repositories.investigation import CaseAccountRepository, CaseFeatureVectorRepository
-from db.repositories.platform import UserRepository
+from db.repositories.platform import AuditLogRepository, UserRepository
 from db.repositories.reference import AccountRepository
 from detection.rl.bandit import GLOBAL_ARM_ID, LinUCBAgent
 from investigation.cases import case_rl_features, close_case, create_case_from_alert
@@ -86,6 +86,36 @@ def test_create_case_from_alert_links_accounts_and_assigns(session: Session) -> 
     assert refreshed_alert is not None
     assert refreshed_alert.case_id == case.case_id
     assert refreshed_alert.status == "assigned"
+
+
+def test_create_case_from_alert_with_assigned_to_takes_manual_path_not_auto_assign(
+    session: Session,
+) -> None:
+    """ROADMAP Phase 14: `assigned_to` given routes the NEW->ASSIGNED
+    handoff through `assign_case_to` (a specific investigator), not
+    `auto_assign`'s workload-based pick -- confirmed here by seeding a
+    SECOND investigator who has the lower workload (so a plain `auto_assign`
+    call would have picked them instead) and asserting the alert's own
+    explicit choice wins."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U_LOWER_WORKLOAD")
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(
+        session, alert, actor_type=ActorType.ADMIN, actor_id="ADMIN1", assigned_to="U1"
+    )
+    session.commit()
+
+    assert case.status == CaseStatus.ASSIGNED
+    assert case.assigned_to == "U1"
+
+    rows = AuditLogRepository(session).list_for_case(case.case_id)
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    assert len(assigned_rows) == 1
+    reassigned_rows = [r for r in rows if r.action == "case_reassigned"]
+    assert len(reassigned_rows) == 0
 
 
 def _walk_to_awaiting_review(session: Session, case_id: str) -> None:
