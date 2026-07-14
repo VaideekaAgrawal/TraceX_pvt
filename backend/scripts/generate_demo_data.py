@@ -23,6 +23,7 @@ import sys
 from db.enums import ActorType
 from db.session import SessionLocal
 from demo_data.seed import run_demo_data_studio
+from foundation.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,14 @@ def main(argv: list[str] | None = None) -> None:
     session = SessionLocal()
     try:
         summary = run_demo_data_studio(
-            session, actor_type=ActorType.SYSTEM, actor_id=args.actor_id
+            session,
+            actor_type=ActorType.SYSTEM,
+            actor_id=args.actor_id,
+            # Keys the relationship `value_hash` HMAC (Phase 8, decision 9). An
+            # empty key raises rather than writing brute-forceable unkeyed digests,
+            # so a missing PII_HMAC_KEY fails this script loudly — which is the
+            # intended behaviour, not an inconvenience to work around.
+            hmac_key=get_settings().pii_hmac_key,
         )
         session.commit()
     except ValueError as exc:

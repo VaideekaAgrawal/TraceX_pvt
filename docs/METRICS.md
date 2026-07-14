@@ -78,6 +78,8 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Local pytest run time — Phase 8 slice 2 (full suite) | ~6.7 min (401.55s, 444 tests) | Session 14 (2026-07-13/14) | this session |
 | Test count — Phase 8 slice 3 (grounding contract) | 444 → **469 tests** (+25: `test_grounding.py` + income-ratio test) | Session 14 (2026-07-14) | this session |
 | Local pytest run time — Phase 8 slice 3 (full suite) | ~6.7 min (399.55s, 469 tests) | Session 14 (2026-07-14) | this session |
+| Test count — Phase 8 slice 4 (PII gate, HMAC, demo identifiers) | 469 → **495 tests** (+26) | Session 14 (2026-07-14) | this session |
+| Local pytest run time — Phase 8 slice 4 (full suite) | ~6.5 min (389.15s, 495 tests) | Session 14 (2026-07-14) | this session |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -270,6 +272,63 @@ Both fixed by stripping timestamps/clock times/month-year dates before number-sc
 In **every** honest run, the model computed inflows as a percentage of declared income (250,000 ÷ 500,000 = 50%) **even when the system prompt explicitly forbade computing new numbers**, and gate 3 correctly rejected the claim each time — the ratio was the model's own arithmetic and no tool had produced it.
 
 The fix for "the model keeps deriving X" is **never to relax the gate**. It is to make a tool compute X, so the figure becomes a citable fact with auditable provenance. `get_account_facts` now returns `inflow_pct_of_declared_income` (same precedent as `get_money_flow`'s `pct_of_total`). **That single change took the honest-run false-rejection rate from 1/8 to 0/7.**
+
+---
+
+## 14. PII egress gate, keyed hashing, demo identifier safety (Phase 8 slice 4 — Session 14)
+
+Closes decision 9 (zero PII egress, fail-closed) and decision 11 (demo identifiers must be *structurally impossible* as real ones, not merely unlikely).
+
+### The egress gate raises; it does not strip
+
+`orchestration/redaction.py` sits between a fact bundle and the network and **raises** on PII. It never masks, strips, or tokenizes. The reason is a claim, not a preference:
+
+> *"It never left our perimeter"* is a claim a bank can **verify**.
+> *"We de-identified it on the way out"* is a claim a bank must **trust**.
+
+A silent strip produces the weaker claim *from the same code path as a bug* — a stripper that misses a field records nothing, anywhere. A raise turns a missed field into a failed request instead of a quiet disclosure. The exception names the **column** and the **fact key** but **never the value**: an exception that echoes a PAN into a stack trace, a log aggregator and an error tracker has widened the disclosure, not prevented it.
+
+**Two detectors, because they fail differently:**
+
+| Detector | Catches | Blind to |
+|---|---|---|
+| Known-value scan (exact, no false positives) | this case's real PII, loaded from the columns `db/pii.py` registers | PII from *outside* the case |
+| Format scan (`[A-Z]{5}[0-9]{4}[A-Z]` PAN, `[2-9]\d{11}` Aadhaar, `[6-9]\d{9}` mobile) | anything *shaped* like real PII, wherever it came from | — |
+
+Detector 2 exists because a bug joining the wrong row leaks a **stranger's** PAN, and detector 1 structurally cannot see that: it only knows this case's values. A stranger's PAN is a worse leak, not a lesser one.
+
+### Decision 11 and the gate are the same decision seen from two ends
+
+**The format scan is only safe to run fail-closed because demo identifiers are now format-invalid.** Had they kept their old real-format shapes, detector 2 would have fired on every demo case and someone would have had to weaken or disable it.
+
+| Generator | Before | After | Why it matters |
+|---|---|---|---|
+| `_synthetic_pan` | `ABCDE1234D` — **the exact real PAN layout** | `0ABCD1234D` — leading digit where a letter is required | **PAN carries no checksum.** Any string of that shape *is* a syntactically valid PAN; only luck separated a demo value from a real person's tax identifier. Indefensible to ship from an AML product. |
+| `_synthetic_phone` | `9700000001` — a dialable Indian mobile | `1700000001` — `1` is not an allocatable mobile prefix | Demo rows that ring a real stranger's handset. |
+| `_synthetic_aadhaar` | `1…` | unchanged | Already safe — real Aadhaar never starts 0 or 1. |
+| `_synthetic_email` | `.invalid` TLD | unchanged | Already safe — IANA-reserved, can never resolve. |
+
+Lengths are preserved (10/10/12), so the UI still lays out correctly — and the Relationship Explorer matches on **equality**, so format is functionally irrelevant to every feature consuming these.
+
+### `Relationship.value_hash`: SHA256 → keyed HMAC-SHA256
+
+Resolves the item Session 11 deferred. A bare SHA256 of a PAN is **not pseudonymisation, it is an encoding**: the input space is ten characters in a known layout with no checksum, so anyone holding a leaked `relationships` table can enumerate it offline and match the digests back. Now `hmac.new(pii_hmac_key, value, sha256)` — the digests are useless without a secret the database does not contain.
+
+**An empty key raises rather than degrading to an unkeyed digest.** That matters more than it looks: a brute-forceable hash is byte-indistinguishable from a safe one, so a silent fallback would be invisible in the data forever. Relationship rows are *derived*, so rotating the key is a regenerate via `scripts/discover_relationships.py`, not a migration.
+
+### A false positive found in the gate itself, before it shipped
+
+The format detectors originally scanned the **serialised** bundle. JSON writes numbers unquoted, so a transaction amount of `9876543210.0` (Rs 9.87bn) matched the Indian-mobile pattern `[6-9]\d{9}` exactly. On a **fail-closed** gate that is not cosmetic: it would have refused to explain a legitimate high-value case — precisely the kind of case anyone cares about, and precisely the kind a bank puts on stage. Fixed by scanning **string leaves only**; a PAN/Aadhaar/phone is always a string column, so this costs no coverage and removes the entire false-positive class. Regression test: `test_a_large_transaction_amount_is_not_mistaken_for_a_phone_number`.
+
+### Live verification (real API, real tool bundle)
+
+| Check | Result |
+|---|---|
+| Demo PANs / phones | `0KEMU0000D`, `1700000000` — zero match a real format; lengths 10/10/12 preserved |
+| `value_hash` keyed vs bare SHA256 | differ; empty key **refused** |
+| Gate vs a real 44-fact bundle from 6 tools | **PASS** — no PII (this is the guarantee) |
+| Gate vs an injected `customers.name` | **BLOCKED**, and the error does **not** echo the value |
+| Full loop: gate → live Sonnet 4.5 | explanation returned; **zero PII in the prompt** |
 
 ---
 

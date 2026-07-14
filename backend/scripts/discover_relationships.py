@@ -16,6 +16,7 @@ import logging
 
 from db.enums import ActorType
 from db.session import SessionLocal
+from foundation.config import get_settings
 from investigation.relationship_discovery import discover_relationships
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,12 @@ def main(argv: list[str] | None = None) -> None:
 
     session = SessionLocal()
     try:
-        stats = discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+        stats = discover_relationships(
+            session,
+            actor_type=ActorType.SYSTEM,
+            actor_id=_ACTOR_ID,
+            hmac_key=get_settings().pii_hmac_key,
+        )
         session.commit()
     finally:
         session.close()

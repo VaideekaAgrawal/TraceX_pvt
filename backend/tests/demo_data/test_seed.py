@@ -23,6 +23,12 @@ from demo_data.seed import run_demo_data_studio
 
 _ACTOR_ID = "test-demo-data-studio"
 
+#: Phase 8 (decision 9): the relationship-discovery stage's `value_hash` is now a
+#: keyed HMAC. Any non-empty key works here — these tests assert seeding, not the
+#: hash itself (that's `tests/investigation/test_value_hash_hmac.py`). An EMPTY key
+#: is deliberately refused rather than degraded to an unkeyed digest.
+_TEST_HMAC_KEY = "test-pii-hmac-key"
+
 
 def _row_counts(session: Session) -> dict[str, int]:
     """Row counts for every table this package writes to (directly or via
@@ -50,7 +56,9 @@ def _row_counts(session: Session) -> dict[str, int]:
 
 
 def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
-    first_summary = run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    first_summary = run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     assert first_summary.kyc_customers_created > 0
@@ -62,7 +70,9 @@ def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
 
     counts_after_first = _row_counts(session)
 
-    second_summary = run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    second_summary = run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     assert second_summary.kyc_customers_created == 0
@@ -90,7 +100,9 @@ def test_relationship_discovery_rediscovers_seeded_clusters(session: Session) ->
     rotates through, expected to surface too (`phone`/`email`/`address`/
     `employer` clusters are intentionally NOT rediscoverable -- out of
     Relationship Explorer v1's locked scope, `docs/DATA_SCHEMA.md`)."""
-    run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     by_attribute: dict[str, list[Relationship]] = {}
@@ -107,7 +119,9 @@ def test_relationship_discovery_rediscovers_seeded_clusters(session: Session) ->
 
 
 def test_every_created_id_is_demo_prefixed(session: Session) -> None:
-    run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     for customer in session.scalars(select(Customer)):
@@ -127,7 +141,9 @@ def test_every_created_id_is_demo_prefixed(session: Session) -> None:
 
 
 def test_case_feature_vectors_are_16_dimensional(session: Session) -> None:
-    run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     vectors = list(session.scalars(select(CaseFeatureVector)))
@@ -150,7 +166,9 @@ def test_rl_arm_state_actually_trained_by_historical_corpus(session: Session) ->
     repo = RlArmStateRepository(session)
     assert repo.get(GLOBAL_ARM_ID) is None  # nothing trained yet
 
-    run_demo_data_studio(session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
+    run_demo_data_studio(
+        session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     state = repo.get(GLOBAL_ARM_ID)
