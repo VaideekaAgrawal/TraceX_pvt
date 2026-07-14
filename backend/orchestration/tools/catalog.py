@@ -227,8 +227,10 @@ class ToolCatalog:
                 description=(
                     "Aggregate transaction statistics and non-identifying customer "
                     "attributes for one account in this case: totals in/out, transaction "
-                    "and counterparty counts, channel breakdown, risk score, occupation "
-                    "and declared income."
+                    "and counterparty counts, channel breakdown, risk score, occupation, "
+                    "declared income, and inflow_pct_of_declared_income (inflows as a "
+                    "percentage of declared annual income — use this value directly, do "
+                    "not compute the ratio yourself)."
                 ),
                 properties={"account_id": _ACCOUNT_ID},
                 handler=self._account_facts,
@@ -422,6 +424,23 @@ class ToolCatalog:
                     "income_bracket": row.income_bracket,
                 }
 
+        # Server-computed so the MODEL never has to derive it. Live measurement
+        # (docs/METRICS.md §13) showed the model reliably wants to state inflows
+        # as a percentage of declared income — it did so even when the system
+        # prompt explicitly forbade computing new numbers — and the grounding
+        # validator correctly rejected the claim every time, because the ratio
+        # was the model's own arithmetic and no tool had produced it.
+        #
+        # The fix for "the model keeps deriving X" is never to relax the gate.
+        # It is to make a tool compute X, so the figure becomes a citable fact
+        # with an auditable provenance. Same precedent as `get_money_flow`
+        # returning `pct_of_total` rather than leaving the model to divide.
+        income = (customer or {}).get("declared_annual_income")
+        total_in = stats.get("total_in")
+        inflow_pct_of_declared_income: float | None = None
+        if income and total_in is not None:
+            inflow_pct_of_declared_income = round(float(total_in) / float(income) * 100.0, 2)
+
         return {
             "account_id": account_id,
             "branch_city": account.branch_city if account is not None else None,
@@ -431,6 +450,7 @@ class ToolCatalog:
                 else None
             ),
             **stats,
+            "inflow_pct_of_declared_income": inflow_pct_of_declared_income,
             "customer": customer,
         }
 

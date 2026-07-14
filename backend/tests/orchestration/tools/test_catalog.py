@@ -236,3 +236,21 @@ def test_null_arguments_fall_back_to_server_defaults(catalog: ToolCatalog) -> No
          "direction": None, "limit": None},
     )
     assert "items" in result and "total_count" in result
+
+
+def test_account_facts_precomputes_the_income_ratio_so_the_model_never_derives_it(
+    catalog: ToolCatalog,
+) -> None:
+    # Live measurement (METRICS.md §13): the model reliably states inflows as a
+    # percentage of declared income — it did so even when the system prompt
+    # explicitly forbade computing new numbers — and the grounding validator
+    # rejected the claim every time, correctly, because the ratio was the model's
+    # own arithmetic.
+    #
+    # The answer to "the model keeps deriving X" is never to relax the gate; it is
+    # to make a tool compute X. Then the figure is a citable fact with auditable
+    # provenance instead of a number nobody can check. Same precedent as
+    # get_money_flow returning pct_of_total.
+    facts = catalog.dispatch("get_account_facts", {"account_id": IN_CASE})
+    # 250,000 inflow against 500,000 declared income.
+    assert facts["inflow_pct_of_declared_income"] == 50.0
