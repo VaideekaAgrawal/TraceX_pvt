@@ -394,6 +394,61 @@ Fixed: the gate now runs on `ToolCatalog.dispatch`, where egress actually begins
 
 ---
 
+## 17. Real-data verification of the Phase 8 substrate (Session 18)
+
+First time the tool catalog / PII gate / grounding contract were run against a **real pipeline-generated case** rather than a hand-seeded 2-account fixture. Pipeline run fresh: `create_user` ×3 → `train_detection_model` → `run_detection_pipeline` → `generate_demo_data`.
+
+**Phase 8 itself held up.** 23 tool dispatches against a real case, every one **< 40ms**; PII gate loaded in **27ms**; bundle serialised cleanly to the JSON column; nothing blocked spuriously.
+
+| Pipeline output | Value |
+|---|---|
+| Alerts generated | 2,738 |
+| Cases auto-created & assigned | 20 |
+| Relationships discovered (HMAC-keyed) | 5,324 |
+| Demo KYC customers | 200 |
+| Model run | `RUN-8F80498651944097`, active |
+
+### ⚠️ Finding A — the KYC data and the transaction data do not join (DEMO BLOCKER)
+
+| | count |
+|---|---|
+| Accounts with transactions | 362 |
+| Accounts with a customer (KYC) | 518,786 |
+| **Accounts with BOTH** | **13** |
+| `case_accounts` on `DEMO-` cases | **0** |
+| `case_accounts` on real cases | 60 |
+
+The two datasets are effectively disjoint, so **neither kind of case can demo the product**:
+
+- **Real pipeline cases (20)** have accounts + transactions, but their accounts carry `customer_id = NULL` → `get_account_facts` returns `customer: {}`. No name/occupation/income/risk-rating, and `inflow_pct_of_declared_income` is always null. L1 KYC surfaces have nothing to render.
+- **`DEMO-` cases (50)** have KYC customers + relationships but **zero linked accounts** → no money flow, no ego graph, no timeline. L2 surfaces have nothing to show.
+
+Phase 8 is behaving **correctly** — it faithfully reports "no customer" because there is none. This is a **data-layer gap**, not a substrate bug. But ROADMAP decision 11 assumed the `DEMO-` seed was what made "the Relationship Explorer, the L1 KYC surfaces, and Phase 9's recommendations demonstrable **at all**" — and the seed creates customers, accounts, relationships and 50 historical cases **without ever linking accounts into a case**. Phase 9's recommendations are built on exactly the customer/relationship signals that are currently unreachable from any investigable case.
+
+### ⚠️ Finding B — the ML numbers in §2 are the *archive's*, not this codebase's
+
+§2 says so explicitly (source: `archive/.../config.py` documented tuning result), but the figures are cited in `README.md` and `docs/cross_questions.md` as if they were ours. **Actually training this codebase's model on the actually-ingested data:**
+
+| Metric | §2 (archive, cited externally) | **This codebase, measured 2026-07-15** |
+|---|---|---|
+| Precision | 0.778 | **0.404** |
+| Recall | 0.609 | **1.000** |
+| F1 | 0.683 | **0.576** |
+| AUC-ROC | 0.933 | **0.661** |
+| Training samples | — | **314** (219 train / 47 val / 48 test) |
+
+Because **only 8,002 transactions were ever ingested** (`tracex_test_day1.csv`), touching 316 accounts. `data/ibm-transactions-for-anti-money-laundering-aml.zip` is **truncated** — exactly 1,048,576 bytes, `unzip -t` → *"End-of-central-directory signature not found"* — so the full HI-Small transaction file was never obtained.
+
+**Consequence for the pitch:** decision 11's framing — *"detection engine trained and validated at full scale on IBM's public AML benchmark"* — **is not supported by what is in this repo.** Reconcile before citing any ML figure externally. (This is the same class as CLAUDE.md's existing README-vs-`cross_questions.md` landmine.)
+
+### ⚠️ Finding C — a real fact bundle is ~56k tokens
+
+3 accounts × the tool catalog → **3,156 facts / 222,926 chars / ~55,700 tokens / $0.17 per prompt** at Sonnet input rates. `get_ego_graph` alone contributes **2,505** of those facts.
+
+Phase 9 must have `get_ego_graph` return a **summary** (node/edge counts, top-N by risk) rather than every node and edge, or every recommendation call is slow and expensive. Bundle size is a Phase 9 design input, not an afterthought.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
