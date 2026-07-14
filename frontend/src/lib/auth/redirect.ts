@@ -29,17 +29,34 @@ export const PATHNAME_HEADER = "x-tracex-pathname";
 export const DEFAULT_LANDING_PATH = "/dashboard";
 
 /**
- * True only for same-origin, path-relative targets: must start with exactly
- * one `/` (not `//`, which browsers resolve as a protocol-relative absolute
- * URL to a different origin) and must not be an empty string. This is the
- * one place that decides whether an attacker-controlled `next` value is
- * safe to redirect to.
+ * Sentinel base origin used only to resolve `next` through the real WHATWG
+ * `URL` parser, never a value that's actually navigated to.
+ */
+const SENTINEL_ORIGIN = "http://tracex-internal.invalid";
+
+/**
+ * True only for same-origin, path-relative targets. This used to be a hand
+ *-rolled `next.startsWith("/") && !next.startsWith("//")` check, which
+ * blocked the obvious `//evil.com` protocol-relative bypass but missed two
+ * others a live probe caught: browsers (per the WHATWG URL spec, for special
+ * schemes like http/https) normalize a leading backslash to a slash
+ * (`/\evil.com` -> `//evil.com`) and strip embedded tab/newline/CR
+ * characters (`/\t/evil.com` -> `//evil.com`) *before* resolving the URL —
+ * both defeat a plain string-prefix check while still resolving off-origin
+ * in a real browser. Resolving through the real `URL` constructor (which
+ * implements the same normalization) and comparing origins avoids
+ * re-deriving the WHATWG parsing rules by hand and is exactly what
+ * `window.location.assign`/`redirect()` will actually do with this value.
  */
 export function isSafeRedirectTarget(next: string | null | undefined): next is string {
-  if (!next) {
+  if (!next || !next.startsWith("/")) {
     return false;
   }
-  return next.startsWith("/") && !next.startsWith("//");
+  try {
+    return new URL(next, SENTINEL_ORIGIN).origin === SENTINEL_ORIGIN;
+  } catch {
+    return false;
+  }
 }
 
 /** Convenience: the validated `next` target, or the default landing path. */
