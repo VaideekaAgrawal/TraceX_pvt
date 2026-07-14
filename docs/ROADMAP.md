@@ -1,6 +1,6 @@
 # TraceX Backend Refactor Roadmap
 
-**Status: filled in by Planning Session (2026-07-09).** This is the phase-by-phase execution plan that development sessions work from, derived from `SYSTEM_DEVELOPMENT_PLAN.md` and the five committed decisions below. It supersedes the empty template. Frontend runs in parallel on its own track later; this roadmap is **backend**.
+**Status: filled in by Planning Session (2026-07-09).** This is the phase-by-phase execution plan that development sessions work from, derived from `SYSTEM_DEVELOPMENT_PLAN.md` and the five committed decisions below. It supersedes the empty template. Frontend runs in parallel on its own track later; this roadmap is **backend**. **The frontend track now has its own roadmap: `docs/FRONTEND_ROADMAP.md` (Phases 13+, continuing this file's numbering).**
 
 **Budget:** ~21–24 sessions over 7–8 days (~3 combined sessions/day), backend-weighted, frontend parallel later. Phases are sized to 1–2 sessions each.
 
@@ -218,7 +218,7 @@ Legend: **Status** = not started | in progress | done.
 **Explicitly out of scope:** the agents themselves (Phases 9–10); provider-native prompt caching (decision 7); the pseudonymize/re-hydrate *implementation* (designed here, built in Phase 10); the `notes.body` free-text guardrail (Phase 10).
 **Deferred, deliberately:** stale `relationships` rows are never invalidated when the underlying shared value changes (Session 11). Not on the demo path — PAN exists only in the demo seed, which is regenerated wholesale — and fixing it properly means deciding whether to break the repository's append-only design. Logged, not fixed.
 **Reference:** §5 (AI Guardrails); decisions 3 & 4, as refined by decisions 6–11.
-**Status:** done (Session 14, 2026-07-14) — branch `phase/8-ai-substrate`, 4 slices, 495 tests
+**Status:** done (Session 18, 2026-07-14) — branch `phase/8-ai-substrate`, 4 slices + code-review fixes, 502 tests
 
 ### Phase 9 — Recommendation Engine (deterministic-guarded reasoner)
 **Goal:** The intelligent "what next" agent that reasons over full evidence + graph, defensibly. **The rules define the action space; the LLM only ranks and explains within it — it can never invent an action, and (per decision 8) it can never assert a number it was not handed.**

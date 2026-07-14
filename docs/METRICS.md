@@ -72,14 +72,15 @@ Source: `scripts/run_detection_pipeline.py` run live against the real ingested d
 | Local pytest run time — Phase 1B (`.venv313`, full suite) | ~7.5 min (275 tests) | Session 8 (2026-07-11) | `docs/SESSION_LOG.md` Session 8 |
 | Local pytest run time — Phase 5 (full suite, incl. coverage) | ~5.6 min (334.87s, 304 tests) | Session 9 (2026-07-11/12) | `docs/SESSION_LOG.md` Session 9 |
 | Local pytest run time — Phase 6 (full suite, incl. coverage, post-fixes) | ~5.9 min (353.14s, 379 tests) | Session 10 (2026-07-12) | `docs/SESSION_LOG.md` Session 10 |
-| Test count — Phase 8 slice 1 (LLM gateway) | 412 → **422 tests** (+10: `tests/orchestration/test_gateway.py`) | Session 14 (2026-07-13) | this session |
-| Local pytest run time — Phase 8 slice 1 (full suite) | ~6.4 min (382.09s, 422 tests) | Session 14 (2026-07-13) | this session |
-| Test count — Phase 8 slice 2 (tool catalog) | 422 → **444 tests** (+22: `tests/orchestration/tools/`) | Session 14 (2026-07-13/14) | this session |
-| Local pytest run time — Phase 8 slice 2 (full suite) | ~6.7 min (401.55s, 444 tests) | Session 14 (2026-07-13/14) | this session |
-| Test count — Phase 8 slice 3 (grounding contract) | 444 → **469 tests** (+25: `test_grounding.py` + income-ratio test) | Session 14 (2026-07-14) | this session |
-| Local pytest run time — Phase 8 slice 3 (full suite) | ~6.7 min (399.55s, 469 tests) | Session 14 (2026-07-14) | this session |
-| Test count — Phase 8 slice 4 (PII gate, HMAC, demo identifiers) | 469 → **495 tests** (+26) | Session 14 (2026-07-14) | this session |
-| Local pytest run time — Phase 8 slice 4 (full suite) | ~6.5 min (389.15s, 495 tests) | Session 14 (2026-07-14) | this session |
+| Test count — Phase 8 slice 1 (LLM gateway) | 412 → **422 tests** (+10: `tests/orchestration/test_gateway.py`) | Session 18 (2026-07-14) | this session |
+| Local pytest run time — Phase 8 slice 1 (full suite) | ~6.4 min (382.09s, 422 tests) | Session 18 (2026-07-14) | this session |
+| Test count — Phase 8 slice 2 (tool catalog) | 422 → **444 tests** (+22: `tests/orchestration/tools/`) | Session 18 (2026-07-14) | this session |
+| Local pytest run time — Phase 8 slice 2 (full suite) | ~6.7 min (401.55s, 444 tests) | Session 18 (2026-07-14) | this session |
+| Test count — Phase 8 slice 3 (grounding contract) | 444 → **469 tests** (+25: `test_grounding.py` + income-ratio test) | Session 18 (2026-07-14) | this session |
+| Local pytest run time — Phase 8 slice 3 (full suite) | ~6.7 min (399.55s, 469 tests) | Session 18 (2026-07-14) | this session |
+| Test count — Phase 8 slice 4 (PII gate, HMAC, demo identifiers) | 469 → **495 tests** (+26) | Session 18 (2026-07-14) | this session |
+| Local pytest run time — Phase 8 slice 4 (full suite) | ~6.5 min (389.15s, 495 tests) | Session 18 (2026-07-14) | this session |
+| Test count — Phase 8 final (post code-review + JSON-safety fix) | **502 tests** | Session 18 (2026-07-14) | this session |
 
 ## 6. Login timing side-channel fix (Phase 2)
 
@@ -160,7 +161,24 @@ Queried directly against `data/tracex.db` (the IBM HI-Small ingest; **no demo se
 
 ---
 
-## 11. LLM model selection — measured, not priced (Phase 8 slice 1 — Session 14)
+## 11. Frontend Phase 13 (scaffold, auth, global shell) — Session 17
+
+`/code-review` (high effort: 8 finder angles + 1-vote verify) and `/verify` (live, against a real backend + throwaway seeded user) run against the full `phase/13-frontend-scaffold-auth` diff before merge.
+
+| Metric | Value | Recorded | Source |
+|---|---|---|---|
+| Code-review candidates surfaced (8 finder angles) | 17 distinct | Session 17 (2026-07-14) | `docs/SESSION_LOG.md` Session 17 |
+| Code-review candidates confirmed after 1-vote verify | 15 of 17 (1 refuted, 1 duplicate-merged) | Session 17 (2026-07-14) | ditto |
+| Findings reported/fixed (capped, severity-ranked) | 10 of 10 fixed | Session 17 (2026-07-14) | ditto |
+| Additional bug found by live `/verify` adversarial probing (post-fix) | 1 (open-redirect fix bypassable via URL-normalization: `/\host`, embedded tab/CR) — fixed same session | Session 17 (2026-07-14) | ditto |
+| `npm run build` / `npm run lint` | clean | Session 17 (2026-07-14) | ditto |
+| Live-verified: backend 5xx/outage while a session is valid | Session preserved, no force-logout, no cookie deletion (previously: destroyed a valid session) | Session 17 (2026-07-14) | ditto |
+| Live-verified: login while backend is down | 502 "service unavailable" (previously: misleading 401 "invalid credentials") | Session 17 (2026-07-14) | ditto |
+| Live-verified: invalid cookie deep in the app → re-login | `next` destination preserved end-to-end through `/api/auth/session-expired` (previously: dropped, fell back to `/dashboard`) | Session 17 (2026-07-14) | ditto |
+
+---
+
+## 12. LLM model selection — measured, not priced (Phase 8 slice 1 — Session 18)
 
 **The headline finding: per-token price is a misleading proxy for cost here, and picking on it alone selects the worst option.**
 
@@ -208,7 +226,7 @@ Adding a real `backend/.env` surfaced that the API test fixtures built `Settings
 
 ---
 
-## 12. Tool catalog — enforced containment (Phase 8 slice 2 — Session 14)
+## 13. Tool catalog — enforced containment (Phase 8 slice 2 — Session 18)
 
 Twelve tools (`orchestration/tools/catalog.py`), each wrapping an already-built Phase 5–7 function. No tool computes anything new, so every number the model can cite was produced by already-tested investigation-layer code.
 
@@ -226,7 +244,7 @@ Three properties are enforced **in code**, and each was verified against a **liv
 
 ---
 
-## 13. Grounding contract — measured against a live model (Phase 8 slice 3 — Session 14)
+## 14. Grounding contract — measured against a live model (Phase 8 slice 3 — Session 18)
 
 Decision 8's claim is *"the model cannot assert a number it was not handed."* Three gates, in `orchestration/grounding.py`, each closing a hole the previous one leaves open:
 
@@ -275,7 +293,7 @@ The fix for "the model keeps deriving X" is **never to relax the gate**. It is t
 
 ---
 
-## 14. PII egress gate, keyed hashing, demo identifier safety (Phase 8 slice 4 — Session 14)
+## 15. PII egress gate, keyed hashing, demo identifier safety (Phase 8 slice 4 — Session 18)
 
 Closes decision 9 (zero PII egress, fail-closed) and decision 11 (demo identifiers must be *structurally impossible* as real ones, not merely unlikely).
 
@@ -332,7 +350,7 @@ The format detectors originally scanned the **serialised** bundle. JSON writes n
 
 ---
 
-## 15. Code review of the Phase 8 diff — 7 findings, all fixed (Session 14)
+## 16. Code review of the Phase 8 diff — 7 findings, all fixed (Session 18)
 
 `/code-review high` over the full `phase/8-ai-substrate` diff vs `main`. **The review paid for itself on the first finding.**
 
