@@ -20,6 +20,7 @@ from db.enums import (
     UserRole,
 )
 from db.repositories.detection import (
+    ALERT_SORT_KEYS,
     AlertRepository,
     DetectionFeedbackRepository,
     ModelRunRepository,
@@ -363,3 +364,197 @@ def test_detection_feedback_repository_round_trip(session: Session) -> None:
 
     assert repo.get(feedback.id) is not None
     assert [f.id for f in repo.list_for_case("CASE1")] == [feedback.id]
+
+
+# ── ROADMAP Phase 14: list_filtered/count_filtered/dashboard aggregates ────
+
+
+def _seed_alert(
+    session: Session,
+    alert_id: str,
+    *,
+    primary_account_id: str = "A1",
+    risk_score: float = 50.0,
+    severity: RiskLevel = RiskLevel.MEDIUM,
+    priority: Priority = Priority.P3,
+    detection_type: DetectionType = DetectionType.layering,
+    status: str = "open",
+    case_id: str | None = None,
+    created_at: datetime | None = None,
+) -> None:
+    AlertRepository(session).create(
+        alert_id=alert_id,
+        detection_type=detection_type,
+        primary_account_id=primary_account_id,
+        account_ids=[primary_account_id],
+        score=0.5,
+        risk_score=risk_score,
+        severity=severity,
+        priority=priority,
+        status=status,
+        source="pipeline",
+        case_id=case_id,
+        created_at=created_at,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+
+
+def test_alert_sort_keys_matches_private_list_sorts() -> None:
+    assert ALERT_SORT_KEYS == set(AlertRepository._LIST_SORTS)
+    assert "risk_score_desc" in ALERT_SORT_KEYS
+    assert "created_at_asc" in ALERT_SORT_KEYS
+    assert "priority_desc" in ALERT_SORT_KEYS
+
+
+def test_list_filtered_by_status_priority_severity_detection_type(session: Session) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    _seed_alert(
+        session, "AL_MATCH", severity=RiskLevel.HIGH, priority=Priority.P1,
+        detection_type=DetectionType.round_trip, status="open",
+    )
+    _seed_alert(
+        session, "AL_OTHER", severity=RiskLevel.LOW, priority=Priority.P4,
+        detection_type=DetectionType.layering, status="assigned",
+    )
+    session.commit()
+
+    repo = AlertRepository(session)
+    result = repo.list_filtered(
+        status="open",
+        priority=Priority.P1,
+        severity=RiskLevel.HIGH,
+        detection_type=DetectionType.round_trip,
+    )
+    assert [a.alert_id for a in result] == ["AL_MATCH"]
+    assert repo.count_filtered(
+        status="open",
+        priority=Priority.P1,
+        severity=RiskLevel.HIGH,
+        detection_type=DetectionType.round_trip,
+    ) == 1
+
+
+def test_list_filtered_by_risk_score_range_and_date_range(session: Session) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    _seed_alert(session, "AL_LOW", risk_score=10.0, created_at=datetime(2026, 1, 1, tzinfo=UTC))
+    _seed_alert(session, "AL_MID", risk_score=50.0, created_at=datetime(2026, 2, 1, tzinfo=UTC))
+    _seed_alert(session, "AL_HIGH", risk_score=90.0, created_at=datetime(2026, 3, 1, tzinfo=UTC))
+    session.commit()
+
+    repo = AlertRepository(session)
+    assert {a.alert_id for a in repo.list_filtered(min_risk_score=40.0, max_risk_score=95.0)} == {
+        "AL_MID",
+        "AL_HIGH",
+    }
+    assert {
+        a.alert_id
+        for a in repo.list_filtered(
+            start=datetime(2026, 1, 15, tzinfo=UTC), end=datetime(2026, 2, 15, tzinfo=UTC)
+        )
+    } == {"AL_MID"}
+    assert repo.count_filtered(min_risk_score=40.0, max_risk_score=95.0) == 2
+
+
+def test_list_filtered_unassigned_only_and_assigned_to(session: Session) -> None:
+    _seed_account_and_user(session)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        assigned_to="U1",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+    _seed_alert(session, "AL_UNASSIGNED", case_id=None)
+    _seed_alert(session, "AL_ASSIGNED", case_id="CASE1")
+    session.commit()
+
+    repo = AlertRepository(session)
+    assert [a.alert_id for a in repo.list_filtered(unassigned_only=True)] == ["AL_UNASSIGNED"]
+    assert [a.alert_id for a in repo.list_filtered(assigned_to="U1")] == ["AL_ASSIGNED"]
+    assert repo.list_filtered(assigned_to="NOBODY") == []
+    assert repo.count_filtered(unassigned_only=True) == 1
+
+
+def test_list_filtered_sort_none_returns_full_set_unordered_no_limit(session: Session) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    for i in range(5):
+        _seed_alert(session, f"AL{i}", risk_score=float(i))
+    session.commit()
+
+    repo = AlertRepository(session)
+    result = repo.list_filtered(sort=None, limit=2)  # limit ignored when sort is None
+    assert {a.alert_id for a in result} == {f"AL{i}" for i in range(5)}
+
+
+def test_list_filtered_sort_applies_order_and_limit_offset(session: Session) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    for i in range(5):
+        _seed_alert(session, f"AL{i}", risk_score=float(i))
+    session.commit()
+
+    repo = AlertRepository(session)
+    result = repo.list_filtered(sort="risk_score_desc", limit=2)
+    assert [a.alert_id for a in result] == ["AL4", "AL3"]
+
+    page2 = repo.list_filtered(sort="risk_score_desc", limit=2, offset=2)
+    assert [a.alert_id for a in page2] == ["AL2", "AL1"]
+
+    all_asc = repo.list_filtered(sort="risk_score_asc")
+    assert [a.alert_id for a in all_asc] == ["AL0", "AL1", "AL2", "AL3", "AL4"]
+
+
+def test_list_filtered_and_count_filtered_empty_result(session: Session) -> None:
+    repo = AlertRepository(session)
+    assert repo.list_filtered(status="open") == []
+    assert repo.count_filtered(status="open") == 0
+
+
+def test_count_active_and_grouped_by_severity_and_avg_risk_score(session: Session) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    _seed_alert(session, "AL1", severity=RiskLevel.HIGH, risk_score=80.0, status="open")
+    _seed_alert(session, "AL2", severity=RiskLevel.HIGH, risk_score=60.0, status="assigned")
+    _seed_alert(session, "AL3", severity=RiskLevel.LOW, risk_score=10.0, status="closed")
+    session.commit()
+
+    repo = AlertRepository(session)
+    # "closed" excludes AL3 from every active-only aggregate.
+    assert repo.count_active() == 2
+    assert repo.count_active_grouped_by_severity() == {"HIGH": 2}
+    assert repo.avg_active_risk_score() == 70.0
+
+
+def test_avg_active_risk_score_returns_none_when_no_active_alerts(session: Session) -> None:
+    repo = AlertRepository(session)
+    assert repo.avg_active_risk_score() is None
+    assert repo.count_active_grouped_by_severity() == {}
+
+
+def test_count_by_day_buckets_by_utc_calendar_day_and_excludes_before_since(
+    session: Session,
+) -> None:
+    _seed_account_and_user(session)
+    session.commit()
+    _seed_alert(session, "AL_D1_A", created_at=datetime(2026, 6, 1, 3, 0, tzinfo=UTC))
+    _seed_alert(session, "AL_D1_B", created_at=datetime(2026, 6, 1, 23, 0, tzinfo=UTC))
+    _seed_alert(session, "AL_D2", created_at=datetime(2026, 6, 2, 12, 0, tzinfo=UTC))
+    _seed_alert(session, "AL_TOO_OLD", created_at=datetime(2026, 5, 1, tzinfo=UTC))
+    session.commit()
+
+    repo = AlertRepository(session)
+    result = repo.count_by_day(since=datetime(2026, 6, 1, tzinfo=UTC))
+    assert result == [("2026-06-01", 2), ("2026-06-02", 1)]
+
+
+def test_count_by_day_empty_result(session: Session) -> None:
+    repo = AlertRepository(session)
+    assert repo.count_by_day(since=datetime(2026, 1, 1, tzinfo=UTC)) == []

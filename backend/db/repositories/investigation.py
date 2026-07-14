@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.enums import (
     AccountRole,
@@ -272,6 +272,17 @@ class CaseRepository(BaseRepository[Case]):
             return []
         stmt = select(Case).where(Case.case_id.in_(case_ids))
         return list(self.session.scalars(stmt))
+
+    def count_by_status(self, statuses: CaseStatus | set[CaseStatus]) -> int:
+        """`COUNT(*) WHERE status IN (...)` -- the Dashboard's "open case
+        count" (ROADMAP Phase 14), meant to be called with `investigation.
+        assignment.OPEN_STATUSES` (the same constant `compute_workload`
+        already uses, not a second invented definition of "open"). Accepts
+        either a single status or a set so a caller checking one specific
+        status doesn't have to wrap it in a set-literal at every call site."""
+        status_set = {statuses} if isinstance(statuses, CaseStatus) else statuses
+        stmt = select(func.count()).select_from(Case).where(Case.status.in_(status_set))
+        return self.session.scalar(stmt) or 0
 
 
 class CaseAccountRepository(BaseRepository[CaseAccount]):

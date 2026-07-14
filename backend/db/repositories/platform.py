@@ -13,8 +13,9 @@ regress) — deliberately not built.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.enums import ActorType, UserRole, WatchEntityType
 from db.models.base import utcnow
@@ -136,6 +137,74 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         `id` order. See `db.repositories._audit.verify_chain` for exactly
         what this does and does not prove."""
         return verify_chain(self.session)
+
+    def _filter_clauses(
+        self,
+        *,
+        case_id: str | None = None,
+        actor_id: str | None = None,
+        action: str | list[str] | None = None,
+        since: datetime | None = None,
+    ) -> list[Any]:
+        """Shared WHERE-clause builder for `list_filtered`/`count_filtered`
+        (ROADMAP Phase 14: `GET /audit-log`). `action` accepts either a
+        single action string or a list of them (repeated `?action=x&action=y`
+        query params on the route side) -- an equality check for the common
+        single-action case, an `IN` for the multi-action one."""
+        clauses: list[Any] = []
+        if case_id is not None:
+            clauses.append(AuditLog.case_id == case_id)
+        if actor_id is not None:
+            clauses.append(AuditLog.actor_id == actor_id)
+        if action is not None:
+            if isinstance(action, str):
+                clauses.append(AuditLog.action == action)
+            else:
+                clauses.append(AuditLog.action.in_(action))
+        if since is not None:
+            clauses.append(AuditLog.created_at >= since)
+        return clauses
+
+    def list_filtered(
+        self,
+        *,
+        case_id: str | None = None,
+        actor_id: str | None = None,
+        action: str | list[str] | None = None,
+        since: datetime | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[AuditLog]:
+        """Most-recent-first (`id DESC`) -- deliberately the opposite order
+        of `list_for_case`/`list_since` (both ascending, since they serve
+        case-history replay / chronological digests). This method serves a
+        "what just happened" feed (`GET /audit-log`, ROADMAP Phase 14),
+        where the newest row belongs at the top."""
+        clauses = self._filter_clauses(
+            case_id=case_id, actor_id=actor_id, action=action, since=since
+        )
+        stmt = (
+            select(AuditLog)
+            .where(*clauses)
+            .order_by(AuditLog.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.session.scalars(stmt))
+
+    def count_filtered(
+        self,
+        *,
+        case_id: str | None = None,
+        actor_id: str | None = None,
+        action: str | list[str] | None = None,
+        since: datetime | None = None,
+    ) -> int:
+        clauses = self._filter_clauses(
+            case_id=case_id, actor_id=actor_id, action=action, since=since
+        )
+        stmt = select(func.count()).select_from(AuditLog).where(*clauses)
+        return self.session.scalar(stmt) or 0
 
 
 class WatchlistRepository(BaseRepository[Watchlist]):
