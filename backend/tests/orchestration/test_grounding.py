@@ -466,3 +466,53 @@ def test_tools_called_records_every_call_with_its_arguments_in_order() -> None:
         {"tool": "get_account_facts", "arguments": {"account_id": "B"}},
     ]
     assert b.tool_names == ["get_case_summary", "get_account_facts"]
+
+
+def test_bundle_leaves_are_json_safe_so_they_can_actually_be_persisted() -> None:
+    """REGRESSION — and this one was handed to us by a DIFFERENT session's code
+    review (docs/SESSION_LOG.md): a parallel Phase 8 attempt found that "tool
+    outputs containing raw datetime/enum values silently break
+    AiInteraction.facts' JSON column".
+
+    It bit this implementation identically. get_timeline/search_transactions
+    return real `datetime` objects, and persisting a bundle containing one raises
+    `TypeError: Object of type datetime is not JSON serializable`. Phase 9's agent
+    would have hit it on its first persist. Every live test masked it, because the
+    bundle was serialised by hand with `json.dumps(..., default=str)`.
+
+    Coercing at the bundle boundary also fixes a subtler problem: it makes
+    *what the model saw* == *what the validator checks* == *what is persisted*.
+    Without that, the model cites the ISO string while `resolve()` hands the
+    validator a datetime, and they compare equal only by the accident of
+    `str(datetime)` matching `json.dumps(default=str)`.
+    """
+    import json
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from enum import Enum
+
+    class Channel(Enum):
+        NEFT = "NEFT"
+
+    b = FactBundle()
+    b.add_tool_result(
+        "get_timeline",
+        {
+            "events": [
+                {
+                    "timestamp": datetime(2026, 3, 1, 12, 0, tzinfo=UTC),
+                    "amount": Decimal("250000.00"),
+                    "channel": Channel.NEFT,
+                }
+            ]
+        },
+        {"account_id": "A1"},
+    )
+
+    # The whole point: this must not raise.
+    json.dumps(b.facts)
+
+    facts = b.facts
+    assert facts["get_timeline(account_id=A1).events[0].timestamp"] == "2026-03-01T12:00:00+00:00"
+    assert facts["get_timeline(account_id=A1).events[0].amount"] == 250000.0
+    assert facts["get_timeline(account_id=A1).events[0].channel"] == "Channel.NEFT"

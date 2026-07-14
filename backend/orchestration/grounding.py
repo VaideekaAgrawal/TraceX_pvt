@@ -59,6 +59,9 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 # Values this close are the same number. Guards against float repr noise
@@ -247,10 +250,44 @@ class FactBundle:
         return len(self._facts)
 
 
+def _jsonable(value: Any) -> Any:
+    """Coerce a leaf to something JSON can hold.
+
+    **Two bugs, one fix** — and the first was found by a *different session's*
+    code review, recorded in `docs/SESSION_LOG.md`: a parallel Phase 8 attempt hit
+    "tool outputs containing raw `datetime`/enum values silently break
+    `AiInteraction.facts`' JSON column". It bites here identically:
+    `get_timeline`/`search_transactions` return real `datetime` objects, and
+    persisting a bundle containing one raises `TypeError: Object of type datetime
+    is not JSON serializable`. Phase 9's agent would have hit it on its first
+    persist. Every live test I ran masked it, because I serialised the bundle by
+    hand with `json.dumps(..., default=str)`.
+
+    The second bug is subtler and is why coercing HERE (rather than at the persist
+    call) is the right depth. The model is shown the bundle as JSON; the validator
+    resolves citations against the in-memory bundle; the auditor re-runs the
+    validator against the *persisted* bundle. If those three are not byte-identical
+    the whole grounding argument leaks: the model would cite the string
+    `"2026-03-01T12:00:00"` while `resolve()` handed the validator a `datetime`,
+    and the two only compared equal by the accident of `str(datetime)` matching
+    `json.dumps(default=str)`. Coercing at the bundle boundary makes
+    **what the model saw == what the validator checks == what is persisted**, which
+    is the property a regulator is actually being promised."""
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return str(value)
+    return str(value)
+
+
 def _flatten(value: Any, *, prefix: str) -> list[tuple[str, Any]]:
-    """Depth-first flatten to `(dotted.key, scalar)` pairs. Lists are indexed
-    (`sources[0].total_amount`) so a claim can cite one counterparty rather than
-    the whole list. Empty containers are dropped — there is nothing to cite."""
+    """Depth-first flatten to `(dotted.key, JSON-safe scalar)` pairs. Lists are
+    indexed (`sources[0].total_amount`) so a claim can cite one counterparty rather
+    than the whole list. Empty containers are dropped — there is nothing to cite."""
     out: list[tuple[str, Any]] = []
     if isinstance(value, dict):
         for k, v in value.items():
@@ -259,7 +296,7 @@ def _flatten(value: Any, *, prefix: str) -> list[tuple[str, Any]]:
         for i, v in enumerate(value):
             out.extend(_flatten(v, prefix=f"{prefix}[{i}]"))
     else:
-        out.append((prefix, value))
+        out.append((prefix, _jsonable(value)))
     return out
 
 
