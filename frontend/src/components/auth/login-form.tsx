@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NEXT_PARAM, resolveRedirectTarget } from "@/lib/auth/redirect";
 
 /**
  * Client Component: POSTs to this app's own `/api/auth/login` Route
@@ -42,8 +43,7 @@ export function LoginForm() {
         return;
       }
 
-      const next = searchParams.get("next");
-      const destination = next && next.startsWith("/") ? next : "/dashboard";
+      const destination = resolveRedirectTarget(searchParams.get(NEXT_PARAM));
       // Full navigation (not router.push) so the root layout's server-side
       // `/auth/me` call re-runs against the freshly-set cookie rather than
       // rendering from a client-cached router state.

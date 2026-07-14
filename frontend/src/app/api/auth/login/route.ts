@@ -41,9 +41,20 @@ export async function POST(request: Request) {
     return NextResponse.json(clientResult, { status: 200 });
   } catch (err) {
     if (err instanceof BackendApiError) {
-      // Deliberately re-use the backend's own generic message (see
-      // auth-client.ts) rather than distinguishing failure modes here —
-      // don't reintroduce a username-enumeration signal at this layer.
+      if (err.status >= 500) {
+        // The backend itself errored (5xx) — not a credentials problem.
+        // Surface a distinct status so the client renders "service
+        // unavailable" rather than "wrong password".
+        return NextResponse.json(
+          { detail: "Service temporarily unavailable" },
+          { status: 502 },
+        );
+      }
+      // Genuine credential failure (backend 401, or any other 4xx from
+      // /auth/login). Deliberately re-use the backend's own generic
+      // message (see auth-client.ts) rather than distinguishing failure
+      // modes here — don't reintroduce a username-enumeration signal at
+      // this layer.
       return NextResponse.json({ detail: err.message }, { status: 401 });
     }
     // Backend unreachable, network error, etc. — not a credentials

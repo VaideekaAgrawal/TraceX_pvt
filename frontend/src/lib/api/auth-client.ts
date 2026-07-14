@@ -14,6 +14,22 @@ import type { BackendLoginResponse, CurrentUser, LoginRequest } from "@/lib/api/
 const GENERIC_LOGIN_ERROR = "Invalid username or password";
 
 /**
+ * Thrown by `getCurrentUser()` when the backend itself is the problem
+ * (network failure, 5xx, or a malformed 200 body) rather than the session
+ * being invalid. Callers must NOT treat this the same as "not
+ * authenticated" — a 5xx from `/auth/me` says nothing about whether the
+ * token is still valid, so routing it through the logout/session-expired
+ * path would destroy a perfectly good session. Callers should catch this
+ * specifically and render a "service unavailable" state instead.
+ */
+export class BackendUnavailableError extends Error {
+  constructor(message = "Unable to reach the authentication service") {
+    super(message);
+    this.name = "BackendUnavailableError";
+  }
+}
+
+/**
  * Calls the real `POST /auth/login`. Throws `BackendApiError` on any
  * non-2xx response — the backend always returns the same generic message
  * for every failure mode (unknown user, wrong password, deactivated
@@ -37,16 +53,41 @@ export async function loginAgainstBackend(
 /**
  * Calls `GET /auth/me` using the session cookie already on the incoming
  * request. Returns `null` for "not logged in" (no cookie) or "session
- * invalid/expired" (backend 401) — both are the same "render as logged
- * out" case for the root layout, which is the only caller today.
+ * invalid/expired" (backend 401/403) — both are genuinely "render as
+ * logged out". Throws `BackendUnavailableError` for anything that isn't a
+ * statement about the session's validity (network failure, backend 5xx, or
+ * a malformed 200 body) — see that class's docstring for why callers must
+ * not conflate the two.
  */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const response = await authedBackendFetch("/auth/me");
+  let response: Response | null;
+  try {
+    response = await authedBackendFetch("/auth/me");
+  } catch {
+    // Network-level failure (backend unreachable, DNS, timeout, etc.).
+    throw new BackendUnavailableError();
+  }
+
   if (response === null) {
+    // No session cookie at all — genuinely not authenticated.
     return null;
   }
+
+  if (response.status === 401 || response.status === 403) {
+    // Backend explicitly rejected the token — genuinely not authenticated.
+    return null;
+  }
+
   if (!response.ok) {
-    return null;
+    // Any other non-2xx (5xx etc.) is a backend fault, not proof the
+    // session is invalid.
+    throw new BackendUnavailableError();
   }
-  return (await response.json()) as CurrentUser;
+
+  try {
+    return (await response.json()) as CurrentUser;
+  } catch {
+    // Malformed 200 body — also a backend fault, not an auth decision.
+    throw new BackendUnavailableError();
+  }
 }

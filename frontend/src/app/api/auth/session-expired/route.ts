@@ -16,16 +16,17 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { NEXT_PARAM } from "@/lib/auth/redirect";
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE_NAME);
 
   const url = new URL(request.url);
-  const next = url.searchParams.get("next");
+  const next = url.searchParams.get(NEXT_PARAM);
   const loginUrl = new URL("/login", url.origin);
   if (next) {
-    loginUrl.searchParams.set("next", next);
+    loginUrl.searchParams.set(NEXT_PARAM, next);
   }
   return NextResponse.redirect(loginUrl);
 }

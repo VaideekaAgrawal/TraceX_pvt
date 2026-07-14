@@ -1,9 +1,12 @@
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { AlertTriangle } from "lucide-react";
 
-import { getCurrentUser } from "@/lib/api/auth-client";
+import { getCurrentUser, BackendUnavailableError } from "@/lib/api/auth-client";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { NEXT_PARAM, PATHNAME_HEADER } from "@/lib/auth/redirect";
 import { TopNav } from "@/components/shell/top-nav";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 /**
  * Guards every page under this route group (Dashboard, Investigation
@@ -22,12 +25,30 @@ import { TopNav } from "@/components/shell/top-nav";
  * (see that route's docstring for the exact framework constraint).
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const user = await getCurrentUser();
+  let user;
+  try {
+    user = await getCurrentUser();
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      // The backend itself errored (5xx/network failure) — this says
+      // nothing about whether the session is valid, so do NOT route this
+      // through the logout/session-expired path (that would destroy a
+      // perfectly good cookie). Render a distinct "try again" state
+      // instead of crashing the whole route group.
+      return <BackendUnavailable />;
+    }
+    throw err;
+  }
 
   if (!user) {
     const cookieStore = await cookies();
     if (cookieStore.has(SESSION_COOKIE_NAME)) {
-      redirect("/api/auth/session-expired");
+      const headerStore = await headers();
+      const pathname = headerStore.get(PATHNAME_HEADER);
+      const sessionExpiredUrl = pathname
+        ? `/api/auth/session-expired?${NEXT_PARAM}=${encodeURIComponent(pathname)}`
+        : "/api/auth/session-expired";
+      redirect(sessionExpiredUrl);
     }
     redirect("/login");
   }
@@ -36,6 +57,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen flex-col">
       <TopNav />
       <main className="flex-1">{children}</main>
+    </div>
+  );
+}
+
+function BackendUnavailable() {
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <Alert variant="destructive" className="max-w-md">
+        <AlertTriangle />
+        <AlertTitle>Service temporarily unavailable</AlertTitle>
+        <AlertDescription>
+          TraceX couldn&apos;t reach the authentication service. Your session may still be
+          valid — try reloading this page in a moment.
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }

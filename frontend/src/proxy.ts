@@ -23,6 +23,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { DEFAULT_LANDING_PATH, NEXT_PARAM, PATHNAME_HEADER } from "@/lib/auth/redirect";
 
 const PUBLIC_PATHS = ["/login"];
 
@@ -33,18 +34,44 @@ function isPublicPath(pathname: string): boolean {
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Forward the current pathname to Server Components downstream (they
+  // can't read the incoming request's URL directly, only `next/headers`)
+  // so `(app)/layout.tsx` can preserve it as `next` when it redirects a
+  // present-but-invalid cookie to `/api/auth/session-expired`.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set(PATHNAME_HEADER, pathname);
+  const forwarded = { request: { headers: requestHeaders } };
+
   if (isPublicPath(pathname)) {
-    return NextResponse.next();
+    return NextResponse.next(forwarded);
   }
 
   const hasSession = request.cookies.has(SESSION_COOKIE_NAME);
   if (!hasSession) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set(NEXT_PARAM, pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  return NextResponse.next();
+  if (pathname === "/") {
+    // Cheap fix for a double backend round-trip: `/` (`app/page.tsx`) has
+    // no content of its own, it just picks the default landing page.
+    // Redirecting here — before any Server Component renders — means the
+    // root layout's `getCurrentUser()` call for this pass is never made
+    // (and therefore never wastefully discarded), instead of rendering
+    // `/` first (root layout calls `/auth/me`) only to immediately
+    // `redirect()` to `/dashboard`, which calls `/auth/me` again.
+    return NextResponse.redirect(new URL(DEFAULT_LANDING_PATH, request.url));
+  }
+
+  // IMPORTANT INVARIANT: the check above is presence-only ("is there a
+  // cookie at all") — it does NOT validate the JWT. Real token validation
+  // (expired/tampered token) only happens in `(app)/layout.tsx` via the
+  // real `GET /auth/me` call. Today's safety therefore depends entirely on
+  // every protected page living under the `(app)/` route group. Any new
+  // protected route MUST be added under `(app)/`, or requests to it will
+  // pass this check unauthenticated and render without real validation.
+  return NextResponse.next(forwarded);
 }
 
 export const config = {
