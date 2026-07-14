@@ -43,3 +43,126 @@ export interface CurrentUser {
   role: UserRole;
   full_name: string;
 }
+
+// ── `backend/api/routes/alerts.py`, `backend/api/routes/audit.py`,
+// `backend/api/routes/dashboard.py` (ROADMAP Phase 14) ──────────────────
+//
+// Shapes mirrored 1:1 from those routes' Pydantic response models — do not
+// invent fields the backend doesn't actually return. `db/enums.py`'s
+// controlled vocabularies (`DetectionType`, `Priority`, `RiskLevel`) are
+// typed as plain `string` here rather than re-declared string-literal
+// unions: the backend routes accept/return raw `str(...)`-serialized enum
+// values, and duplicating the enum member list here would just be a second
+// place for it to drift out of sync with `db/enums.py`.
+
+export interface AlertListItem {
+  alert_id: string;
+  primary_account_id: string;
+  detection_type: string;
+  risk_score: number;
+  priority: string;
+  severity: string;
+  status: string;
+  created_at: string;
+  case_id: string | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  case_status: string | null;
+}
+
+export interface AlertListResponse {
+  items: AlertListItem[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+// Query params accepted by `GET /alerts` (`api.routes.alerts._AlertListParams`).
+// Values are typed loosely (`string | number | boolean`) because this same
+// shape is used both for typed calls from Server Components (e.g. `{limit: 25}`)
+// and for passing an incoming Route Handler's `URLSearchParams` straight
+// through — both serialize to the same query string either way.
+export interface AlertListParams {
+  status?: string;
+  priority?: string;
+  severity?: string;
+  detection_type?: string;
+  min_risk_score?: number | string;
+  max_risk_score?: number | string;
+  start?: string;
+  end?: string;
+  assigned_to?: string;
+  unassigned_only?: boolean | string;
+  sort?: string;
+  limit?: number | string;
+  offset?: number | string;
+}
+
+export interface InvestigatorWorkloadItem {
+  user_id: string;
+  full_name: string;
+  open_case_count: number;
+}
+
+export interface WorkloadResponse {
+  investigators: InvestigatorWorkloadItem[];
+}
+
+export interface AssignAlertRequest {
+  investigator_id: string;
+}
+
+export interface AssignAlertResponse {
+  alert_id: string;
+  case_id: string;
+  case_status: string;
+  assigned_to: string | null;
+}
+
+export interface AuditLogItem {
+  id: number;
+  actor_type: string;
+  actor_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  case_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogItem[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+// Query params accepted by `GET /audit-log` (`api.routes.audit._AuditLogParams`).
+// `action` is `list[str] | None` server-side (repeated `?action=` query
+// params filtered as an allowlist, e.g. the notification bell's curated
+// feed) — kept as a real array here, unlike the loosely-typed numeric/bool
+// fields above, since a plain `String(value)` join would silently produce
+// the wrong query string shape.
+export interface AuditLogParams {
+  case_id?: string;
+  actor_id?: string;
+  action?: string[];
+  since?: string;
+  limit?: number | string;
+  offset?: number | string;
+}
+
+export interface AlertsOverTimePoint {
+  date: string;
+  count: number;
+}
+
+export interface DashboardSummaryResponse {
+  active_alert_count: number;
+  open_case_count: number;
+  avg_risk_score: number | null;
+  severity_breakdown: Record<string, number>;
+  alerts_over_time: AlertsOverTimePoint[];
+  window_days: number;
+}
