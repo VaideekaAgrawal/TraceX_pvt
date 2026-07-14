@@ -10,6 +10,7 @@ import "server-only";
 
 import { authedBackendFetch, BackendApiError } from "@/lib/api/backend";
 import { BackendUnavailableError } from "@/lib/api/auth-client";
+import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type {
   AlertListParams,
   AlertListResponse,
@@ -43,10 +44,12 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
  * System-wide, paginated alert list — identical response for both roles
  * (locked roadmap decision; the route itself has no role gate beyond plain
  * authentication). Returns `null` for "not authenticated" (no session
- * cookie, or the backend rejected the token with 401) — that's the only
- * outcome this route can return short of a real backend fault, which
- * throws `BackendUnavailableError` instead (see that class's docstring —
- * callers must not conflate the two).
+ * cookie, or the backend rejected the token with 401). Throws
+ * `BackendApiError` for a real rejection (e.g. an invalid `sort` value ->
+ * backend 400) with the real status preserved, or `BackendUnavailableError`
+ * for a genuine backend fault (5xx) — see `response-mapping.ts` for why
+ * these must not be conflated (a live-verification-caught bug in this
+ * phase's earlier draft did exactly that for `listAuditLog`).
  */
 export async function listAlerts(
   params: AlertListParams = {},
@@ -60,27 +63,18 @@ export async function listAlerts(
     throw new BackendUnavailableError("Unable to reach the alerts service");
   }
 
-  if (response === null) return null;
-  if (response.status === 401) return null;
-  if (!response.ok) throw new BackendUnavailableError("Unable to reach the alerts service");
-
-  try {
-    return (await response.json()) as AlertListResponse;
-  } catch {
-    throw new BackendUnavailableError("Unable to reach the alerts service");
-  }
+  return parseAuthedJsonResponse<AlertListResponse>(response, "Unable to reach the alerts service");
 }
 
 /**
  * Per-investigator open-case counts, Admin/Compliance only
  * (`require_role(ADMIN_COMPLIANCE)` on the backend route). Returns `null`
  * only for "genuinely not authenticated" (no cookie, or backend 401) —
- * unlike `listAlerts`/`getDashboardSummary`, a 403 here is a real
- * authorization failure (an authenticated Investigator hitting an
- * Admin-only route), not "not logged in", so it is deliberately NOT folded
- * into the `null` case — it throws `BackendApiError` instead, so the
- * calling Route Handler can forward the 403 rather than silently returning
- * empty data.
+ * unlike that, a 403 here is a real authorization failure (an
+ * authenticated Investigator hitting an Admin-only route), not "not
+ * logged in", so `parseAuthedJsonResponse` throws `BackendApiError` for
+ * it instead of folding it into the `null` case — the calling Route
+ * Handler forwards the 403 rather than silently returning empty data.
  */
 export async function getWorkload(): Promise<WorkloadResponse | null> {
   let response: Response | null;
@@ -90,18 +84,7 @@ export async function getWorkload(): Promise<WorkloadResponse | null> {
     throw new BackendUnavailableError("Unable to reach the alerts service");
   }
 
-  if (response === null) return null;
-  if (response.status === 401) return null;
-  if (!response.ok) {
-    const detail = await readErrorDetail(response, "Failed to load investigator workload");
-    throw new BackendApiError(detail, response.status);
-  }
-
-  try {
-    return (await response.json()) as WorkloadResponse;
-  } catch {
-    throw new BackendUnavailableError("Unable to reach the alerts service");
-  }
+  return parseAuthedJsonResponse<WorkloadResponse>(response, "Unable to reach the alerts service");
 }
 
 /**

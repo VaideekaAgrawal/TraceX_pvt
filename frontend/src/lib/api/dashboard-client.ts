@@ -9,13 +9,15 @@ import "server-only";
 
 import { authedBackendFetch } from "@/lib/api/backend";
 import { BackendUnavailableError } from "@/lib/api/auth-client";
+import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type { DashboardSummaryResponse } from "@/lib/api/types";
 
 /**
  * `GET /dashboard/summary` — identical response for both roles (no RBAC
  * beyond plain authentication, per that route's docstring). Returns `null`
  * for "not authenticated" (no cookie, or backend 401); throws
- * `BackendUnavailableError` for a real backend fault.
+ * `BackendApiError` for any other real rejection, `BackendUnavailableError`
+ * for a genuine backend fault (5xx) — see `response-mapping.ts`.
  */
 export async function getDashboardSummary(): Promise<DashboardSummaryResponse | null> {
   let response: Response | null;
@@ -25,13 +27,8 @@ export async function getDashboardSummary(): Promise<DashboardSummaryResponse | 
     throw new BackendUnavailableError("Unable to reach the dashboard service");
   }
 
-  if (response === null) return null;
-  if (response.status === 401) return null;
-  if (!response.ok) throw new BackendUnavailableError("Unable to reach the dashboard service");
-
-  try {
-    return (await response.json()) as DashboardSummaryResponse;
-  } catch {
-    throw new BackendUnavailableError("Unable to reach the dashboard service");
-  }
+  return parseAuthedJsonResponse<DashboardSummaryResponse>(
+    response,
+    "Unable to reach the dashboard service",
+  );
 }

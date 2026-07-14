@@ -10,6 +10,7 @@ import "server-only";
 
 import { authedBackendFetch } from "@/lib/api/backend";
 import { BackendUnavailableError } from "@/lib/api/auth-client";
+import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type { AuditLogListResponse, AuditLogParams } from "@/lib/api/types";
 
 function toQueryString(params: Record<string, unknown>): string {
@@ -32,7 +33,10 @@ function toQueryString(params: Record<string, unknown>): string {
  * `actor_id` it's given straight through and lets the backend enforce it,
  * matching the "backend is the real gate" invariant. Returns `null` for
  * "not authenticated" (no cookie, or backend 401); throws
- * `BackendUnavailableError` for a real backend fault.
+ * `BackendApiError` for a real rejection (e.g. an Investigator explicitly
+ * requesting another actor's `actor_id` -> backend 403 — must NOT be
+ * mapped to a generic "service unavailable", see `response-mapping.ts`);
+ * throws `BackendUnavailableError` for a genuine backend fault (5xx).
  */
 export async function listAuditLog(
   params: AuditLogParams = {},
@@ -46,13 +50,8 @@ export async function listAuditLog(
     throw new BackendUnavailableError("Unable to reach the audit log service");
   }
 
-  if (response === null) return null;
-  if (response.status === 401) return null;
-  if (!response.ok) throw new BackendUnavailableError("Unable to reach the audit log service");
-
-  try {
-    return (await response.json()) as AuditLogListResponse;
-  } catch {
-    throw new BackendUnavailableError("Unable to reach the audit log service");
-  }
+  return parseAuthedJsonResponse<AuditLogListResponse>(
+    response,
+    "Unable to reach the audit log service",
+  );
 }
