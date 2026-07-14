@@ -31,6 +31,7 @@ from db.enums import (
 )
 from db.repositories.investigation import CaseAccountRepository, CaseRepository, NoteRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
+from foundation.config import Settings
 from orchestration.redaction import PIIEgressError, assert_no_pii_egress
 
 CASE_ID = "CASE-PII"
@@ -255,3 +256,40 @@ def test_the_gate_raises_rather_than_stripping(seeded: Session) -> None:
     # with the offending field deleted — a bundle that contained PII once is a
     # bundle whose SHAPING is wrong, and the fix belongs in the tool.
     assert facts == {"some_tool.leaked": REAL_PAN}
+
+
+# ── the gate is WIRED IN, not merely available ────────────────────────────
+
+
+def test_the_gateway_runs_the_gate_before_any_network_call(seeded: Session) -> None:
+    """The gate existing is worth nothing if nothing calls it.
+
+    `generate_and_persist_explanation` is the single choke point every AI
+    interaction passes through, and the gate runs there — BEFORE `call_fn`. So a
+    fact bundle carrying PII becomes a raised PIIEgressError and *no network call
+    at all*, rather than a disclosure we then have to describe.
+
+    This test asserts the ordering, not just the exception: `call_fn` must never
+    run. An implementation that called the model first and checked afterwards
+    would still raise, still pass a naive test, and still have leaked."""
+    from orchestration.gateway import generate_and_persist_explanation
+
+    called: list[str] = []
+
+    def _never_call_me(prompt: str, *, settings: object, **kwargs: object) -> str:
+        called.append(prompt)
+        return "should never happen"
+
+    with pytest.raises(PIIEgressError):
+        generate_and_persist_explanation(
+            seeded,
+            call_fn=_never_call_me,
+            prompt="explain",
+            settings=Settings(env="dev", jwt_secret="x", openrouter_api_key="k"),
+            case_id=CASE_ID,
+            facts={"leaked_by_some_tool": REAL_PAN},
+            actor_type=ActorType.INVESTIGATOR,
+            actor_id="U1",
+        )
+
+    assert called == [], "the LLM was called despite PII in the bundle — the PII left the process"

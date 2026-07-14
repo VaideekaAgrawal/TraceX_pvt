@@ -48,6 +48,7 @@ from db.enums import ActorType, AiAgent
 from db.models.orchestration import AiInteraction
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
+from orchestration.redaction import assert_no_pii_egress
 
 logger = logging.getLogger(__name__)
 
@@ -173,9 +174,26 @@ def generate_and_persist_explanation(
     actor_type: ActorType,
     actor_id: str,
     rule_anchors: dict[str, Any] | None = None,
+    tools_called: list[str] | None = None,
 ) -> AiInteraction:
     """Timed LLM call + `AiInteraction` persistence — the shared tail of
-    `account_explanation.explain_account`/`pattern_explanation.explain_pattern`.
+    `account_explanation.explain_account`/`pattern_explanation.explain_pattern`,
+    and the single choke point every AI interaction passes through.
+
+    **The PII egress gate runs here, and that placement is the point.** It is
+    asserted over `facts` *before* `call_fn` is invoked — i.e. before any bytes
+    leave the process — so a bundle carrying PII becomes a raised
+    `PIIEgressError` and no network call at all, rather than a disclosure we then
+    have to describe. Putting the gate in each caller instead would mean a future
+    caller could simply forget it, and the one that forgets is the one that leaks
+    (decision 9).
+
+    `tools_called` fills a column that has been NULL since Phase 1. It is passed
+    here, at the gateway, rather than written by each caller, so a Phase 9/10
+    agent gets its audit trail by construction instead of by remembering to.
+    `account_explanation`/`pattern_explanation` legitimately pass `None`: they
+    call no tools, and recording `[]` for them would be a small lie in the audit
+    log.
 
     Calls `call_fn(prompt, settings=settings)` rather than `call_llm` directly;
     see the module docstring for why (it preserves each caller's monkeypatch
@@ -184,6 +202,9 @@ def generate_and_persist_explanation(
     is what keeps a failed call from being persisted as a cached success. Does
     NOT commit: the caller owns the transaction boundary, matching every other
     investigation/orchestration-layer function."""
+    # Fail closed, and fail BEFORE the network call. Raises PIIEgressError.
+    assert_no_pii_egress(facts, session=session, case_id=case_id)
+
     start = time.monotonic()
     explanation = call_fn(prompt, settings=settings)
     latency_ms = int((time.monotonic() - start) * 1000)
@@ -195,9 +216,16 @@ def generate_and_persist_explanation(
         request_text=prompt,
         facts=facts,
         rule_anchors=rule_anchors,
+        tools_called=tools_called,
         response_text=explanation,
         model=settings.llm_model,
         model_provider=settings.llm_provider,
+        # False, always — and it is a *provable* False, not an optimistic one.
+        # Under decision 9 nothing is ever redacted: the gate above RAISES on PII
+        # rather than stripping it, so an `ai_interactions` row existing at all is
+        # itself the evidence that its fact bundle was PII-free. A `True` here
+        # would mean we had silently sent de-identified PII, which is exactly the
+        # weaker posture decision 9 rejects.
         redacted=False,
         latency_ms=latency_ms,
         actor_type=actor_type,
