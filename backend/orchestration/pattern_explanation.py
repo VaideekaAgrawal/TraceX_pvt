@@ -55,7 +55,7 @@ never get permanently "cached" as the answer.
 
 Shares the cache-lookup and generate-and-persist flow with
 `orchestration.account_explanation.explain_account` via `orchestration.
-llm_client.find_cached_interaction`/`generate_and_persist_explanation`
+gateway.find_cached_interaction`/`generate_and_persist_explanation`
 (code-review finding, Phase 6: this module used to duplicate that whole
 flow near-verbatim).
 """
@@ -73,12 +73,12 @@ from db.repositories.detection import AlertRepository
 from db.repositories.investigation import CaseAccountRepository
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
-from orchestration.llm_client import (
+from orchestration.gateway import (
     ExplanationUnavailableError,
     find_cached_interaction,
     generate_and_persist_explanation,
 )
-from orchestration.llm_client import call_openrouter as _call_openrouter
+from orchestration.gateway import call_llm as _call_llm
 
 
 def compute_pattern_signature(detection_type: str, account_ids: list[str]) -> str:
@@ -187,11 +187,11 @@ def explain_pattern(
 
     Unless `force=True`, checks `ai_interactions` for a prior
     `RECOMMENDATION` interaction for this exact `alert_id` (`orchestration.
-    llm_client.find_cached_interaction`, keyed on `facts["alert_id"]` -- see
+    gateway.find_cached_interaction`, keyed on `facts["alert_id"]` -- see
     module docstring for why this is `alert_id`, not a pattern-shape hash)
     and returns it (`cached=True`) without calling the LLM again. Otherwise
-    assembles fresh (already-persisted) facts and calls `call_openrouter`
-    via `orchestration.llm_client.generate_and_persist_explanation`: on
+    assembles fresh (already-persisted) facts and calls `call_llm`
+    via `orchestration.gateway.generate_and_persist_explanation`: on
     success, persists a new `ai_interactions` row -- populating
     `rule_anchors` for the first time (see module docstring) -- and returns
     `cached=False`; on `ExplanationUnavailableError`, returns `cached=False`
@@ -226,7 +226,7 @@ def explain_pattern(
     try:
         interaction = generate_and_persist_explanation(
             session,
-            call_fn=_call_openrouter,
+            call_fn=_call_llm,
             prompt=prompt,
             settings=settings,
             case_id=case_id,

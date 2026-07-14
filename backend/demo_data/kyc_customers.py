@@ -112,15 +112,41 @@ def weighted_choice(rng: random.Random, weights: list[tuple[_T, float]]) -> _T:
 
 
 def _synthetic_pan(rng: random.Random, i: int) -> str:
-    """Fabricated PAN-shaped identifier (5 letters + 4 digits + 1 letter,
-    matching the real Indian PAN format) -- deterministic per index so
-    re-running with the same seed reproduces the same value."""
-    letters = "".join(rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(5))
-    return f"{letters}{i % 10000:04d}D"
+    """Fabricated PAN-shaped identifier that is deliberately **format-invalid**
+    (ROADMAP Phase 8, decision 11).
+
+    A real Indian PAN is `[A-Z]{5}[0-9]{4}[A-Z]` — and, critically, **PAN carries
+    no checksum**. So any string matching that layout is a *syntactically valid*
+    PAN, and the only thing standing between a generated value and a real
+    person's tax identifier is luck. This generator previously emitted exactly
+    that format. Shipping syntactically-valid PANs from an AML compliance product
+    is indefensible in precisely the room this gets pitched to, and "they're only
+    demo values" is not a defence once they're in a database.
+
+    Fixed by putting a **digit in the leading position**, where the real format
+    requires a letter. The result can never be a real PAN, for the same reason
+    `_synthetic_aadhaar`'s `1` prefix can never be a real Aadhaar: it is
+    structurally impossible, not merely unlikely.
+
+    Length (10) is preserved so the UI still lays out correctly, and the
+    Relationship Explorer matches on *equality*, so format is functionally
+    irrelevant to every feature that consumes this."""
+    letters = "".join(rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(4))
+    return f"0{letters}{i % 10000:04d}D"
 
 
 def _synthetic_phone(i: int) -> str:
-    return f"9{700000000 + i:09d}"[:10]
+    """Fabricated phone number, deliberately **not** a dialable Indian mobile
+    (ROADMAP Phase 8, decision 11).
+
+    Indian mobile numbers are 10 digits beginning 6-9. This previously emitted
+    `9…`, i.e. exactly that format — a demo dataset full of numbers that ring a
+    real stranger's handset. Leading `1` is not an allocatable Indian mobile
+    prefix, so these cannot collide with a live subscriber; same structural-
+    impossibility argument as the Aadhaar and PAN generators.
+
+    Length (10) preserved for the UI."""
+    return f"1{700000000 + i:09d}"[:10]
 
 
 def _synthetic_email(i: int) -> str:
