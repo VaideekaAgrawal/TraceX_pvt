@@ -50,6 +50,34 @@ def test_user_repository_round_trip(session: Session) -> None:
     assert repo.list_by_role(UserRole.INVESTIGATOR) == []
 
 
+def test_user_repository_list_by_ids(session: Session) -> None:
+    repo = UserRepository(session)
+    repo.create(
+        user_id="U1",
+        username="inv1",
+        email="inv1@example.com",
+        password_hash="x",
+        role=UserRole.INVESTIGATOR,
+        full_name="Investigator One",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    repo.create(
+        user_id="U2",
+        username="inv2",
+        email="inv2@example.com",
+        password_hash="x",
+        role=UserRole.INVESTIGATOR,
+        full_name="Investigator Two",
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    assert {u.user_id for u in repo.list_by_ids(["U1", "U2", "NOPE"])} == {"U1", "U2"}
+    assert repo.list_by_ids([]) == []
+
+
 def test_watchlist_repository_round_trip(session: Session) -> None:
     UserRepository(session).create(
         user_id="U1",

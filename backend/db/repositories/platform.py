@@ -98,6 +98,18 @@ class UserRepository(BaseRepository[User]):
         stmt = select(User).where(User.role == role, User.active.is_(True))
         return list(self.session.scalars(stmt))
 
+    def list_by_ids(self, user_ids: list[str]) -> list[User]:
+        """Batched `user_id IN (...)` lookup -- same reasoning as
+        `reference.AccountRepository.list_by_ids`/`CustomerRepository.
+        list_by_ids` (ROADMAP Phase 14: `GET /alerts` needs the
+        `assigned_to` display name for every case on the current page in
+        one query, not one `.get()` per row). No chunking -- assumes a
+        page-scale id list, not export-scale."""
+        if not user_ids:
+            return []
+        stmt = select(User).where(User.user_id.in_(user_ids))
+        return list(self.session.scalars(stmt))
+
 
 class AuditLogRepository(BaseRepository[AuditLog]):
     model = AuditLog
