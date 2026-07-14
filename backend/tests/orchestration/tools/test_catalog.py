@@ -30,7 +30,7 @@ from db.enums import (
 from db.repositories.investigation import CaseAccountRepository, CaseRepository
 from db.repositories.platform import UserRepository
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
-from orchestration.tools import TOOL_NAMES, ToolCatalog, ToolError, build_tool_catalog
+from orchestration.tools import TOOL_NAMES, Tool, ToolCatalog, ToolError, build_tool_catalog
 
 # Planted PII. Every value here is distinctive enough that a substring search
 # over a tool payload cannot produce a false positive.
@@ -254,3 +254,53 @@ def test_account_facts_precomputes_the_income_ratio_so_the_model_never_derives_i
     facts = catalog.dispatch("get_account_facts", {"account_id": IN_CASE})
     # 250,000 inflow against 500,000 declared income.
     assert facts["inflow_pct_of_declared_income"] == 50.0
+
+
+# ── code-review regressions ───────────────────────────────────────────────
+
+
+def test_dispatch_gates_pii_at_the_point_of_egress(catalog: ToolCatalog, seeded: Session) -> None:
+    """Code-review finding: the PII gate ran only at PERSIST time, inside
+    `gateway.generate_and_persist_explanation`.
+
+    But in a tool-calling loop the tool results are shipped to the model as
+    `role: "tool"` messages long before anything is persisted — so every tool
+    payload reached the third-party model without ever passing the gate. The check
+    was in the wrong place, and a Phase 9 agent would have sailed straight past it.
+
+    It now runs on `dispatch`, where egress actually begins, so no loop — present
+    or future — can bypass it by construction rather than by remembering to.
+    """
+    from orchestration.redaction import PIIEgressError
+
+    # Force a tool to leak: monkeypatching the handler is the closest stand-in for
+    # a future tool whose author forgets to shape the payload (which is exactly
+    # what build_case_relationship_graph did with customer.name).
+    catalog._tools["get_case_summary"] = Tool(
+        name="get_case_summary",
+        description="x",
+        properties={},
+        handler=lambda: {"case_id": CASE_ID, "oops_customer_name": PII_NAME},
+    )
+    with pytest.raises(PIIEgressError):
+        catalog.dispatch("get_case_summary")
+
+
+def test_get_network_risk_is_read_only(catalog: ToolCatalog, seeded: Session) -> None:
+    # Code-review finding: this lazily called compute_network_risk, which ends in
+    # CaseRepository.update() -> writes the case row AND an audit_log entry stamped
+    # with the investigator's actor_id. A model calling a "read-only fact tool"
+    # would have mutated case state and forged an audit entry reading as though the
+    # human did it. A fact tool reads facts; scoring is a human-attributed action.
+    from db.models.investigation import Case
+    from db.models.platform import AuditLog
+
+    audit_before = seeded.query(AuditLog).count()
+
+    result = catalog.dispatch("get_network_risk")
+
+    # A null score is an honest fact the model can state, not a licence to compute.
+    assert result["network_risk_score"] is None
+    assert result["computed"] is False
+    assert seeded.query(Case).filter_by(case_id=CASE_ID).one().network_risk_score is None
+    assert seeded.query(AuditLog).count() == audit_before, "a read-only tool wrote an audit row"

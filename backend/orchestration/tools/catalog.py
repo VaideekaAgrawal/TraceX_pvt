@@ -60,7 +60,6 @@ from foundation.auth import _load_scoped_account
 from investigation import (
     behavior_analysis,
     case_graph,
-    network_risk,
     path_facts,
     previous_alerts,
     relationship_graph,
@@ -71,6 +70,7 @@ from investigation import (
 from investigation.account_facts import transaction_stats
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT
 from investigation.graph_filters import MAX_RADIUS, GraphFilters, get_filtered_ego_graph
+from orchestration.redaction import CasePII, assert_no_pii_egress, load_case_pii
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,7 @@ class ToolCatalog:
         self._case_id = case_id
         self._actor_type = actor_type
         self._actor_id = actor_id
+        self._case_pii: CasePII | None = None
         self._tools: dict[str, Tool] = {t.name: t for t in self._build()}
 
     # ── public surface ────────────────────────────────────────────────────
@@ -151,10 +152,33 @@ class ToolCatalog:
         """The `tools=` payload for a chat-completions call."""
         return [self._tools[name].schema() for name in TOOL_NAMES]
 
+    @property
+    def case_pii(self) -> CasePII:
+        """This case's real PII, loaded once and reused for every dispatch.
+
+        Lazy so constructing a catalog stays cheap, cached so the gate does not
+        re-query per tool call."""
+        if self._case_pii is None:
+            self._case_pii = load_case_pii(self._session, self._case_id)
+        return self._case_pii
+
     def dispatch(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Run one tool. Raises `ToolError` for anything the model got wrong;
-        the caller decides how to hand that back (slice 3 returns it as a
-        structured tool result so the model can retry)."""
+        """Run one tool, and **gate its result before returning it**.
+
+        Raises `ToolError` for anything the model got wrong, and `PIIEgressError`
+        if the tool's own output carries PII.
+
+        **The gate lives here because this is where egress actually begins.**
+        Code-review finding: it previously ran only inside
+        `gateway.generate_and_persist_explanation`, i.e. at *persist* time — but
+        in a tool-calling loop the tool results are sent to the model as `role:
+        "tool"` messages long before anything is persisted, so every tool payload
+        reached the third-party model without ever passing the gate. The check was
+        in the wrong place, and a Phase 9 agent would have sailed straight past it.
+
+        Putting it on `dispatch` means no caller can bypass it: any loop, present
+        or future, that gets a fact from a tool has already been through the gate,
+        by construction rather than by remembering to."""
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"unknown tool {name!r}; available: {', '.join(TOOL_NAMES)}")
@@ -178,7 +202,13 @@ class ToolCatalog:
         if "account_id" in args:
             args["account_id"] = self._require_scoped_account(str(args["account_id"]))
 
-        return tool.handler(**args)
+        result = tool.handler(**args)
+
+        # Belt (the tool is shaped so PII isn't in the payload) AND braces (this
+        # asserts it, fail-closed). Raises PIIEgressError rather than stripping —
+        # "it never left our perimeter" is verifiable; "we de-identified it" is not.
+        assert_no_pii_egress(result, self.case_pii)
+        return result
 
     # ── internals ─────────────────────────────────────────────────────────
 
@@ -486,23 +516,29 @@ class ToolCatalog:
         )
 
     def _network_risk(self) -> dict[str, Any]:
+        """Reads the STORED score. Deliberately does not lazily recompute.
+
+        Code-review finding: this used to fall through to
+        `network_risk.compute_network_risk` when the score was null, mirroring
+        `GET /cases/{id}/network-risk`. But that function ends in
+        `CaseRepository.update(...)`, which writes the case row AND an audit_log
+        entry stamped with the investigator's actor_id. So a *model* deciding to
+        call a "read-only fact tool" would mutate case state and forge an audit
+        entry that reads as though the human did it — and if the surrounding
+        request never commits, the score is silently discarded and recomputed on
+        every call, so the lazy cache never even fills.
+
+        A fact tool reads facts. Scoring is a state change and belongs to an
+        explicit, human-attributed action (the existing recompute route). A null
+        score is itself an honest fact, and the model can say so."""
         case = CaseRepository(self._session).get(self._case_id)
         if case is None:
             raise ToolError(f"case {self._case_id!r} does not exist")
-        if case.network_risk_score is None:
-            # Same lazy-compute-on-first-read as `GET /cases/{id}/network-risk`.
-            # Does not commit — the caller owns the transaction boundary, matching
-            # every other investigation/orchestration-layer function.
-            case = network_risk.compute_network_risk(
-                self._session,
-                self._case_id,
-                actor_type=self._actor_type,
-                actor_id=self._actor_id,
-            )
         return {
             "case_id": case.case_id,
             "network_risk_score": case.network_risk_score,
             "network_risk_reasons": case.network_risk_reasons,
+            "computed": case.network_risk_score is not None,
         }
 
     def _similar_cases(self, *, top_k: int = 5) -> dict[str, Any]:

@@ -48,7 +48,7 @@ from db.enums import ActorType, AiAgent
 from db.models.orchestration import AiInteraction
 from db.repositories.orchestration import AiInteractionRepository
 from foundation.config import Settings
-from orchestration.redaction import assert_no_pii_egress
+from orchestration.redaction import assert_no_pii_egress, load_case_pii
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,15 @@ def generate_and_persist_explanation(
     NOT commit: the caller owns the transaction boundary, matching every other
     investigation/orchestration-layer function."""
     # Fail closed, and fail BEFORE the network call. Raises PIIEgressError.
-    assert_no_pii_egress(facts, session=session, case_id=case_id)
+    #
+    # NB this is the *second* place the gate runs for a tool-using caller —
+    # `ToolCatalog.dispatch` already gated each tool result at the point it was
+    # produced, which is where egress actually begins (a tool-calling loop ships
+    # results to the model long before anything is persisted). This one covers the
+    # prompt-bound bundle for callers that build facts WITHOUT the tool layer, as
+    # `account_explanation`/`pattern_explanation` do. Two cheap assertions on
+    # different data beats one that only half the callers pass through.
+    assert_no_pii_egress(facts, load_case_pii(session, case_id))
 
     start = time.monotonic()
     explanation = call_fn(prompt, settings=settings)

@@ -140,31 +140,70 @@ class GroundingResult:
         return " ".join(c.statement.strip() for c in self.accepted)
 
 
+def call_key(tool_name: str, arguments: dict[str, Any] | None = None) -> str:
+    """The fact-key prefix for one tool CALL — name **and arguments**.
+
+    `get_account_facts(account_id=A1)`, not `get_account_facts`. The arguments are
+    part of the identity of a fact, and leaving them out was a real bug (below).
+    Sorted so the same call always produces the same prefix, which keeps the
+    bundle stable and the validator deterministic."""
+    if not arguments:
+        return tool_name
+    rendered = ", ".join(f"{k}={arguments[k]}" for k in sorted(arguments))
+    return f"{tool_name}({rendered})"
+
+
 class FactBundle:
     """Everything the tools returned during one interaction, flattened to
     addressable leaf keys.
 
     A "fact" is a *scalar*, not a tool result. `get_account_facts` returning a
-    dict of twelve numbers produces twelve facts, each independently citable
-    (`get_account_facts.total_in`). That granularity is the point: a claim cites
-    the specific number it used, so the validator can check that number rather
-    than waving at the tool call it came from.
+    dict of twelve numbers produces twelve facts, each independently citable.
+    That granularity is the point: a claim cites the specific number it used, so
+    the validator can check *that number* rather than waving at the tool call it
+    came from.
+
+    **Facts are keyed by the tool CALL, not the tool NAME** — arguments included:
+
+        get_account_facts(account_id=A1).total_in
+        get_account_facts(account_id=A2).total_in
+
+    This is a **code-review fix, and the bug it closes was severe.** Keys were
+    previously `get_account_facts.total_in` regardless of which account was asked
+    about. In a multi-account case — which is the *normal* shape of an AML
+    investigation — the model calls the tool once per account, and each call
+    silently overwrote the last. Demonstrated: with A (total_in 10,000) and then B
+    (total_in 9,400,000) in one bundle, the claim *"Account A received
+    Rs.9,400,000"* passed all three gates and reached the investigator, while the
+    TRUE claim about A was rejected as a misreport. A false-negative in the one
+    control whose whole promise is *the model cannot assert a number it was not
+    handed*, producing precisely the wrong-account/wrong-amount error that would
+    be catastrophic in a SAR.
+
+    The old code justified itself with "the tool is deterministic over the same
+    case, so a second call yields the same values". That is true only of tools
+    that take no arguments, and eight of the twelve take one.
     """
 
     def __init__(self) -> None:
         self._facts: dict[str, Any] = {}
-        self._tools_called: list[str] = []
+        self._calls: list[dict[str, Any]] = []
 
-    def add_tool_result(self, tool_name: str, result: dict[str, Any]) -> None:
-        """Flatten one tool's output into the bundle under a `tool_name.` prefix.
+    def add_tool_result(
+        self,
+        tool_name: str,
+        result: dict[str, Any],
+        arguments: dict[str, Any] | None = None,
+    ) -> None:
+        """Flatten one tool CALL's output into the bundle, keyed by name+arguments.
 
-        Re-calling the same tool overwrites its facts rather than accumulating a
-        second copy: the tool is deterministic over the same case, so a second
-        call yields the same values, and distinct keys per call would let the
-        model cite a stale one."""
-        if tool_name not in self._tools_called:
-            self._tools_called.append(tool_name)
-        for key, value in _flatten(result, prefix=tool_name):
+        Re-calling a tool with the *same* arguments overwrites in place (the tool
+        is deterministic, so the values are identical and a second copy would only
+        give the model a stale key to cite). Re-calling it with *different*
+        arguments now produces a *different* prefix, so the two calls no longer
+        collide."""
+        self._calls.append({"tool": tool_name, "arguments": dict(arguments or {})})
+        for key, value in _flatten(result, prefix=call_key(tool_name, arguments)):
             self._facts[key] = value
 
     def resolve(self, fact_key: str) -> tuple[bool, Any]:
@@ -184,9 +223,25 @@ class FactBundle:
         return dict(self._facts)
 
     @property
-    def tools_called(self) -> list[str]:
-        """Persisted to `ai_interactions.tools_called`."""
-        return list(self._tools_called)
+    def tools_called(self) -> list[dict[str, Any]]:
+        """Every call, **with its arguments, in order** — persisted to
+        `ai_interactions.tools_called`.
+
+        Code-review fix: this used to be a de-duplicated list of bare tool names,
+        which meant an interaction that inspected five accounts recorded
+        `["get_account_facts"]` and an auditor could not tell *which* accounts the
+        model had actually looked at. A trail that cannot reconstruct the calls is
+        not an audit trail."""
+        return [dict(c) for c in self._calls]
+
+    @property
+    def tool_names(self) -> list[str]:
+        """Distinct tool names, in first-call order — for humans, not for audit."""
+        seen: list[str] = []
+        for call in self._calls:
+            if call["tool"] not in seen:
+                seen.append(str(call["tool"]))
+        return seen
 
     def __len__(self) -> int:
         return len(self._facts)

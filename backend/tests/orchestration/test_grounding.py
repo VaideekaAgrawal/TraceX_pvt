@@ -82,8 +82,15 @@ def test_bundle_distinguishes_a_missing_fact_from_a_null_one(bundle: FactBundle)
 
 
 def test_bundle_records_tools_called(bundle: FactBundle) -> None:
-    # Populates `ai_interactions.tools_called`, null since Phase 1.
-    assert bundle.tools_called == ["get_account_facts", "get_money_flow", "get_network_risk"]
+    # Populates `ai_interactions.tools_called`, null since Phase 1. Records each
+    # CALL with its arguments (see the audit-trail regression test below), not a
+    # de-duplicated list of names.
+    assert bundle.tool_names == ["get_account_facts", "get_money_flow", "get_network_risk"]
+    assert [c["tool"] for c in bundle.tools_called] == [
+        "get_account_facts",
+        "get_money_flow",
+        "get_network_risk",
+    ]
 
 
 # ── gate 1: the citation must resolve ─────────────────────────────────────
@@ -386,3 +393,76 @@ def test_the_answer_comes_back_as_a_forced_tool_call_not_response_format() -> No
         "type": "function",
         "function": {"name": SUBMIT_TOOL_NAME},
     }
+
+
+# ── code-review regressions ───────────────────────────────────────────────
+
+
+def test_same_tool_different_arguments_do_not_collide() -> None:
+    """THE code-review finding, and the most severe bug in Phase 8.
+
+    Facts used to be keyed by tool NAME only, so in a multi-account case — the
+    normal shape of an AML investigation — `get_account_facts(A)` and
+    `get_account_facts(B)` both wrote `get_account_facts.total_in` and the second
+    silently overwrote the first.
+
+    The consequence was not a crash. It was that a claim attributing account B's
+    Rs 9,400,000 to account A passed ALL THREE GATES and reached the investigator,
+    while the TRUE claim about account A was rejected as a misreport. A
+    false-negative in the one control whose promise is *the model cannot assert a
+    number it was not handed*, producing exactly the wrong-account/wrong-amount
+    error that would be catastrophic in a SAR.
+
+    Keys now carry the call's arguments, so the two accounts cannot be conflated.
+    """
+    b = FactBundle()
+    b.add_tool_result("get_account_facts", {"total_in": 10_000.0}, {"account_id": "A"})
+    b.add_tool_result("get_account_facts", {"total_in": 9_400_000.0}, {"account_id": "B"})
+
+    # Both survive, addressable separately.
+    assert b.facts["get_account_facts(account_id=A).total_in"] == 10_000.0
+    assert b.facts["get_account_facts(account_id=B).total_in"] == 9_400_000.0
+
+    # The TRUE claim about A is accepted...
+    true_a = _claim(
+        "Account A received Rs.10,000.",
+        ("get_account_facts(account_id=A).total_in", 10_000.0),
+    )
+    assert validate([true_a], b).ok
+
+    # ...and B's number can no longer be smuggled onto A: to state 9,400,000 the
+    # model must cite B's key, and then the claim says so on its face.
+    misattributed = _claim(
+        "Account A received Rs.9,400,000.",
+        ("get_account_facts(account_id=A).total_in", 9_400_000.0),
+    )
+    result = validate([misattributed], b)
+    assert not result.ok
+    assert "misreports" in result.rejected[0].reason
+
+
+def test_repeating_a_call_with_identical_arguments_overwrites_in_place() -> None:
+    # The one case the old behaviour got right, preserved: an identical re-call is
+    # deterministic, so a second copy would only hand the model a stale key.
+    b = FactBundle()
+    b.add_tool_result("get_account_facts", {"total_in": 1.0}, {"account_id": "A"})
+    b.add_tool_result("get_account_facts", {"total_in": 1.0}, {"account_id": "A"})
+    assert len(b.facts) == 1
+
+
+def test_tools_called_records_every_call_with_its_arguments_in_order() -> None:
+    # Code-review finding: this used to be a de-duplicated list of bare NAMES, so
+    # an interaction that inspected five accounts persisted `["get_account_facts"]`
+    # and an auditor could not tell which accounts the model had actually looked
+    # at. A trail that cannot reconstruct the calls is not an audit trail.
+    b = FactBundle()
+    b.add_tool_result("get_case_summary", {"case_id": "C1"})
+    b.add_tool_result("get_account_facts", {"total_in": 1.0}, {"account_id": "A"})
+    b.add_tool_result("get_account_facts", {"total_in": 2.0}, {"account_id": "B"})
+
+    assert b.tools_called == [
+        {"tool": "get_case_summary", "arguments": {}},
+        {"tool": "get_account_facts", "arguments": {"account_id": "A"}},
+        {"tool": "get_account_facts", "arguments": {"account_id": "B"}},
+    ]
+    assert b.tool_names == ["get_case_summary", "get_account_facts"]

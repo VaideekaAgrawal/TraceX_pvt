@@ -332,6 +332,50 @@ The format detectors originally scanned the **serialised** bundle. JSON writes n
 
 ---
 
+## 15. Code review of the Phase 8 diff — 7 findings, all fixed (Session 14)
+
+`/code-review high` over the full `phase/8-ai-substrate` diff vs `main`. **The review paid for itself on the first finding.**
+
+### 1. CRITICAL — the grounding contract could be made to accept a fabrication
+
+`FactBundle` keyed facts by tool **name** only. In a multi-account case — *the normal shape of an AML investigation* — the model calls `get_account_facts(A)` then `get_account_facts(B)`, both write `get_account_facts.total_in`, and the second silently overwrites the first.
+
+**Reproduced:** with A (`total_in` 10,000) and B (`total_in` 9,400,000) in one bundle, the claim *"Account A received Rs.9,400,000 across 88 transactions"* — which is **account B's money** — passed **all three gates** and reached the investigator, while the **true** claim about account A was rejected as a misreport.
+
+A false-negative in the one control whose entire promise is *"the model cannot assert a number it was not handed"*, producing exactly the wrong-account/wrong-amount error that would be catastrophic in a SAR. **Every live test missed it**, because the model happened to call that tool once. The old code even justified itself — *"the tool is deterministic over the same case, so a second call yields the same values"* — which is true only of tools taking no arguments, and **eight of the twelve take one**.
+
+Fixed: fact keys now carry the call's arguments — `get_account_facts(account_id=A1).total_in`.
+
+### 2. HIGH — the PII gate was in the wrong place entirely
+
+It ran only inside `generate_and_persist_explanation`, i.e. at **persist** time. But in a tool-calling loop, tool results are shipped to the model as `role: "tool"` messages **long before anything is persisted** — so every tool payload reached the third-party model without ever passing the gate. A Phase 9 agent would have sailed straight past it.
+
+Fixed: the gate now runs on `ToolCatalog.dispatch`, where egress actually begins. No loop — present or future — can bypass it by construction rather than by remembering to.
+
+### 3–7. The rest
+
+| # | Finding | Fix |
+|---|---|---|
+| 3 | Gate scanned only the **first 500 transactions per account** (`list_for_account_in_window`'s default limit) — narration on txn #501 was never checked. A fail-*closed* gate with a silent blind spot is a fail-*open* gate that looks reassuring. | Bulk `select` of the PII columns, **no row cap** |
+| 4 | Gate silently skipped `users.email`, `users.full_name`, `watchlist.entity_value` while the docstring claimed it checked "the columns `db/pii.py` registers" | Now scanned |
+| 5 | `get_network_risk` — a "read-only fact tool" — called `compute_network_risk`, which **writes the case row and an audit_log entry stamped with the investigator's actor_id**. A model would have mutated state and forged an audit entry reading as though the human did it. | Read-only; a null score is an honest fact |
+| 6 | Gate ran an N+1 account/customer walk + hydrated up to 500 ORM rows per account **on every explanation**, to read two columns §10 records as 0-populated | `CasePII` loaded once per interaction, 4 bulk queries |
+| 7 | `tools_called` de-duplicated bare names, so an interaction inspecting five accounts persisted `["get_account_facts"]` — an auditor could not tell **which** accounts were examined | Records every call with its arguments, in order |
+
+### Verified after the fixes (live, multi-account — the scenario that broke)
+
+| Check | Result |
+|---|---|
+| Misattributing B's numbers to A | **BLOCKED** (`misreports … actual: 10000.0`) — was silently accepted |
+| True claim about A | **ACCEPTED** — was rejected |
+| Live loop, 2 accounts | 14 tool calls, 107 facts, **16/16 claims accepted, 0 rejected** |
+| Audit trail | both accounts reconstructable from `tools_called` |
+| PII reaching the model | **none** |
+
+501 tests passing (was 496), ruff clean, mypy clean on 165 files.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).

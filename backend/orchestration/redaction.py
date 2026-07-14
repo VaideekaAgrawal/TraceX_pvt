@@ -54,13 +54,16 @@ tracker has not prevented the disclosure — it has widened it.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from db.models.investigation import CaseAccount, Note
+from db.models.platform import User, Watchlist
+from db.models.reference import Account, Customer, Transaction
 from db.pii import PII_COLUMNS
-from db.repositories.investigation import CaseAccountRepository, NoteRepository
-from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 
 #: Values shorter than this are not scanned as literals. A 1-2 character string
 #: ("A", "IN") appears inside unrelated text constantly, and a fail-closed gate
@@ -105,16 +108,100 @@ class PIIEgressError(Exception):
     that contained PII once is a bundle whose shaping is wrong."""
 
 
-def assert_no_pii_egress(facts: dict[str, Any], *, session: Session, case_id: str) -> None:
-    """Raise `PIIEgressError` if `facts` — a prompt-bound fact bundle — contains
-    any PII. Returns `None` on success; the absence of an exception IS the
-    guarantee.
+@dataclass(frozen=True)
+class CasePII:
+    """This case's real PII, loaded once.
 
-    Call this immediately before the bundle reaches the gateway, not earlier: the
-    thing being asserted about is the bytes that actually leave."""
+    Separated from the assertion so the (bounded but non-trivial) load happens
+    **once per interaction** rather than once per tool call. Code-review finding:
+    the gate previously re-ran an N+1 account/customer walk plus a 500-row-per-
+    account transaction hydration on every invocation — and, now that the gate
+    runs on every tool dispatch, that would have been paid a dozen times per
+    explanation to read two columns the project's own metrics record as
+    0-populated across all 8,002 transactions."""
+
+    case_id: str
+    values: tuple[tuple[str, str], ...]  # (column, value)
+
+
+def load_case_pii(session: Session, case_id: str) -> CasePII:
+    """Every real PII value reachable from this case, in four bulk queries.
+
+    Bulk, not N+1: a previous version walked `AccountRepository.get` and
+    `CustomerRepository.get` one row at a time and hydrated up to 500 full
+    `Transaction` ORM objects per account — the exact N+1 shape Phase 7 already
+    fixed once elsewhere. These select only the PII columns, and — importantly —
+    with **no row cap**: the old `list_for_account_in_window` call silently
+    stopped at 500 transactions per account, so narration on transaction #501 was
+    never checked. A fail-*closed* gate with a silent 500-row blind spot is a
+    fail-*open* gate that looks reassuring."""
+    values: list[tuple[str, str]] = []
+
+    account_ids = list(
+        session.scalars(select(CaseAccount.account_id).where(CaseAccount.case_id == case_id))
+    )
+    if account_ids:
+        customer_ids = [
+            cid
+            for cid in session.scalars(
+                select(Account.customer_id).where(Account.account_id.in_(account_ids))
+            )
+            if cid
+        ]
+        if customer_ids:
+            cols = [getattr(Customer, c) for c in _CUSTOMER_PII_COLUMNS]
+            for row in session.execute(
+                select(*cols).where(Customer.customer_id.in_(customer_ids))
+            ):
+                for column, value in zip(_CUSTOMER_PII_COLUMNS, row, strict=True):
+                    if isinstance(value, str) and value.strip():
+                        values.append((f"customers.{column}", value.strip()))
+
+        txn_cols = [getattr(Transaction, c) for c in _TRANSACTION_PII_COLUMNS]
+        for row in session.execute(
+            select(*txn_cols).where(
+                or_(
+                    Transaction.source_account.in_(account_ids),
+                    Transaction.dest_account.in_(account_ids),
+                )
+            )
+        ):
+            for column, value in zip(_TRANSACTION_PII_COLUMNS, row, strict=True):
+                if isinstance(value, str) and value.strip():
+                    values.append((f"transactions.{column}", value.strip()))
+
+    for body in session.scalars(select(Note.body).where(Note.case_id == case_id)):
+        if isinstance(body, str) and body.strip():
+            values.append(("notes.body", body.strip()))
+
+    # `users` and `watchlist` are NOT case-scoped, so they are scanned whole.
+    # Both are small, curated tables (investigators; a compliance watchlist), not
+    # the 166k-row customers table. Code-review finding: these are registered in
+    # `db/pii.py` and were silently unscanned, while this module claimed to check
+    # "the columns db/pii.py registers" — an inaccurate broad claim is worse than
+    # an accurate narrow one in exactly the audit this gate exists for.
+    for email, full_name in session.execute(select(User.email, User.full_name)):
+        for column, value in (("users.email", email), ("users.full_name", full_name)):
+            if isinstance(value, str) and value.strip():
+                values.append((column, value.strip()))
+
+    for entity_value in session.scalars(select(Watchlist.entity_value)):
+        if isinstance(entity_value, str) and entity_value.strip():
+            values.append(("watchlist.entity_value", entity_value.strip()))
+
+    return CasePII(case_id=case_id, values=tuple(values))
+
+
+def assert_no_pii_egress(facts: dict[str, Any], case_pii: CasePII) -> None:
+    """Raise `PIIEgressError` if `facts` contains any PII. Returns `None` on
+    success; the absence of an exception IS the guarantee.
+
+    Call this on anything about to be handed to a model — a tool result, a fact
+    bundle — not merely on what gets persisted afterwards. The thing being
+    asserted about is the bytes that actually leave."""
     string_leaves = _string_leaves(facts)
 
-    _assert_no_known_pii_values(string_leaves, session=session, case_id=case_id)
+    _assert_no_known_pii_values(string_leaves, case_pii)
     _assert_nothing_shaped_like_pii(string_leaves)
 
 
@@ -147,24 +234,20 @@ def _string_leaves(facts: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def _assert_no_known_pii_values(
-    string_leaves: list[tuple[str, str]], *, session: Session, case_id: str
+    string_leaves: list[tuple[str, str]], case_pii: CasePII
 ) -> None:
     """Detector 1 — exact, this case's real PII."""
-    known = [
-        (column, value)
-        for column, value in _known_pii_values(session, case_id)
-        if len(value) >= _MIN_LITERAL_LENGTH
-    ]
+    known = [(c, v) for c, v in case_pii.values if len(v) >= _MIN_LITERAL_LENGTH]
     for fact_key, leaf in string_leaves:
         for column, value in known:
             # Substring, not equality: a PII value can be embedded in a longer
             # string (a narration mentioning a name, a note quoting a phone).
             if value in leaf:
                 raise PIIEgressError(
-                    f"fact bundle for case {case_id!r} contains the value of PII column "
-                    f"{column!r} (in fact key {fact_key!r}). Tools must be SHAPED so PII "
-                    f"is never in a return value (decision 9) — the fix belongs in the "
-                    f"tool, not here. Value withheld from this message on purpose."
+                    f"payload for case {case_pii.case_id!r} contains the value of PII "
+                    f"column {column!r} (in key {fact_key!r}). Tools must be SHAPED so "
+                    f"PII is never in a return value (decision 9) — the fix belongs in "
+                    f"the tool, not here. Value withheld from this message on purpose."
                 )
 
 
@@ -179,46 +262,3 @@ def _assert_nothing_shaped_like_pii(string_leaves: list[tuple[str, str]]) -> Non
                     f"which makes it a worse leak, not a lesser one — something reached "
                     f"outside the case. Value withheld from this message on purpose."
                 )
-
-
-def _known_pii_values(session: Session, case_id: str) -> list[tuple[str, str]]:
-    """Every real PII value reachable from this case, as `(column, value)`.
-
-    Bounded by construction: a case has a handful of accounts, hence a handful of
-    customers. This is not a scan of the 166k-row customers table."""
-    values: list[tuple[str, str]] = []
-
-    account_ids = CaseAccountRepository(session).list_account_ids_for_case(case_id)
-    if not account_ids:
-        return values
-
-    account_repo = AccountRepository(session)
-    customer_ids: set[str] = set()
-    for account_id in account_ids:
-        account = account_repo.get(account_id)
-        if account is not None and account.customer_id:
-            customer_ids.add(account.customer_id)
-
-    customer_repo = CustomerRepository(session)
-    for customer_id in customer_ids:
-        customer = customer_repo.get(customer_id)
-        if customer is None:
-            continue
-        for column in _CUSTOMER_PII_COLUMNS:
-            value = getattr(customer, column, None)
-            if isinstance(value, str) and value.strip():
-                values.append((f"customers.{column}", value.strip()))
-
-    txn_repo = TransactionRepository(session)
-    for account_id in account_ids:
-        for txn in txn_repo.list_for_account_in_window(account_id):
-            for column in _TRANSACTION_PII_COLUMNS:
-                value = getattr(txn, column, None)
-                if isinstance(value, str) and value.strip():
-                    values.append((f"transactions.{column}", value.strip()))
-
-    for note in NoteRepository(session).list_for_case(case_id):
-        if isinstance(note.body, str) and note.body.strip():
-            values.append(("notes.body", note.body.strip()))
-
-    return values
