@@ -85,6 +85,40 @@ def get_current_user(
     return user
 
 
+def resolve_own_or_all_scope(user: User, requested_id: str | None) -> str | None:
+    """Own-vs-all RBAC data-scoping helper (code-review finding, Phase 14:
+    promoted out of `api.routes.audit`'s module-private
+    `_resolve_actor_id_filter`, where this exact "Investigator forced to
+    own id, Admin unscoped" logic used to live inline, non-reusable). A
+    plain function, not a `Depends()` dependency -- it needs a query-param
+    value the caller already parsed (e.g. `?actor_id=`), not something
+    FastAPI can resolve on its own from the request.
+
+    - Admin/Compliance: `requested_id` passes through unchanged (including
+      `None`, meaning "everyone").
+    - Investigator: pinned to `user.user_id` regardless of what they
+      requested -- 403s if they explicitly asked for someone else's,
+      otherwise silently forces the scope to their own id (no error for
+      the common case of not passing anything at all).
+
+    Currently has exactly one real caller (`api.routes.audit.
+    list_audit_log`'s `actor_id` scoping), but is placed here, generically
+    named, and not audit-log-specific in its parameters, because `docs/
+    FRONTEND_ROADMAP.md`'s Phase 15 `GET /cases` route needs near-identical
+    own-vs-all scoping (assigned_to=me for Investigators, broader for
+    Admin/Compliance) and can plausibly reuse this same *pattern* even
+    though the concrete field differs (case ownership vs. actor_id) --
+    deliberately not built out further than this one function; a full
+    generic "own-vs-all" framework is not justified by one real caller."""
+    if user.role == UserRole.ADMIN_COMPLIANCE:
+        return requested_id
+    if requested_id is not None and requested_id != user.user_id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Investigators may only view their own actions"
+        )
+    return user.user_id
+
+
 def require_role(*roles: UserRole):
     """Dependency factory: `Depends(require_role(UserRole.ADMIN_COMPLIANCE))`.
     403s (not 401 — the caller is authenticated, just not authorized) if

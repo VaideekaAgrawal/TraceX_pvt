@@ -29,7 +29,7 @@ from db.repositories.platform import UserRepository
 from db.session import get_db
 from foundation.auth import actor_type_for_role, get_current_user, require_role
 from investigation.assignment import assign_case_to, compute_workload
-from investigation.cases import create_case_from_alert
+from investigation.cases import claim_alert_for_new_case, create_case_from_alert, new_case_id
 from investigation.prioritization import rank_alert_queue
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -187,9 +187,22 @@ def list_alerts(
     desc internally and only RL-reranks the top 200, appending the
     remainder unchanged), then paginated in Python. Either way, the `Case`/
     `User` rows needed for `assigned_to_name`/`case_status` are batch-
-    fetched once for the page, not per-row."""
+    fetched once for the page, not per-row.
+
+    `unassigned_only=true` and `assigned_to=<id>` are rejected together
+    (400) -- code-review finding, Phase 14: `AlertRepository.
+    _list_where_clause` ANDs `case_id IS NULL` (from `unassigned_only`) with
+    a `case_id IN (that investigator's cases)` subquery (from
+    `assigned_to`) as independent, unvalidated clauses, which can never
+    both match -- silently returning `total_count=0` with no indication the
+    combination is contradictory."""
     if params.sort is not None and params.sort not in ALERT_SORT_KEYS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid sort: {params.sort!r}")
+    if params.unassigned_only and params.assigned_to is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "unassigned_only and assigned_to cannot both be set",
+        )
 
     repo = AlertRepository(db)
     filter_kwargs = _filter_kwargs(params)
@@ -231,15 +244,27 @@ def assign_alert(
     -- `alert.case_id IS NULL` -- because `generate_alerts_from_detection`
     creates them without promoting every one to a case):
 
-      - `alert.case_id is None`: creates the case now via `investigation.
-        cases.create_case_from_alert(..., assigned_to=...)`, which routes
-        the NEW->ASSIGNED handoff through `investigation.assignment.
-        assign_case_to` (a specific investigator) instead of the
-        workload-based `auto_assign`.
-      - `alert.case_id` already set: fetches that `Case` and calls
-        `assign_case_to` directly -- a real FSM transition if the case is
-        still NEW, a plain reassignment (no status change) if it's already
-        open, `ValueError` (-> 409) if it's terminal.
+      - `alert.case_id is None`: atomically claims the alert for a
+        newly-minted case_id via `investigation.cases.
+        claim_alert_for_new_case` (code-review finding, Phase 14: a plain
+        read-then-write of `alert.case_id` here was racy -- two concurrent
+        requests on the same caseless alert could both read `case_id is
+        None` and both create a `Case`, orphaning the loser's). If the
+        claim wins (`rowcount == 1`), creates the case now via
+        `investigation.cases.create_case_from_alert(..., case_id=...,
+        assigned_to=...)`, which routes the NEW->ASSIGNED handoff through
+        `investigation.assignment.assign_case_to` (a specific investigator)
+        instead of the workload-based `auto_assign`. If the claim loses
+        (`rowcount == 0`, a concurrent request already linked a case to
+        this alert), re-fetches the alert and falls through to the same
+        reassignment path below as if the alert had a case from the start
+        -- no error surfaced to the caller, no orphaned `Case` ever
+        created.
+      - `alert.case_id` already set (from the start, or because the race
+        above was lost): fetches that `Case` and calls `assign_case_to`
+        directly -- a real FSM transition if the case is still NEW, a plain
+        reassignment (no status change) if it's already open, `ValueError`
+        (-> 409) if it's terminal.
 
     `investigator_id` must reference an active `INVESTIGATOR`-role user
     (422 otherwise) -- Admin/Compliance cannot assign a case to themselves
@@ -257,17 +282,41 @@ def assign_alert(
         )
 
     actor_type = actor_type_for_role(user.role)
+    case_repo = CaseRepository(db)
     try:
         if alert.case_id is None:
-            case = create_case_from_alert(
-                db,
-                alert,
-                actor_type=actor_type,
-                actor_id=user.user_id,
-                assigned_to=body.investigator_id,
-            )
+            claimed_case_id = new_case_id()
+            rowcount = claim_alert_for_new_case(db, alert.alert_id, claimed_case_id)
+            if rowcount == 1:
+                alert.case_id = claimed_case_id
+                case = create_case_from_alert(
+                    db,
+                    alert,
+                    actor_type=actor_type,
+                    actor_id=user.user_id,
+                    assigned_to=body.investigator_id,
+                    case_id=claimed_case_id,
+                )
+            else:
+                # Lost the race: a concurrent request already linked a case
+                # between our read and our claim attempt -- re-fetch to see
+                # its real, now-committed case_id and fall through to the
+                # reassignment path below (same as the `else` branch).
+                db.refresh(alert)
+                existing_case = case_repo.get(alert.case_id) if alert.case_id else None
+                if existing_case is None:
+                    raise HTTPException(
+                        status.HTTP_404_NOT_FOUND, "Case not found for this alert"
+                    )
+                case = assign_case_to(
+                    db,
+                    existing_case,
+                    investigator_id=body.investigator_id,
+                    actor_type=actor_type,
+                    actor_id=user.user_id,
+                )
         else:
-            existing_case = CaseRepository(db).get(alert.case_id)
+            existing_case = case_repo.get(alert.case_id)
             if existing_case is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Case not found for this alert")
             case = assign_case_to(

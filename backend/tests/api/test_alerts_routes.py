@@ -31,6 +31,7 @@ from db.repositories.reference import AccountRepository
 from db.session import build_engine, get_db
 from foundation.config import Settings
 from foundation.security import hash_password
+from investigation.cases import claim_alert_for_new_case, create_case_from_alert
 
 _HASHED_PASSWORD = hash_password("correct-horse")
 
@@ -419,3 +420,88 @@ def test_assign_unknown_alert_returns_404(
         headers=_auth_headers(admin_token),
     )
     assert resp.status_code == 404
+
+
+# ── GET /alerts: unassigned_only + assigned_to contradiction (Fix 3) ──────
+
+
+def test_get_alerts_rejects_unassigned_only_with_assigned_to(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """Code-review finding, Phase 14: `unassigned_only=true` (`case_id IS
+    NULL`) AND `assigned_to=<id>` (`case_id IN <that investigator's
+    cases>`) can never both match -- previously silently returned
+    `total_count=0` with no indication the combination was contradictory.
+    Must 400 instead."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    token = _login(client, "inv1")
+
+    resp = client.get(
+        "/alerts",
+        params={"unassigned_only": "true", "assigned_to": "U_INV"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 400
+
+
+# ── PATCH /alerts/{alert_id}/assign: concurrent-assignment race (Fix 1) ───
+
+
+def test_assign_alert_concurrent_race_loser_reassigns_winners_case_no_orphan(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """End-to-end simulation of the race the atomic claim fixes: between
+    the route's own read of `alert.case_id` (still `None` at seed time) and
+    its claim attempt, a "concurrent" second request is simulated directly
+    against the DB -- winning the atomic claim and creating a Case, exactly
+    as a real second HTTP request would have. The route call under test
+    must then detect it lost the claim (rowcount == 0), fall through to
+    reassigning the winner's case, and must NOT create a second, orphaned
+    Case -- exactly one Case must exist for this alert afterward, and the
+    HTTP call must still return 200 with the winner's case_id, not an
+    error."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_alert(db_sessionmaker, alert_id="AL_RACE", primary_account_id="A1", case_id=None)
+
+    # Simulate the concurrent "winner": atomically claim the alert and
+    # create its case directly against the DB, exactly as `assign_alert`
+    # itself would for the request that gets there first.
+    winner_case_id = "CASE-WINNER-0001"
+    with db_sessionmaker() as db:
+        alert = AlertRepository(db).get("AL_RACE")
+        assert alert is not None
+        rowcount = claim_alert_for_new_case(db, "AL_RACE", winner_case_id)
+        assert rowcount == 1
+        alert.case_id = winner_case_id
+        create_case_from_alert(
+            db,
+            alert,
+            actor_type=ActorType.ADMIN,
+            actor_id="U_ADMIN",
+            assigned_to="U_INV",
+            case_id=winner_case_id,
+        )
+        db.commit()
+
+    admin_token = _login(client, "admin1")
+    resp = client.patch(
+        "/alerts/AL_RACE/assign",
+        json={"investigator_id": "U_INV2"},
+        headers=_auth_headers(admin_token),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Reassigned the WINNER's case -- not a second, orphaned one.
+    assert body["case_id"] == winner_case_id
+    assert body["assigned_to"] == "U_INV2"
+
+    with db_sessionmaker() as db:
+        all_cases = CaseRepository(db).list(limit=100)
+        assert [c.case_id for c in all_cases] == [winner_case_id]
+
+        rows = AuditLogRepository(db).list_for_case(winner_case_id)
+        assert any(r.action == "case_reassigned" for r in rows)

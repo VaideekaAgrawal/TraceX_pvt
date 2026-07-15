@@ -375,10 +375,12 @@ class AlertRepository(BaseRepository[Alert]):
         return self.session.scalar(stmt) or 0
 
     def count_active(self) -> int:
-        """Every alert not in the (currently theoretical -- no writer sets
-        it yet, see `list_filtered`'s docstring on `status`) `"closed"`
-        status -- the Dashboard's headline "active alerts" number
-        (ROADMAP Phase 14)."""
+        """Every alert not in `"closed"` status -- the Dashboard's headline
+        "active alerts" number (ROADMAP Phase 14). `"closed"` is written by
+        `investigation.cases.close_case` for every `Alert` linked to a case
+        it closes (code-review finding, Phase 14: this filter used to be a
+        permanent no-op -- no code path ever wrote `"closed"`, only
+        `"open"`/`"assigned"` -- fixed there, not here)."""
         stmt = select(func.count()).select_from(Alert).where(Alert.status != "closed")
         return self.session.scalar(stmt) or 0
 

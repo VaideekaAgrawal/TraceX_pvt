@@ -25,16 +25,22 @@ from db.models.investigation import Case
 from db.models.platform import User
 from db.repositories.investigation import CaseRepository
 from investigation.config import DEFAULT_SLA_POLICY
-from investigation.fsm import transition_case
+from investigation.fsm import VALID_TRANSITIONS, transition_case
 
 #: Statuses that count toward an investigator's workload -- everything
 #: except the three terminal/resolved statuses (ROADMAP Phase 4 plan).
+#:
+#: Derived from `fsm.VALID_TRANSITIONS` (code-review finding, Phase 14: this
+#: used to be a hand-maintained literal set with no compiler/runtime check
+#: it stayed in sync with the FSM's own taxonomy) rather than duplicated --
+#: a status counts as "open" here iff `VALID_TRANSITIONS` says it has at
+#: least one legal outgoing transition; the three terminal statuses
+#: (`CLOSED_TP`/`CLOSED_FP`/`MONITORING`) map to an empty set there, so this
+#: is exactly equivalent to the previous literal set, verified by
+#: `tests/investigation/test_assignment.py::
+#: test_open_statuses_matches_fsm_taxonomy`.
 OPEN_STATUSES: set[CaseStatus] = {
-    CaseStatus.NEW,
-    CaseStatus.ASSIGNED,
-    CaseStatus.IN_PROGRESS,
-    CaseStatus.AWAITING_REVIEW,
-    CaseStatus.ESCALATED,
+    status for status, transitions in VALID_TRANSITIONS.items() if transitions
 }
 
 
@@ -142,8 +148,12 @@ def assign_case_to(
         write, not an FSM transition, logged under a dedicated
         `case_reassigned` action so it's distinguishable from both
         `case_assigned` (the NEW->ASSIGNED handoff) and the generic
-        `case_updated`. Reassigning to the SAME investigator still writes a
-        `case_reassigned` row -- no special-cased no-op, mirroring
+        `case_updated`. `sla_due_at` is recomputed the same way as the NEW
+        branch (code-review finding, Phase 14: this branch used to leave
+        the original assignee's `sla_due_at` untouched, so a reassigned
+        case handed the new investigator a stale -- possibly already
+        breached -- SLA clock). Reassigning to the SAME investigator still
+        writes a `case_reassigned` row -- no special-cased no-op, mirroring
         `AlertRepository.mark_opened`'s precedent of an audit-only write
         with no actual field-value change being a legitimate call.
       - Terminal (`CLOSED_TP`/`CLOSED_FP`/`MONITORING`): raises
@@ -161,9 +171,11 @@ def assign_case_to(
             extra_changes={"assigned_to": investigator_id, "sla_due_at": sla_due_at},
         )
     if case.status in OPEN_STATUSES:
+        sla_due_at = utcnow() + DEFAULT_SLA_POLICY.duration_for(case.priority)
         return CaseRepository(session).update(
             case.case_id,
             assigned_to=investigator_id,
+            sla_due_at=sla_due_at,
             actor_type=actor_type,
             actor_id=actor_id,
             action="case_reassigned",

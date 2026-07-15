@@ -11,7 +11,17 @@ Investigator is forced to see only their own actions (`actor_id=<self>`,
 overriding whatever they passed), while Admin/Compliance can see anyone's
 (`actor_id=None` by default, or any explicit value) -- an audit trail an
 Investigator could freely scope to another user's `actor_id` would leak
-what other investigators are doing on cases they're not assigned to.
+what other investigators are doing on cases they're not assigned to. The
+scoping decision itself is `foundation.auth.resolve_own_or_all_scope`
+(code-review finding, Phase 14: promoted out of this module so `docs/
+FRONTEND_ROADMAP.md`'s Phase 15 `GET /cases` route can plausibly reuse the
+same pattern) -- this module just calls it.
+
+Known limitation (code-review finding, Phase 14 -- see `list_audit_log`'s
+docstring): "own actions only" scoping means an Investigator's
+notification bell can't yet surface "a case was just assigned to me",
+since the audit row for that action is attributed to the assigning Admin,
+not to them.
 """
 from __future__ import annotations
 
@@ -19,15 +29,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.enums import UserRole
 from db.models.platform import User
 from db.repositories.platform import AuditLogRepository
 from db.session import get_db
-from foundation.auth import get_current_user
+from foundation.auth import get_current_user, resolve_own_or_all_scope
 
 router = APIRouter(tags=["audit"])
 
@@ -67,27 +76,28 @@ class _AuditLogParams:
     offset: int = Query(default=0, ge=0)
 
 
-def _resolve_actor_id_filter(params: _AuditLogParams, user: User) -> str | None:
-    """The RBAC-scoping decision described in this module's docstring:
-    Investigators are pinned to their own `actor_id` regardless of what
-    they passed (403 if they explicitly asked for someone else's);
-    Admin/Compliance's `actor_id` filter passes through unchanged."""
-    if user.role == UserRole.ADMIN_COMPLIANCE:
-        return params.actor_id
-    if params.actor_id is not None and params.actor_id != user.user_id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Investigators may only view their own actions"
-        )
-    return user.user_id
-
-
 @router.get("/audit-log", response_model=AuditLogListResponse)
 def list_audit_log(
     params: _AuditLogParams = Depends(),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AuditLogListResponse:
-    actor_id = _resolve_actor_id_filter(params, user)
+    """`actor_id` scoping is `foundation.auth.resolve_own_or_all_scope`:
+    Investigators are pinned to their own actions, Admin/Compliance is
+    unscoped by default (see module docstring).
+
+    Known limitation (code-review finding, Phase 14, deliberately left
+    unaddressed this phase): case-assignment audit rows (`case_assigned`/
+    `case_reassigned`) carry the *assigning* Admin/Compliance user's
+    `actor_id`, not the *receiving* Investigator's -- so an Investigator,
+    pinned to `actor_id=self` here, can never see an audit row for "a case
+    was just assigned to me" by someone else, only actions they personally
+    performed. This means a notification-bell feature built directly on
+    this endpoint cannot surface that event. The real fix needs `GET
+    /cases` (explicitly Phase 15's scope, not this one) so the
+    notification/audit layer can instead query "cases assigned to me"
+    independent of who performed the assigning action."""
+    actor_id = resolve_own_or_all_scope(user, params.actor_id)
     repo = AuditLogRepository(db)
     filter_kwargs: dict[str, Any] = {
         "case_id": params.case_id,
