@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
+from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType, CaseLevel, CaseResolution, CaseStatus
@@ -29,13 +32,61 @@ from db.repositories.investigation import (
     CaseRepository,
 )
 from detection.rl.bandit import LinUCBAgent
-from investigation.assignment import auto_assign
+from investigation.assignment import assign_case_to, auto_assign
 from investigation.fsm import transition_case
 from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
 
 
-def _new_case_id() -> str:
+def new_case_id() -> str:
+    """Mint a fresh `case_id`. Public (not `_new_case_id`, code-review
+    finding, Phase 14: `api.routes.alerts.assign_alert` is a second real
+    caller -- it needs to mint the id itself *before* calling
+    `create_case_from_alert`, so it can atomically claim the alert under
+    that id via `claim_alert_for_new_case` first -- same "promote on second
+    real caller" convention as `CLOSING_TRANSITIONS`/`SETS_CLOSED_AT`
+    below)."""
     return f"CASE-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def claim_alert_for_new_case(session: Session, alert_id: str, case_id: str) -> int:
+    """Atomically claim `alert_id` for a brand-new case about to be created
+    under `case_id`: a single conditional `UPDATE alerts SET case_id = ?
+    WHERE alert_id = ? AND case_id IS NULL` -- atomic on both SQLite and
+    Postgres, no extra row-locking (`BEGIN IMMEDIATE`, `SELECT ... FOR
+    UPDATE`) machinery needed.
+
+    Fixes a real race (code-review finding, Phase 14): `api.routes.alerts.
+    assign_alert` used to read `alert.case_id`, and if `None`, call
+    `create_case_from_alert` unconditionally -- with no guard between that
+    read and the `Case` INSERT. Two concurrent requests on the same
+    caseless alert (an admin double-click, or a frontend bulk-assign firing
+    `Promise.all` over alerts that happen to share a case) could both read
+    `case_id is None` before either committed, both create a separate
+    `Case`, and both link -- silently orphaning the loser's `Case` (no
+    alert points to it, but it still has an assigned investigator and still
+    consumes a workload slot), with both HTTP calls returning 200.
+
+    Returns the UPDATE's rowcount: `1` if this call won the race (the
+    alert had no case and now points at `case_id` in the DB -- the caller
+    should update/refresh its in-memory `Alert` object accordingly, then
+    proceed to actually create the `Case` row via
+    `create_case_from_alert(..., case_id=case_id)`); `0` if a concurrent
+    caller already linked a different case to this alert first (the caller
+    should re-fetch/refresh the alert to see that real `case_id`, then fall
+    through to the reassignment path -- `assign_case_to` on the winner's
+    case -- instead of creating a second, orphaned `Case`).
+
+    Deliberately does NOT write `status` or append an `audit_log` row
+    itself -- winning this race only settles who gets to create the `Case`;
+    the caller still performs the normal audited `AlertRepository.update`
+    (via `create_case_from_alert`) for the rest of the state change."""
+    stmt = (
+        update(Alert)
+        .where(Alert.alert_id == alert_id, Alert.case_id.is_(None))
+        .values(case_id=case_id)
+    )
+    result = cast("CursorResult[Any]", session.execute(stmt))
+    return result.rowcount
 
 
 def create_case_from_alert(
@@ -45,6 +96,8 @@ def create_case_from_alert(
     actor_type: ActorType,
     actor_id: str | None,
     workload: dict[str, int] | None = None,
+    assigned_to: str | None = None,
+    case_id: str | None = None,
 ) -> Case:
     """Create a `Case` (status=NEW, level=L1 -- every case starts at
     triage) from `alert`, link every account in the alert's pattern into
@@ -55,12 +108,40 @@ def create_case_from_alert(
     `workload` is forwarded unchanged to `auto_assign` (see its docstring)
     so a batch caller looping over many alerts can pass the same
     incrementally-maintained dict through every call instead of a fresh
-    aggregate query per case (code-review finding, Phase 4)."""
+    aggregate query per case (code-review finding, Phase 4).
+
+    `assigned_to` (ROADMAP Phase 14: `PATCH /alerts/{alert_id}/assign`,
+    manually assigning an alert that has no case yet) defaults to `None` so
+    every existing caller (the pipeline script) is unaffected. When given,
+    the NEW->ASSIGNED handoff goes through `investigation.assignment.
+    assign_case_to` (a specific investigator) instead of `auto_assign`
+    (workload-based pick) -- `workload` is then ignored, since there's no
+    pick to make.
+
+    `case_id` (code-review finding, Phase 14: concurrent-assignment race)
+    defaults to `None`, in which case a fresh id is minted here via
+    `new_case_id()` and `alert.case_id` is set on the same
+    `AlertRepository.update` call as before -- unchanged behavior for every
+    existing caller (the pipeline script). When given, it must already be
+    the alert's real, committed `case_id` in the DB -- i.e. the caller has
+    already won an atomic claim via `claim_alert_for_new_case(session,
+    alert.alert_id, case_id)` and updated/refreshed `alert` to reflect it.
+    In that case this function does NOT try to set `alert.case_id` again
+    (it's already set -- setting it a second time here would just be
+    redundant, not wrong, but skipping it keeps the audit trail's
+    `changes` dict honest about what this call actually changed); it still
+    creates the `Case` row and `case_accounts` links under that pre-claimed
+    id, marks the alert `status="assigned"`, and proceeds with the normal
+    `assign_case_to`/`auto_assign` handoff exactly as the fresh-id path
+    does."""
     case_repo = CaseRepository(session)
     case_account_repo = CaseAccountRepository(session)
     alert_repo = AlertRepository(session)
 
-    case_id = _new_case_id()
+    pre_claimed = case_id is not None
+    if case_id is None:
+        case_id = new_case_id()
+
     case = case_repo.create(
         case_id=case_id,
         primary_account_id=alert.primary_account_id,
@@ -82,13 +163,23 @@ def create_case_from_alert(
             actor_id=actor_id,
         )
 
-    alert_repo.update(
-        alert.alert_id,
-        case_id=case_id,
-        status="assigned",
-        actor_type=actor_type,
-        actor_id=actor_id,
-    )
+    alert_update_kwargs: dict[str, Any] = {
+        "status": "assigned",
+        "actor_type": actor_type,
+        "actor_id": actor_id,
+    }
+    if not pre_claimed:
+        alert_update_kwargs["case_id"] = case_id
+    alert_repo.update(alert.alert_id, **alert_update_kwargs)
+
+    if assigned_to is not None:
+        return assign_case_to(
+            session,
+            case,
+            investigator_id=assigned_to,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
 
     return auto_assign(
         session, case, actor_type=actor_type, actor_id=actor_id, workload=workload
@@ -173,7 +264,16 @@ def close_case(
     `DetectionFeedbackRepository` row, and feed the verdict to the
     already-injected `LinUCBAgent` for the case's primary account/context.
     Does NOT touch `RuleDefinition.confidence` -- that adjustment is
-    Phase 12's job (ROADMAP Phase 4 plan)."""
+    Phase 12's job (ROADMAP Phase 4 plan).
+
+    Also marks every `Alert` linked to this case (`Alert.case_id ==
+    case_id`) `status="closed"` (code-review finding, Phase 14: before this,
+    no code path anywhere ever wrote `Alert.status = "closed"` -- only
+    `"open"`/`"assigned"` were ever set -- so `investigation.dashboard.
+    compute_dashboard_summary`'s and `AlertRepository.count_active`'s
+    `Alert.status != "closed"` filter was a permanent no-op, and the
+    Dashboard's "Active Alerts" KPI silently counted every alert ever
+    generated, including ones behind long-closed cases)."""
     if resolution not in CLOSING_TRANSITIONS:
         raise ValueError(
             f"close_case does not support resolution={resolution!r} -- "
@@ -206,9 +306,18 @@ def close_case(
     # Ordered by risk_score descending (`AlertRepository.list_for_case`) so
     # the highest-risk alert -- not an incidental DB-order first row -- is
     # the one attributed to this verdict (code-review finding, Phase 4).
-    case_alerts = AlertRepository(session).list_for_case(case_id)
+    alert_repo = AlertRepository(session)
+    case_alerts = alert_repo.list_for_case(case_id)
     primary_alert_id = case_alerts[0].alert_id if case_alerts else None
     rule_ids = sorted({rid for a in case_alerts for rid in (a.rule_ids or [])}) or None
+
+    # Fix the dead "closed" Alert.status (code-review finding, Phase 14, see
+    # this function's docstring) -- one audited `alert_updated` write per
+    # linked alert, reusing the existing generic `update()` rather than a
+    # new action verb (there's no dedicated one in `docs/DATA_SCHEMA.md`
+    # §3.5's taxonomy for "alert's case was closed").
+    for a in case_alerts:
+        alert_repo.update(a.alert_id, status="closed", actor_type=actor_type, actor_id=actor_id)
 
     reward = CLOSING_REWARD[resolution]
     DetectionFeedbackRepository(session).create(

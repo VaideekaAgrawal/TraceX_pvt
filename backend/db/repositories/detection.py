@@ -16,9 +16,10 @@ CRUD so Phase 3 can implement that invariant on top of it.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.enums import ActorType, CaseResolution, DetectionType, Priority, RiskLevel
 from db.models.base import utcnow
@@ -29,6 +30,7 @@ from db.models.detection import (
     RlArmState,
     RuleDefinition,
 )
+from db.models.investigation import Case
 from db.repositories.base import UNSET, BaseRepository, collect_changes
 
 
@@ -36,6 +38,21 @@ class AlertRepository(BaseRepository[Alert]):
     model = Alert
     entity_type = "alert"
     pk_attr = "alert_id"
+
+    #: `sort=` values `list_filtered`/the `/alerts` route accept, mapped to
+    #: the SQLAlchemy ORDER BY expression each represents. Module-level
+    #: `ALERT_SORT_KEYS` below is the public surface for callers outside
+    #: this module (ROADMAP Phase 14) -- reaching into this "private"
+    #: class attribute directly from `api.routes.alerts` would work but
+    #: defeats the point of naming it private.
+    _LIST_SORTS: ClassVar[dict[str, Any]] = {
+        "risk_score_desc": Alert.risk_score.desc(),
+        "risk_score_asc": Alert.risk_score.asc(),
+        "created_at_desc": Alert.created_at.desc(),
+        "created_at_asc": Alert.created_at.asc(),
+        "priority_asc": Alert.priority.asc(),
+        "priority_desc": Alert.priority.desc(),
+    }
 
     def create(
         self,
@@ -236,6 +253,179 @@ class AlertRepository(BaseRepository[Alert]):
     def list_by_status(self, status: str, *, limit: int = 100) -> list[Alert]:
         stmt = select(Alert).where(Alert.status == status).limit(limit)
         return list(self.session.scalars(stmt))
+
+    def _list_where_clause(
+        self,
+        *,
+        status: str | None = None,
+        priority: Priority | None = None,
+        severity: RiskLevel | None = None,
+        detection_type: DetectionType | None = None,
+        min_risk_score: float | None = None,
+        max_risk_score: float | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        unassigned_only: bool = False,
+        assigned_to: str | None = None,
+    ) -> list[Any]:
+        """Shared WHERE-clause builder for `list_filtered`/`count_filtered`
+        (ROADMAP Phase 14: `GET /alerts`) -- one filter set, two callers, so
+        the count a caller sees for a page always matches the page's own
+        filters. `assigned_to` is deliberately a subquery against `cases`
+        (not a column on `alerts` itself, doc §3.2's schema) rather than a
+        join, so this repository's return type stays exactly `list[Alert]`/
+        `int` with no risk of row duplication from the 1:many `cases` join
+        surface a real JOIN would introduce."""
+        clauses: list[Any] = []
+        if status is not None:
+            clauses.append(Alert.status == status)
+        if priority is not None:
+            clauses.append(Alert.priority == priority)
+        if severity is not None:
+            clauses.append(Alert.severity == severity)
+        if detection_type is not None:
+            clauses.append(Alert.detection_type == detection_type)
+        if min_risk_score is not None:
+            clauses.append(Alert.risk_score >= min_risk_score)
+        if max_risk_score is not None:
+            clauses.append(Alert.risk_score <= max_risk_score)
+        if start is not None:
+            clauses.append(Alert.created_at >= start)
+        if end is not None:
+            clauses.append(Alert.created_at <= end)
+        if unassigned_only:
+            clauses.append(Alert.case_id.is_(None))
+        if assigned_to is not None:
+            clauses.append(
+                Alert.case_id.in_(select(Case.case_id).where(Case.assigned_to == assigned_to))
+            )
+        return clauses
+
+    def list_filtered(
+        self,
+        *,
+        status: str | None = None,
+        priority: Priority | None = None,
+        severity: RiskLevel | None = None,
+        detection_type: DetectionType | None = None,
+        min_risk_score: float | None = None,
+        max_risk_score: float | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        unassigned_only: bool = False,
+        assigned_to: str | None = None,
+        sort: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Alert]:
+        """`GET /alerts`'s data source (ROADMAP Phase 14). `sort=None`
+        returns the full filtered set with no SQL ORDER BY and no LIMIT/
+        OFFSET applied -- the caller (the route) is expected to run the RL
+        prioritization queue over the full set and paginate in Python in
+        that case, per `investigation.prioritization.rank_alert_queue`'s
+        own "sorts everything, re-ranks only the top 200" contract. When
+        `sort` is given, it's a plain SQL-ordered page instead (no RL
+        re-ranking asked for -- an explicit sort order overrides it)."""
+        clauses = self._list_where_clause(
+            status=status,
+            priority=priority,
+            severity=severity,
+            detection_type=detection_type,
+            min_risk_score=min_risk_score,
+            max_risk_score=max_risk_score,
+            start=start,
+            end=end,
+            unassigned_only=unassigned_only,
+            assigned_to=assigned_to,
+        )
+        stmt = select(Alert).where(*clauses)
+        if sort is not None:
+            stmt = stmt.order_by(self._LIST_SORTS[sort])
+            if limit is not None:
+                stmt = stmt.limit(limit).offset(offset)
+        return list(self.session.scalars(stmt))
+
+    def count_filtered(
+        self,
+        *,
+        status: str | None = None,
+        priority: Priority | None = None,
+        severity: RiskLevel | None = None,
+        detection_type: DetectionType | None = None,
+        min_risk_score: float | None = None,
+        max_risk_score: float | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        unassigned_only: bool = False,
+        assigned_to: str | None = None,
+    ) -> int:
+        clauses = self._list_where_clause(
+            status=status,
+            priority=priority,
+            severity=severity,
+            detection_type=detection_type,
+            min_risk_score=min_risk_score,
+            max_risk_score=max_risk_score,
+            start=start,
+            end=end,
+            unassigned_only=unassigned_only,
+            assigned_to=assigned_to,
+        )
+        stmt = select(func.count()).select_from(Alert).where(*clauses)
+        return self.session.scalar(stmt) or 0
+
+    def count_active(self) -> int:
+        """Every alert not in `"closed"` status -- the Dashboard's headline
+        "active alerts" number (ROADMAP Phase 14). `"closed"` is written by
+        `investigation.cases.close_case` for every `Alert` linked to a case
+        it closes (code-review finding, Phase 14: this filter used to be a
+        permanent no-op -- no code path ever wrote `"closed"`, only
+        `"open"`/`"assigned"` -- fixed there, not here)."""
+        stmt = select(func.count()).select_from(Alert).where(Alert.status != "closed")
+        return self.session.scalar(stmt) or 0
+
+    def count_active_grouped_by_severity(self) -> dict[str, int]:
+        stmt = (
+            select(Alert.severity, func.count())
+            .where(Alert.status != "closed")
+            .group_by(Alert.severity)
+        )
+        return {str(severity): count for severity, count in self.session.execute(stmt)}
+
+    def avg_active_risk_score(self) -> float | None:
+        stmt = select(func.avg(Alert.risk_score)).where(Alert.status != "closed")
+        result = self.session.scalar(stmt)
+        return float(result) if result is not None else None
+
+    def count_by_day(self, *, since: datetime) -> list[tuple[str, int]]:
+        """Alert counts bucketed by UTC calendar day since `since`, for the
+        Dashboard's `alerts_over_time` chart (ROADMAP Phase 14). Bucketed in
+        Python, not via a SQL `date()`/`strftime()` call -- this codebase
+        targets both SQLite and Postgres (`docs/DATA_SCHEMA.md` §0) and
+        those two engines' date-truncation functions diverge; fine at
+        current scale (~4k rows) to fetch and bucket in Python instead.
+        SQLite hands back a naive-but-UTC-valued `datetime` on read (see
+        `db.repositories._audit._canonical_ts`'s identical reasoning) while
+        a real tz-aware value (e.g. from Postgres) is converted to UTC
+        first, so both engines bucket identically. Returns `(day, count)`
+        pairs sorted by day ascending; days with zero alerts are NOT
+        included here -- the caller (`investigation.dashboard.
+        compute_dashboard_summary`) zero-fills the requested window."""
+        stmt = select(Alert.created_at).where(Alert.created_at >= since)
+        buckets: dict[str, int] = {}
+        for (created_at,) in self.session.execute(stmt):
+            if created_at.tzinfo is not None:
+                created_at = created_at.astimezone(UTC)
+            day = created_at.date().isoformat()
+            buckets[day] = buckets.get(day, 0) + 1
+        return sorted(buckets.items())
+
+
+#: Public surface for `_LIST_SORTS`'s keys (ROADMAP Phase 14 spec: "expose
+#: `ALERT_SORT_KEYS = set(_LIST_SORTS)` (module-level constant, not reaching
+#: into a 'private' class attribute from the route module)") -- `api.routes.
+#: alerts` validates a caller-supplied `sort` query param against this set.
+ALERT_SORT_KEYS: set[str] = set(AlertRepository._LIST_SORTS)
 
 
 class ModelRunRepository(BaseRepository[ModelRun]):

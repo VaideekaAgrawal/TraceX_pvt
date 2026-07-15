@@ -69,7 +69,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -476,11 +476,12 @@ def _iter_rows(path: Path) -> Iterator[dict[str, str | None]]:
         fieldnames = _dedupe_header(header)
         width = len(fieldnames)
         for raw_row in reader:
-            if len(raw_row) < width:
-                raw_row = raw_row + [None] * (width - len(raw_row))
-            elif len(raw_row) > width:
-                raw_row = raw_row[:width]
-            yield dict(zip(fieldnames, raw_row, strict=True))
+            padded: list[str | None] = list(raw_row)
+            if len(padded) < width:
+                padded.extend([None] * (width - len(padded)))
+            elif len(padded) > width:
+                padded = padded[:width]
+            yield dict(zip(fieldnames, padded, strict=True))
 
 
 def _missing_fields(row: Mapping[str, str | None], required_columns: frozenset[str]) -> list[str]:
@@ -494,6 +495,21 @@ def _missing_fields(row: Mapping[str, str | None], required_columns: frozenset[s
     abort the rest of an otherwise-good file.
     """
     return [c for c in required_columns if row.get(c) is None]
+
+
+def _narrow_required(
+    row: Mapping[str, str | None], required_columns: frozenset[str]
+) -> dict[str, str]:
+    """Callers only ever reach this once `_missing_fields(row,
+    required_columns)` has already returned empty for `row` -- i.e. every
+    key in `required_columns` is a real, non-`None` string at runtime.
+    Mypy has no way to know that from a plain `row["X"]` access on a
+    `Mapping[str, str | None]`, hence the pre-existing `str | None`
+    errors this helper resolves. Returns only the required-column subset
+    (not the whole row) -- optional-enrichment columns (`OPTIONAL_
+    ENRICHMENT_COLUMNS`) may still be `None` and must keep going through
+    `row.get(...)`, never this."""
+    return {c: cast(str, row[c]) for c in required_columns}
 
 
 def _upsert_ingestion_log(
@@ -592,29 +608,31 @@ def ingest_accounts_csv(
                 num_rows_skipped += 1
                 continue
 
-            customer_id = row["Entity ID"].strip()
+            fields = _narrow_required(row, ACCOUNTS_REQUIRED_COLUMNS)
+
+            customer_id = fields["Entity ID"].strip()
             if customer_id and customer_id not in seen_customers:
                 seen_customers.add(customer_id)
                 if customer_repo.get(customer_id) is None:
                     customer_repo.create(
                         customer_id=customer_id,
-                        name=row["Entity Name"].strip(),
-                        entity_type=infer_entity_type(row["Entity Name"]),
+                        name=fields["Entity Name"].strip(),
+                        entity_type=infer_entity_type(fields["Entity Name"]),
                         risk_rating=RiskLevel.LOW,
                         actor_type=ActorType.SYSTEM,
                         actor_id=actor_id,
                     )
                     num_customers += 1
 
-            account_id = row["Account Number"].strip()
+            account_id = fields["Account Number"].strip()
             if account_id and account_id not in seen_accounts:
                 seen_accounts.add(account_id)
                 if account_repo.get(account_id) is None:
                     account_repo.create(
                         account_id=account_id,
                         customer_id=customer_id or None,
-                        bank_name=row["Bank Name"].strip() or None,
-                        bank_id=row["Bank ID"].strip() or None,
+                        bank_name=fields["Bank Name"].strip() or None,
+                        bank_id=fields["Bank ID"].strip() or None,
                         actor_type=ActorType.SYSTEM,
                         actor_id=actor_id,
                     )
@@ -796,10 +814,12 @@ def ingest_transactions_csv(
                 num_rows_skipped += 1
                 continue
 
-            source_account = row["Account"].strip()
-            dest_account = row["Account.1"].strip()
-            from_bank = row["From Bank"].strip() or None
-            to_bank = row["To Bank"].strip() or None
+            fields = _narrow_required(row, TRANSACTIONS_REQUIRED_COLUMNS)
+
+            source_account = fields["Account"].strip()
+            dest_account = fields["Account.1"].strip()
+            from_bank = fields["From Bank"].strip() or None
+            to_bank = fields["To Bank"].strip() or None
 
             for acct_id, bank_name in ((source_account, from_bank), (dest_account, to_bank)):
                 if acct_id in known_accounts:
@@ -817,19 +837,19 @@ def ingest_transactions_csv(
                     )
                     num_new_accounts += 1
 
-            ts = parse_timestamp(row["Timestamp"])
+            ts = parse_timestamp(fields["Timestamp"])
             if earliest_ts is None or ts < earliest_ts:
                 earliest_ts = ts
 
-            txn_key = _txn_key(row)
+            txn_key = _txn_key(fields)
             occurrence = txn_key_occurrences.get(txn_key, 0)
             txn_key_occurrences[txn_key] = occurrence + 1
-            txn_id = make_txn_id(row, occurrence)
+            txn_id = make_txn_id(fields, occurrence)
             if txn_repo.get(txn_id) is None:
-                amount = _parse_money(row["Amount Paid"])
-                amount_received = _parse_money(row["Amount Received"])
+                amount = _parse_money(fields["Amount Paid"])
+                amount_received = _parse_money(fields["Amount Received"])
                 if amount is None:
-                    raise ValueError(f"row {i}: unparseable Amount Paid {row['Amount Paid']!r}")
+                    raise ValueError(f"row {i}: unparseable Amount Paid {fields['Amount Paid']!r}")
                 txn_repo.create(
                     txn_id=txn_id,
                     timestamp=ts,
@@ -837,9 +857,9 @@ def ingest_transactions_csv(
                     dest_account=dest_account,
                     amount=amount,
                     amount_received=amount_received,
-                    currency=normalize_currency(row["Payment Currency"]),
-                    channel=map_channel(row["Payment Format"]),
-                    is_laundering=int(row["Is Laundering"].strip() or 0),
+                    currency=normalize_currency(fields["Payment Currency"]),
+                    channel=map_channel(fields["Payment Format"]),
+                    is_laundering=int(fields["Is Laundering"].strip() or 0),
                     from_bank=from_bank,
                     to_bank=to_bank,
                     source_file_hash=file_hash,

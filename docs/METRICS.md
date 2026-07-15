@@ -502,6 +502,28 @@ Run: `model_run RUN-CC8AD2C6344F4525`, active. This is the first genuinely full-
 
 ---
 
+## 19. Frontend Phase 14 — Dashboard API + UI, code review + verify (Session 20)
+
+Backend: `GET /alerts`, `PATCH /alerts/{alert_id}/assign`, `GET /alerts/workload`, `GET /audit-log`, `GET /dashboard/summary` — 560 backend tests passing (98% coverage on the initial slice run), ruff/mypy clean (mypy's 19 remaining errors are all pre-existing in `db/ingest.py`, from the concurrently-merged Session 19 work — not introduced by this phase). Frontend: `npm run build`/`npm run lint` clean.
+
+**Code review** (first run at `high` effort, before this session pulled the newly-committed `low`-by-default tiering directive from `origin/main` — the diff was already large enough that the earlier `high` pass is being kept rather than discarded): 8 finder angles + verify, **10/10 candidates sent to verification confirmed** — an unusually clean hit rate. Highest severity: a genuine, exploitable concurrent-assignment race (`PATCH /alerts/{alert_id}/assign` could create duplicate, orphaned `Case` rows under two near-simultaneous requests on the same caseless alert — no locking anywhere in the stack). Also confirmed: a dead `Alert.status="closed"` value making the Dashboard's "Active Alerts" KPI a permanent no-op; a contradictory `unassigned_only`+`assigned_to` filter combination silently returning an empty page; a date-range "To" filter excluding almost the entire selected end day; bulk-assign results being wiped by the UI before an admin could read which alerts failed; a reassignment path leaving the new investigator with the previous assignee's stale SLA deadline; plus 3 reuse/altitude findings (duplicated BFF error-mapping across 5 route handlers, `OPEN_STATUSES` hand-duplicating `fsm.py`'s taxonomy, audit-log RBAC scoping not promoted to a reusable dependency). All 10 fixed.
+
+**Live-verified directly against the real backend+frontend (not just unit tests):**
+
+| Check | Result |
+|---|---|
+| Concurrent assign race | Two simultaneous `PATCH` calls on the same caseless alert → both `200`, **same `case_id`** in both responses; direct SQL confirmed exactly one `Case` row, one `case_assigned` + one `case_reassigned` audit row (no orphan) |
+| SLA reset on reassignment | Same race's `case_reassigned` audit row shows a freshly recomputed `sla_due_at`, not the original assignee's |
+| `unassigned_only`+`assigned_to` | `400` end-to-end through the frontend BFF (not the 502-misrouting bug this same diff fixed once already) |
+| Dead "closed" status fix | `dashboard/summary`'s `active_alert_count` dropped 3995→3994 after closing one case; `GET /alerts?status=closed` now returns it |
+| Date-range end-of-day fix | `end=<midnight>` → `total_count=0`; `end=<23:59:59.999>` → `total_count=3995` (same day) — confirms the frontend's end-of-day conversion is load-bearing, not cosmetic |
+| Role-scoped `GET /audit-log` | Investigator: 200 for own actions, 403 for a foreign `actor_id`; Admin: unscoped, `total_count=23` |
+| Notification-bell "known limitation" | Investigator's curated-feed query returns `total_count=0` even after being assigned a case by the test Admin — confirms the documented gap live, not just in the diff |
+
+**Note on scale**: this verify pass ran against the machine's existing local `data/tracex.db` (3,995 alerts, pre-dating Session 19's full-IBM-benchmark rebuild — `tracex.db` is gitignored/local-only per §17, so it doesn't travel with git history). Numbers above are internally consistent for that dataset; they are not the same as §18's 44,790-alert full-scale figures and shouldn't be compared to them.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).

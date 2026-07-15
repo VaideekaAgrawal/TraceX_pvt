@@ -18,11 +18,21 @@ from db.repositories.detection import (
     DetectionFeedbackRepository,
     RlArmStateRepository,
 )
-from db.repositories.investigation import CaseAccountRepository, CaseFeatureVectorRepository
-from db.repositories.platform import UserRepository
+from db.repositories.investigation import (
+    CaseAccountRepository,
+    CaseFeatureVectorRepository,
+    CaseRepository,
+)
+from db.repositories.platform import AuditLogRepository, UserRepository
 from db.repositories.reference import AccountRepository
 from detection.rl.bandit import GLOBAL_ARM_ID, LinUCBAgent
-from investigation.cases import case_rl_features, close_case, create_case_from_alert
+from investigation.cases import (
+    case_rl_features,
+    claim_alert_for_new_case,
+    close_case,
+    create_case_from_alert,
+    new_case_id,
+)
 from investigation.fsm import InvalidTransitionError, transition_case
 
 
@@ -86,6 +96,36 @@ def test_create_case_from_alert_links_accounts_and_assigns(session: Session) -> 
     assert refreshed_alert is not None
     assert refreshed_alert.case_id == case.case_id
     assert refreshed_alert.status == "assigned"
+
+
+def test_create_case_from_alert_with_assigned_to_takes_manual_path_not_auto_assign(
+    session: Session,
+) -> None:
+    """ROADMAP Phase 14: `assigned_to` given routes the NEW->ASSIGNED
+    handoff through `assign_case_to` (a specific investigator), not
+    `auto_assign`'s workload-based pick -- confirmed here by seeding a
+    SECOND investigator who has the lower workload (so a plain `auto_assign`
+    call would have picked them instead) and asserting the alert's own
+    explicit choice wins."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U_LOWER_WORKLOAD")
+    alert = _seed_alert(session)
+    session.commit()
+
+    case = create_case_from_alert(
+        session, alert, actor_type=ActorType.ADMIN, actor_id="ADMIN1", assigned_to="U1"
+    )
+    session.commit()
+
+    assert case.status == CaseStatus.ASSIGNED
+    assert case.assigned_to == "U1"
+
+    rows = AuditLogRepository(session).list_for_case(case.case_id)
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    assert len(assigned_rows) == 1
+    reassigned_rows = [r for r in rows if r.action == "case_reassigned"]
+    assert len(reassigned_rows) == 0
 
 
 def _walk_to_awaiting_review(session: Session, case_id: str) -> None:
@@ -409,3 +449,152 @@ def test_close_case_upsert_is_idempotent_across_repeated_calls(session: Session)
 
     row = CaseFeatureVectorRepository(session).get(case.case_id)
     assert row is not None
+
+
+# ── ROADMAP Phase 14 code-review: close_case marks its alerts "closed" ─────
+
+
+def test_close_case_marks_every_linked_alert_closed(session: Session) -> None:
+    """Code-review finding, Phase 14: before this, no code path ever wrote
+    `Alert.status = "closed"` -- only `"open"`/`"assigned"` -- so the
+    Dashboard's `Alert.status != "closed"` filters (`count_active`,
+    `count_active_grouped_by_severity`, `avg_active_risk_score`) were a
+    permanent no-op. `close_case` must mark every `Alert` linked to the
+    case it closes as `status="closed"`, and `AlertRepository.count_active`
+    must then exclude it."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    low_risk_alert = _seed_alert(session, "AL_LOW", account_ids=["A", "B"])
+    session.commit()
+
+    case = create_case_from_alert(
+        session, low_risk_alert, actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    high_risk_alert = AlertRepository(session).create(
+        alert_id="AL_HIGH",
+        detection_type=DetectionType.round_trip,
+        primary_account_id="A",
+        account_ids=["A", "B"],
+        score=0.95,
+        risk_score=99.0,
+        severity=RiskLevel.CRITICAL,
+        priority=Priority.P1,
+        status="open",
+        source="pipeline",
+        case_id=case.case_id,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    before_count = AlertRepository(session).count_active()
+    assert before_count >= 2
+
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    close_case(
+        session,
+        case.case_id,
+        CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.INVESTIGATOR,
+        actor_id="U1",
+    )
+    session.commit()
+
+    refreshed_low = AlertRepository(session).get(low_risk_alert.alert_id)
+    refreshed_high = AlertRepository(session).get(high_risk_alert.alert_id)
+    assert refreshed_low is not None and refreshed_low.status == "closed"
+    assert refreshed_high is not None and refreshed_high.status == "closed"
+
+    after_count = AlertRepository(session).count_active()
+    assert after_count == before_count - 2
+
+    # `low_risk_alert` already has one `alert_updated` row from
+    # `create_case_from_alert`'s earlier "assigned" write, so a plain count
+    # of every `alert_updated` row for these two alerts isn't the right
+    # assertion (it'd be 3, not 2) -- filter to rows whose `details.after`
+    # actually reflects the closure write this test is checking for.
+    rows = AuditLogRepository(session).list_for_case(case.case_id)
+    close_rows = [
+        r
+        for r in rows
+        if r.action == "alert_updated"
+        and r.entity_id in {"AL_LOW", "AL_HIGH"}
+        and (r.details or {}).get("after", {}).get("status") == "closed"
+    ]
+    assert len(close_rows) == 2
+
+
+# ── ROADMAP Phase 14 code-review: concurrent-assignment race fix ───────────
+
+
+def test_claim_alert_for_new_case_only_first_caller_wins(session: Session) -> None:
+    """Regression test for the concurrent-assignment race (code-review
+    finding, Phase 14): simulates the race directly by making two sequential
+    calls to the low-level atomic claim within one test -- no real thread
+    concurrency needed, this proves the atomic-claim-then-fallback logic
+    itself is correct. The first call must win (rowcount == 1) and the
+    second must lose (rowcount == 0), and the alert must end up pointing at
+    the winner's case_id, never the loser's -- i.e. exactly one `Case`
+    would ever legitimately get created from this alert, with no orphan."""
+    _seed_accounts(session, "A", "B")
+    alert = _seed_alert(session, "AL_RACE")
+    session.commit()
+
+    winner_case_id = new_case_id()
+    loser_case_id = new_case_id()
+    assert winner_case_id != loser_case_id
+
+    first_rowcount = claim_alert_for_new_case(session, alert.alert_id, winner_case_id)
+    second_rowcount = claim_alert_for_new_case(session, alert.alert_id, loser_case_id)
+
+    assert first_rowcount == 1
+    assert second_rowcount == 0
+
+    session.commit()
+    refreshed = AlertRepository(session).get(alert.alert_id)
+    assert refreshed is not None
+    assert refreshed.case_id == winner_case_id
+
+
+def test_create_case_from_alert_with_preclaimed_case_id_does_not_reset_case_id(
+    session: Session,
+) -> None:
+    """When `case_id` is given (the caller already won an atomic claim via
+    `claim_alert_for_new_case` and updated the in-memory `alert`),
+    `create_case_from_alert` must still create the `Case` row/`case_accounts`
+    links and mark the alert `status="assigned"`, without erroring or
+    double-writing `alert.case_id`."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    alert = _seed_alert(session, "AL_PRECLAIMED")
+    session.commit()
+
+    case_id = new_case_id()
+    rowcount = claim_alert_for_new_case(session, alert.alert_id, case_id)
+    assert rowcount == 1
+    alert.case_id = case_id
+
+    case = create_case_from_alert(
+        session, alert, actor_type=ActorType.SYSTEM, actor_id=None, case_id=case_id
+    )
+    session.commit()
+
+    assert case.case_id == case_id
+    assert case.status == CaseStatus.ASSIGNED
+
+    refreshed_alert = AlertRepository(session).get(alert.alert_id)
+    assert refreshed_alert is not None
+    assert refreshed_alert.case_id == case_id
+    assert refreshed_alert.status == "assigned"
+
+    linked = {ca.account_id for ca in CaseAccountRepository(session).list_for_case(case_id)}
+    assert linked == {"A", "B"}
+
+    # Only ONE case exists for this alert -- the pre-claimed one, not a
+    # second one minted internally.
+    all_cases = CaseRepository(session).list(limit=100)
+    assert [c.case_id for c in all_cases] == [case_id]

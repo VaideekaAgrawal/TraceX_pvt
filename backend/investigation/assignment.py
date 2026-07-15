@@ -23,17 +23,24 @@ from db.enums import ActorType, CaseStatus, UserRole
 from db.models.base import utcnow
 from db.models.investigation import Case
 from db.models.platform import User
+from db.repositories.investigation import CaseRepository
 from investigation.config import DEFAULT_SLA_POLICY
-from investigation.fsm import transition_case
+from investigation.fsm import VALID_TRANSITIONS, transition_case
 
 #: Statuses that count toward an investigator's workload -- everything
 #: except the three terminal/resolved statuses (ROADMAP Phase 4 plan).
+#:
+#: Derived from `fsm.VALID_TRANSITIONS` (code-review finding, Phase 14: this
+#: used to be a hand-maintained literal set with no compiler/runtime check
+#: it stayed in sync with the FSM's own taxonomy) rather than duplicated --
+#: a status counts as "open" here iff `VALID_TRANSITIONS` says it has at
+#: least one legal outgoing transition; the three terminal statuses
+#: (`CLOSED_TP`/`CLOSED_FP`/`MONITORING`) map to an empty set there, so this
+#: is exactly equivalent to the previous literal set, verified by
+#: `tests/investigation/test_assignment.py::
+#: test_open_statuses_matches_fsm_taxonomy`.
 OPEN_STATUSES: set[CaseStatus] = {
-    CaseStatus.NEW,
-    CaseStatus.ASSIGNED,
-    CaseStatus.IN_PROGRESS,
-    CaseStatus.AWAITING_REVIEW,
-    CaseStatus.ESCALATED,
+    status for status, transitions in VALID_TRANSITIONS.items() if transitions
 }
 
 
@@ -110,6 +117,71 @@ def auto_assign(
         actor_id=actor_id,
         reason="auto-assigned (workload-based)",
         extra_changes={"assigned_to": chosen_user_id, "sla_due_at": sla_due_at},
+    )
+
+
+def assign_case_to(
+    session: Session,
+    case: Case,
+    *,
+    investigator_id: str,
+    actor_type: ActorType,
+    actor_id: str | None,
+) -> Case:
+    """Manual (re)assignment to a SPECIFIC investigator -- the
+    Admin/Compliance-driven counterpart to workload-based `auto_assign`
+    (ROADMAP Phase 14: `PATCH /alerts/{alert_id}/assign`). Does not check
+    eligibility of `investigator_id` itself (active/INVESTIGATOR-role) --
+    that's the caller's job (the route, before this is ever called), same
+    division of responsibility as `auto_assign` trusting `compute_workload`'s
+    own eligibility filter rather than re-checking it here.
+
+    Three cases based on `case.status`:
+
+      - `NEW`: a real FSM transition (NEW->ASSIGNED), bundling
+        `assigned_to`/`sla_due_at` into the same `transition_case` call/
+        audit row `auto_assign` uses, computing `sla_due_at` the identical
+        way (reused, not reinvented, from `DEFAULT_SLA_POLICY`).
+      - Already open but not NEW (`ASSIGNED`/`IN_PROGRESS`/
+        `AWAITING_REVIEW`/`ESCALATED`, i.e. `OPEN_STATUSES` minus `NEW`):
+        status does NOT change -- this is a plain `assigned_to` field
+        write, not an FSM transition, logged under a dedicated
+        `case_reassigned` action so it's distinguishable from both
+        `case_assigned` (the NEW->ASSIGNED handoff) and the generic
+        `case_updated`. `sla_due_at` is recomputed the same way as the NEW
+        branch (code-review finding, Phase 14: this branch used to leave
+        the original assignee's `sla_due_at` untouched, so a reassigned
+        case handed the new investigator a stale -- possibly already
+        breached -- SLA clock). Reassigning to the SAME investigator still
+        writes a `case_reassigned` row -- no special-cased no-op, mirroring
+        `AlertRepository.mark_opened`'s precedent of an audit-only write
+        with no actual field-value change being a legitimate call.
+      - Terminal (`CLOSED_TP`/`CLOSED_FP`/`MONITORING`): raises
+        `ValueError` -- a closed/monitored case cannot be reassigned.
+    """
+    if case.status == CaseStatus.NEW:
+        sla_due_at = utcnow() + DEFAULT_SLA_POLICY.duration_for(case.priority)
+        return transition_case(
+            session,
+            case.case_id,
+            CaseStatus.ASSIGNED,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason="manually assigned by Admin/Compliance",
+            extra_changes={"assigned_to": investigator_id, "sla_due_at": sla_due_at},
+        )
+    if case.status in OPEN_STATUSES:
+        sla_due_at = utcnow() + DEFAULT_SLA_POLICY.duration_for(case.priority)
+        return CaseRepository(session).update(
+            case.case_id,
+            assigned_to=investigator_id,
+            sla_due_at=sla_due_at,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            action="case_reassigned",
+        )
+    raise ValueError(
+        f"cannot reassign case {case.case_id!r}: status {case.status.value!r} is terminal"
     )
 
 

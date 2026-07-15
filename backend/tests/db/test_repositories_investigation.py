@@ -92,6 +92,76 @@ def test_case_repository_round_trip_and_list_by_assignee(session: Session) -> No
     assert [c.case_id for c in repo.list_by_status(CaseStatus.IN_PROGRESS)] == ["CASE1"]
 
 
+def test_case_repository_count_by_status_accepts_single_status(session: Session) -> None:
+    _seed(session)
+    repo = CaseRepository(session)
+    repo.create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    repo.create(
+        case_id="CASE2",
+        primary_account_id="A1",
+        status=CaseStatus.CLOSED_FP,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    assert repo.count_by_status(CaseStatus.NEW) == 1
+    assert repo.count_by_status(CaseStatus.CLOSED_FP) == 1
+    assert repo.count_by_status(CaseStatus.ASSIGNED) == 0
+
+
+def test_case_repository_count_by_status_accepts_status_set(session: Session) -> None:
+    _seed(session)
+    repo = CaseRepository(session)
+    repo.create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.NEW,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    repo.create(
+        case_id="CASE2",
+        primary_account_id="A1",
+        status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    repo.create(
+        case_id="CASE3",
+        primary_account_id="A1",
+        status=CaseStatus.CLOSED_FP,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    open_statuses = {CaseStatus.NEW, CaseStatus.ASSIGNED, CaseStatus.IN_PROGRESS}
+    assert repo.count_by_status(open_statuses) == 2
+    assert repo.count_by_status(set()) == 0
+
+
+def test_case_repository_count_by_status_empty_when_no_cases(session: Session) -> None:
+    repo = CaseRepository(session)
+    assert repo.count_by_status(CaseStatus.NEW) == 0
+
+
 def test_case_account_repository_round_trip(session: Session) -> None:
     _seed(session)
     CaseRepository(session).create(

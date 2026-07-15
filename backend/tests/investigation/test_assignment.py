@@ -8,15 +8,18 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType, CaseLevel, CaseStatus, Priority, UserRole
 from db.models.base import utcnow
 from db.repositories.investigation import CaseRepository
-from db.repositories.platform import UserRepository
+from db.repositories.platform import AuditLogRepository, UserRepository
 from db.repositories.reference import AccountRepository
 from investigation.assignment import (
+    OPEN_STATUSES,
     NoEligibleInvestigatorError,
+    assign_case_to,
     auto_assign,
     compute_workload,
     list_overdue_cases,
 )
 from investigation.config import DEFAULT_SLA_POLICY
+from investigation.fsm import VALID_TRANSITIONS
 
 
 def _seed_account(session: Session, account_id: str = "A1") -> None:
@@ -270,3 +273,188 @@ def test_auto_assign_accepts_precomputed_workload_and_mutates_it(session: Sessio
     session.commit()
     assert updated_b.assigned_to == "U2"
     assert workload == {"U1": 1, "U2": 1}
+
+
+# ── ROADMAP Phase 14: assign_case_to (manual Admin/Compliance assignment) ──
+
+
+def test_assign_case_to_transitions_new_to_assigned_with_sla(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "NEWCASE", priority=Priority.P2)
+    session.commit()
+
+    case = CaseRepository(session).get("NEWCASE")
+    assert case is not None
+    before = utcnow()
+    updated = assign_case_to(
+        session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.status == CaseStatus.ASSIGNED
+    assert updated.assigned_to == "U1"
+    assert updated.sla_due_at is not None
+    actual = updated.sla_due_at.replace(tzinfo=None)
+    expected_min = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) - timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    expected_max = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) + timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    assert expected_min <= actual <= expected_max
+
+    rows = AuditLogRepository(session).list_for_case("NEWCASE")
+    assigned_rows = [r for r in rows if r.action == "case_assigned"]
+    assert len(assigned_rows) == 1
+
+
+def test_assign_case_to_reassigns_already_open_case_without_status_change(
+    session: Session,
+) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U2")
+    _seed_case(session, "CASE1", status=CaseStatus.IN_PROGRESS, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    updated = assign_case_to(
+        session, case, investigator_id="U2", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.status == CaseStatus.IN_PROGRESS  # unchanged
+    assert updated.assigned_to == "U2"
+
+    rows = AuditLogRepository(session).list_for_case("CASE1")
+    reassigned_rows = [r for r in rows if r.action == "case_reassigned"]
+    assert len(reassigned_rows) == 1
+    assert reassigned_rows[0].details is not None
+    assert reassigned_rows[0].details["after"].get("assigned_to") == "U2"
+
+
+def test_assign_case_to_same_investigator_still_writes_case_reassigned_row(
+    session: Session,
+) -> None:
+    """No special-cased no-op -- reassigning to the SAME investigator still
+    produces a `case_reassigned` audit row (mirrors `AlertRepository.
+    mark_opened`'s audit-only-write precedent)."""
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.ASSIGNED, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    updated = assign_case_to(
+        session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.assigned_to == "U1"
+    rows = AuditLogRepository(session).list_for_case("CASE1")
+    assert len([r for r in rows if r.action == "case_reassigned"]) == 1
+
+
+def test_assign_case_to_raises_on_terminal_status(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.CLOSED_FP, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    with pytest.raises(ValueError, match="terminal"):
+        assign_case_to(
+            session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+        )
+
+
+def test_assign_case_to_raises_on_monitoring_status(session: Session) -> None:
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_case(session, "CASE1", status=CaseStatus.MONITORING, assigned_to="U1")
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    with pytest.raises(ValueError, match="terminal"):
+        assign_case_to(
+            session, case, investigator_id="U1", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+        )
+
+
+def test_assign_case_to_reassignment_recomputes_sla_due_at(session: Session) -> None:
+    """Code-review finding, Phase 14: the reassignment branch used to leave
+    `sla_due_at` untouched, so the new investigator inherited a stale
+    (possibly already-breached) SLA clock. `sla_due_at` must be freshly
+    recomputed from `utcnow()` on reassignment, exactly like first
+    assignment -- not just left as whatever it was before."""
+    _seed_account(session)
+    _seed_investigator(session, "U1")
+    _seed_investigator(session, "U2")
+    stale_due_at = utcnow() - timedelta(days=3)
+    CaseRepository(session).create(
+        case_id="CASE1",
+        primary_account_id="A1",
+        status=CaseStatus.IN_PROGRESS,
+        level=CaseLevel.L1,
+        priority=Priority.P2,
+        assigned_to="U1",
+        sla_due_at=stale_due_at,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+    )
+    session.commit()
+
+    case = CaseRepository(session).get("CASE1")
+    assert case is not None
+    assert case.sla_due_at is not None
+    assert case.sla_due_at.replace(tzinfo=None) == stale_due_at.replace(tzinfo=None)
+
+    before = utcnow()
+    updated = assign_case_to(
+        session, case, investigator_id="U2", actor_type=ActorType.ADMIN, actor_id="ADMIN1"
+    )
+    session.commit()
+
+    assert updated.assigned_to == "U2"
+    assert updated.sla_due_at is not None
+    actual = updated.sla_due_at.replace(tzinfo=None)
+    # No longer the stale pre-reassignment value.
+    assert actual != stale_due_at.replace(tzinfo=None)
+    expected_min = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) - timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    expected_max = (
+        before + DEFAULT_SLA_POLICY.duration_for(Priority.P2) + timedelta(seconds=5)
+    ).replace(tzinfo=None)
+    assert expected_min <= actual <= expected_max
+
+
+# ── ROADMAP Phase 14 code-review: OPEN_STATUSES derives from fsm.py ────────
+
+
+def test_open_statuses_matches_fsm_taxonomy() -> None:
+    """`OPEN_STATUSES` is now derived directly from `fsm.VALID_TRANSITIONS`
+    (code-review finding, Phase 14: it used to be a hand-maintained literal
+    set with no compiler/runtime check it stayed in sync with the FSM's own
+    transition taxonomy). This test pins the equivalence so a future
+    `CaseStatus`/`VALID_TRANSITIONS` change that silently drifts the two
+    apart fails CI loudly instead of leaving a stale workload/SLA
+    definition in place.
+
+    Every status in `OPEN_STATUSES` must have at least one legal outgoing
+    transition; every status with zero legal outgoing transitions
+    (terminal: CLOSED_TP/CLOSED_FP/MONITORING) must NOT be in
+    `OPEN_STATUSES`."""
+    for status, transitions in VALID_TRANSITIONS.items():
+        if transitions:
+            assert status in OPEN_STATUSES, f"{status} has outgoing transitions but isn't open"
+        else:
+            assert status not in OPEN_STATUSES, f"{status} is terminal but marked open"
+    # And no status appears in OPEN_STATUSES that VALID_TRANSITIONS doesn't
+    # even know about.
+    assert OPEN_STATUSES <= set(VALID_TRANSITIONS)
