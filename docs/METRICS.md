@@ -449,6 +449,59 @@ Phase 9 must have `get_ego_graph` return a **summary** (node/edge counts, top-N 
 
 ---
 
+## 18. Findings A & B resolved — full real IBM HI-Small ingest, retrain (Session 19)
+
+Direct follow-up to §17's two ⚠️ findings. Obtained the actual full IBM HI-Small transaction ledger (`HI-Small_Trans.csv`, via the Kaggle API — the previous `data/ibm-transactions-for-anti-money-laundering-aml.zip` was a truncated 1 MiB partial download, confirmed by finding the identical truncated file in an unrelated sibling project directory, i.e. never fully downloaded on this machine at all) and rebuilt the DB from scratch against it.
+
+**Root cause of Finding A, confirmed:** `tracex_test_day1.csv` (the file `db/ingest.py` defaulted to) is an 8K-row hand-built India-flavoured mock using invented account ids (`PMFRAUD01` etc.) with **zero overlap** with `HI-Small_accounts.csv`'s real IBM account-id space. `HI-Small_Trans.csv` uses the *same* id space as the accounts file (pre-verified: 500,000/500,000 sampled real transactions had both endpoints present in the accounts file) — ingesting it is the actual fix, not a workaround.
+
+**Two real bugs surfaced and fixed while wiring this up** (`backend/db/ingest.py`):
+1. The raw `HI-Small_Trans.csv` header has a **literal duplicate `Account` column** (source and destination share the exact string `"Account"`, unlike the hand-built mock which was already pre-deduped to `Account`/`Account.1`). `csv.DictReader` silently collapses duplicate keys onto the *last* value — this would have dropped every transaction's source account entirely. Fixed with a pandas-style positional header de-duper (`_dedupe_header`) applied consistently in both `_iter_rows` and `validate_upload`'s required-columns check.
+2. `TRANSACTIONS_REQUIRED_COLUMNS` hard-required `Source_Occupation`/`Dest_Occupation`/`*_Declared_Income` — columns that only ever existed in the hand-built mock. IBM's real benchmark carries no KYC/occupation/income attributes at all. Split into `TRANSACTIONS_REQUIRED_COLUMNS` (core transaction fields) + `OPTIONAL_ENRICHMENT_COLUMNS` (read via `.get()`, never required).
+
+Also recalibrated `MAX_FILE_SIZE_BYTES` (200MB → 600MB) and `MAX_ROW_COUNT` (5,000,000 → 6,000,000) — both were sized against the wrong reference file (the 8K-row mock / 34MB accounts file), not the real 454MB / 5,078,346-row transactions file.
+
+**Full rebuild, run once, unattended** (`create_user` ×3 → `train_detection_model` → `run_detection_pipeline` → `generate_demo_data`, against a fresh schema):
+
+| Stage | Result |
+|---|---|
+| Accounts ingest | 166,207 customers, 518,573 accounts, 0 rows skipped |
+| Transactions ingest | **5,078,345** transactions, 0 rows skipped, 0 new accounts minted (every txn account already existed from the accounts CSV) |
+| Total ingest wall time | ~2h11m (unattended, single-threaded per-row audit-chained inserts) |
+| Detection pipeline | 44,790 alerts across 4 detection types (profile_mismatch 35,988 / structuring 3,366 / round_trip 2,000 / layering 453), 20 real cases auto-created & assigned |
+| Demo overlay (unchanged generator, re-run) | 200 KYC customers, 8 relationship clusters, 5,324 relationships, 50 historical cases, 7 golden scenarios |
+
+### Finding A — resolved, verified directly against the rebuilt DB
+
+| | §17 (broken) | **Now** |
+|---|---|---|
+| Accounts with a transaction | 362 | 515,126 |
+| Accounts with BOTH a transaction and a customer | **13** | **515,093 (99.99%)** |
+
+Sample real case (`CASE-20260714-0998E497`) account `8045732A0` now resolves to customer **"Corporation #29863"** via `accounts.customer_id` — `get_account_facts` returns a populated name/entity_type/risk_rating instead of `customer: {}`.
+
+**Residual, honestly disclosed limitation:** `occupation`/`declared_annual_income` remain `NULL` for real (non-`DEMO-`) customers — IBM's benchmark genuinely carries no such columns, so `_maybe_enrich_customer` has nothing to enrich from on the real file (it's a documented no-op there now, same as it always was, just for a different reason than before). `inflow_pct_of_declared_income` is therefore still null on real cases. Full occupation/income/PAN richness remains exclusive to the `DEMO-` KYC overlay (200 customers, decision 11). This is a real, narrower gap than §17's — a real case now has a *name* and *money flow*, just not a full income profile — not a claim that real cases are now fully KYC-rich.
+
+### Finding B — resolved, measured on the real full-scale benchmark
+
+| Metric | §2 (archive, previously cited externally) | §17 (this codebase, 314 samples, partial data) | **This codebase, measured 2026-07-15, full data** |
+|---|---|---|---|
+| Precision | 0.778 | 0.404 | **0.254** |
+| Recall | 0.609 | 1.000 | **0.173** |
+| F1 | 0.683 | 0.576 | **0.206** |
+| AUC-ROC | 0.933 | 0.661 | **0.778** |
+| Training samples | — | 314 (219/47/48) | **496,995** (347,896 train / 74,549 val / 74,550 test) |
+| Positive rate | — | — | **0.48%** (1,666 of 347,896 train-set positives) |
+| Training time | — | — | **7.4s** (GPU/CUDA) |
+
+Run: `model_run RUN-CC8AD2C6344F4525`, active. This is the first genuinely full-scale, reproducible measurement in this codebase — every one of the 5,078,345 real IBM transactions, temporal 70/15/15 split, PR-curve-optimised threshold (0.4977), same methodology `docs/cross_questions.md` already documented in prose.
+
+**These numbers are materially different from both §2 and §17 — this is expected, not a red flag.** §17's figures were a 314-sample artifact of the truncated data. §2's archive figures (0.778/0.683/0.933) were never reproduced against this codebase's actual ingest/feature/training code at any scale; at true full scale, on the real 0.48%-positive-rate account-level classification task, precision/F1 are genuinely lower — this is a known characteristic of the IBM HI-Small benchmark (extreme class imbalance, launderers structured to blend in), not a defect in this training run. AUC-ROC 0.778 shows real discriminative power. **`README.md` and `docs/cross_questions.md` corrected to cite these measured numbers** (this session); decision 11's pitch line ("trained and validated at full scale on IBM's public AML benchmark") is now literally true rather than aspirational.
+
+**Not addressed this session (carried forward):** Finding C (fact-bundle size / `get_ego_graph` summarisation) — unaffected by this rebuild, still a Phase 9 design input.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
