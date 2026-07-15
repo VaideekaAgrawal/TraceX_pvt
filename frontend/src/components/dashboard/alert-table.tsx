@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/table";
 import { AlertFiltersBar } from "@/components/dashboard/alert-filters";
 import { AssignDialog } from "@/components/dashboard/assign-dialog";
-import { BulkAssignBar } from "@/components/dashboard/bulk-assign-bar";
+import { BulkAssignBar, type AssignResult } from "@/components/dashboard/bulk-assign-bar";
 import { PaginationControls } from "@/components/dashboard/pagination-controls";
 import {
   DEFAULT_ALERT_FILTERS,
@@ -69,10 +69,17 @@ export function AlertTable({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkResults, setBulkResults] = useState<AssignResult[] | null>(null);
   const [workload, setWorkload] = useState<InvestigatorWorkloadItem[]>([]);
 
   const skipNextFetch = useRef(true);
 
+  // Deliberately does NOT touch `selected`/`bulkResults` — a refetch alone
+  // (e.g. triggered by a single-row assign, or by the effect below on a
+  // filter/sort/page change) must not silently wipe bulk-assign results an
+  // admin hasn't dismissed yet, nor drop failed-and-still-selected alerts
+  // out from under a retry in progress. See `bulk-assign-bar.tsx`'s
+  // docstring for the bug this used to cause.
   const fetchAlerts = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -85,7 +92,6 @@ export function AlertTable({
         throw new Error(typeof body.detail === "string" ? body.detail : "Failed to load alerts");
       }
       setData(body as AlertListResponse);
-      setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load alerts");
     } finally {
@@ -98,6 +104,13 @@ export function AlertTable({
       skipNextFetch.current = false;
       return;
     }
+    // A filter/sort/page/pageSize change invalidates the previous page's
+    // selection and any bulk-assign results shown for it — this is the
+    // one place selection is cleared wholesale (as opposed to the
+    // per-alert clearing `handleBulkAssignComplete` below does after a
+    // bulk-assign submit).
+    setSelected(new Set());
+    setBulkResults(null);
     void fetchAlerts();
   }, [fetchAlerts]);
 
@@ -142,6 +155,20 @@ export function AlertTable({
   }
 
   function handleAssigned() {
+    // Single-row assign (via `AssignDialog`), which is independent of the
+    // bulk-select flow — leave `selected`/`bulkResults` untouched.
+    void fetchAlerts();
+    onAssignSuccess?.();
+  }
+
+  function handleBulkAssignComplete(succeededAlertIds: string[]) {
+    // Only drop the alerts that actually succeeded: failed alerts stay
+    // selected so a retry doesn't require re-picking them from the table.
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of succeededAlertIds) next.delete(id);
+      return next;
+    });
     void fetchAlerts();
     onAssignSuccess?.();
   }
@@ -158,12 +185,15 @@ export function AlertTable({
         isAdmin={isAdmin}
       />
 
-      {isAdmin && selected.size > 0 && (
+      {isAdmin && (selected.size > 0 || bulkResults !== null) && (
         <BulkAssignBar
           selectedAlertIds={[...selected]}
           investigators={workload}
-          onDone={handleAssigned}
+          results={bulkResults}
+          onResultsChange={setBulkResults}
+          onAssignComplete={handleBulkAssignComplete}
           onClearSelection={() => setSelected(new Set())}
+          onDismissResults={() => setBulkResults(null)}
         />
       )}
 

@@ -51,6 +51,22 @@ export function AlertFiltersBar({
     onChange({ ...filters, [key]: value });
   }
 
+  // "Unassigned only" and "Assigned to <investigator>" are mutually
+  // exclusive filters — an alert can't simultaneously be unassigned and
+  // assigned to someone. The backend rejects the combination with a 400
+  // (real validation, this is a UX courtesy on top of that), but leaving
+  // both controls independently settable let an admin silently get
+  // `total_count=0` with no explanation. Enforce exclusivity directly in
+  // the setters so the two controls can never disagree, rather than
+  // relying on each `<Select>`/`<Checkbox>`'s `disabled` prop alone.
+  function setAssignedTo(value: string) {
+    onChange({ ...filters, assignedTo: value, unassignedOnly: value ? false : filters.unassignedOnly });
+  }
+
+  function setUnassignedOnly(checked: boolean) {
+    onChange({ ...filters, unassignedOnly: checked, assignedTo: checked ? "" : filters.assignedTo });
+  }
+
   const hasActiveFilters =
     JSON.stringify(filters) !== JSON.stringify(DEFAULT_ALERT_FILTERS);
 
@@ -178,9 +194,18 @@ export function AlertFiltersBar({
         <Field label="Assigned to">
           <Select
             value={filters.assignedTo || ALL}
-            onValueChange={(value) => set("assignedTo", value === ALL ? "" : String(value))}
+            onValueChange={(value) => setAssignedTo(value === ALL ? "" : String(value))}
+            disabled={filters.unassignedOnly}
           >
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger
+              size="sm"
+              className="w-40"
+              title={
+                filters.unassignedOnly
+                  ? "Unset “Unassigned only” to filter by investigator"
+                  : undefined
+              }
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -199,9 +224,18 @@ export function AlertFiltersBar({
         <Checkbox
           id="unassigned-only"
           checked={filters.unassignedOnly}
-          onCheckedChange={(checked) => set("unassignedOnly", checked)}
+          disabled={!!filters.assignedTo}
+          onCheckedChange={(checked) => setUnassignedOnly(!!checked)}
         />
-        <Label htmlFor="unassigned-only" className="text-sm font-normal">
+        <Label
+          htmlFor="unassigned-only"
+          className="text-sm font-normal"
+          title={
+            filters.assignedTo
+              ? "Clear the “Assigned to” filter to use this"
+              : undefined
+          }
+        >
           Unassigned only
         </Label>
       </div>

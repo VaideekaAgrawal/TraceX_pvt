@@ -4,13 +4,13 @@
  * curated `action`-allowlist feed — `action` is a repeated query param
  * (`?action=case_assigned&action=escalated&...`), read via `getAll` rather
  * than `Object.fromEntries` (which would silently drop all but the last
- * value).
+ * value). Backend-error mapping is centralized in `route-handler.ts` (see
+ * that file for why).
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import { BackendApiError } from "@/lib/api/backend";
-import { BackendUnavailableError } from "@/lib/api/auth-client";
 import { listAuditLog } from "@/lib/api/audit-client";
+import { withBackendErrorMapping } from "@/lib/api/route-handler";
 import type { AuditLogParams } from "@/lib/api/types";
 
 export async function GET(request: NextRequest) {
@@ -26,19 +26,11 @@ export async function GET(request: NextRequest) {
     offset: searchParams.get("offset") ?? undefined,
   };
 
-  try {
+  return withBackendErrorMapping(async () => {
     const result = await listAuditLog(params);
     if (result === null) {
       return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
     }
     return NextResponse.json(result, { status: 200 });
-  } catch (err) {
-    if (err instanceof BackendUnavailableError) {
-      return NextResponse.json({ detail: err.message }, { status: 502 });
-    }
-    if (err instanceof BackendApiError) {
-      return NextResponse.json({ detail: err.message }, { status: err.status });
-    }
-    throw err;
-  }
+  });
 }

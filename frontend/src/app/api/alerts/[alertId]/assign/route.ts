@@ -9,12 +9,14 @@
  * bitten once assuming stale Next.js semantics in Phase 13, per that
  * phase's `middleware` vs `proxy` note): `params` is a `Promise`, same as
  * Next.js 15, and must be awaited.
+ *
+ * Backend-error mapping (for `assignAlert`'s thrown errors) is centralized
+ * in `route-handler.ts` (see that file for why).
  */
 import { NextResponse } from "next/server";
 
-import { BackendApiError } from "@/lib/api/backend";
-import { BackendUnavailableError } from "@/lib/api/auth-client";
 import { assignAlert } from "@/lib/api/alerts-client";
+import { withBackendErrorMapping } from "@/lib/api/route-handler";
 import type { AssignAlertRequest } from "@/lib/api/types";
 
 export async function PATCH(
@@ -34,16 +36,8 @@ export async function PATCH(
     return NextResponse.json({ detail: "investigator_id is required" }, { status: 400 });
   }
 
-  try {
+  return withBackendErrorMapping(async () => {
     const result = await assignAlert(alertId, body.investigator_id);
     return NextResponse.json(result, { status: 200 });
-  } catch (err) {
-    if (err instanceof BackendUnavailableError) {
-      return NextResponse.json({ detail: err.message }, { status: 502 });
-    }
-    if (err instanceof BackendApiError) {
-      return NextResponse.json({ detail: err.message }, { status: err.status });
-    }
-    throw err;
-  }
+  });
 }

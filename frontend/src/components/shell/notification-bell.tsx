@@ -13,6 +13,17 @@
  * invariant this component's Phase 13 docstring already called out. There
  * is no read/unread tracking in this phase; it's a real total, not an
  * unread total.
+ *
+ * Known limitation, deliberately not fixed this phase: `GET /audit-log`
+ * forces Investigators to see only their own actions (`actor_id=self`,
+ * enforced backend-side), and a `case_assigned`/`case_reassigned` audit
+ * row's `actor_id` is the *assigning Admin*, not the *receiving*
+ * Investigator. So an Investigator's bell can only ever surface their own
+ * recent activity — it can never show "a case was just assigned to you by
+ * an Admin," which is the scenario this feed is most obviously meant for.
+ * A real fix needs a query the Investigator's own cases (e.g. `GET
+ * /cases?assigned_to=me`), which doesn't exist yet — that's explicitly
+ * Phase 15's job, not this one's.
  */
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
