@@ -14,6 +14,11 @@ from db.repositories.orchestration import RelationshipRepository
 from db.repositories.reference import AccountRepository, CustomerRepository
 from investigation import relationship_discovery as rd
 
+#: Phase 8 (decision 9): `value_hash` is now a keyed HMAC. Any non-empty key works
+#: here — these tests assert DISCOVERY behaviour, not the hash construction (that's
+#: `tests/investigation/test_value_hash_hmac.py`). An empty key is refused outright.
+_TEST_HMAC_KEY = "test-pii-hmac-key"
+
 
 def _make_customer(
     session: Session,
@@ -54,7 +59,9 @@ def test_exact_pan_match_creates_high_confidence_relationship(session: Session) 
     _make_customer(session, "C2", name="Priya Nair", pan="ABC1234Z")
     session.commit()
 
-    stats = rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    stats = rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     assert stats.candidate_pool_size == 2
@@ -72,7 +79,9 @@ def test_fuzzy_name_match_uses_ratio_as_confidence(session: Session) -> None:
     _make_customer(session, "C2", name="Rajesh Kumar Sharrma", income_bracket="10L-25L")
     session.commit()
 
-    rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     rels = {r.shared_attribute: r for r in RelationshipRepository(session).list_for_entity("C1")}
@@ -87,7 +96,9 @@ def test_dissimilar_names_do_not_match(session: Session) -> None:
     _make_customer(session, "C2", name="Priya Nair", pan="BBBBB0002B")
     session.commit()
 
-    stats = rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    stats = rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     assert stats.relationships_created == 0
@@ -100,7 +111,9 @@ def test_shared_branch_city_creates_weak_confidence_relationship(session: Sessio
     _make_account(session, "A2", "C2", branch_city="Mumbai")
     session.commit()
 
-    rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     rels = {r.shared_attribute: r for r in RelationshipRepository(session).list_for_entity("C1")}
@@ -116,7 +129,9 @@ def test_candidate_pool_excludes_customers_with_neither_pan_nor_income_bracket(
     _make_customer(session, "C_NO_SIGNAL", name="No KYC Signal")  # neither pan nor income_bracket
     session.commit()
 
-    stats = rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    stats = rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
 
     assert stats.candidate_pool_size == 2  # C_NO_SIGNAL gated out
@@ -128,11 +143,15 @@ def test_rerun_is_idempotent(session: Session) -> None:
     _make_customer(session, "C2", name="Priya Nair", pan="AAAAA0001A")
     session.commit()
 
-    first = rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    first = rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
     assert first.relationships_created == 1
 
-    second = rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+    second = rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )
     session.commit()
     assert second.relationships_created == 0
     assert second.relationships_skipped_existing == 1
@@ -150,4 +169,6 @@ def test_candidate_pool_exceeding_safety_valve_raises(
     session.commit()
 
     with pytest.raises(ValueError, match="exceeds MAX_CANDIDATE_POOL_SIZE"):
-        rd.discover_relationships(session, actor_type=ActorType.SYSTEM, actor_id=None)
+        rd.discover_relationships(
+        session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
+    )

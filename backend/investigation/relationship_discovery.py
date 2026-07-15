@@ -45,14 +45,19 @@ existing one-cluster-one-attribute demo-data precedent):
 | income_bracket   | exact, both non-null                           | 0.35            |
 | branch           | exact on `Account.branch_city`, >=1 shared city| 0.25            |
 
-`value_hash` is a one-way sha256 of the normalized value (pan/
-income_bracket/branch); for `name`, sha256 of the normalized-and-sorted pair
-(`f"{min(a,b)}::{max(a,b)}"`) since there's no single shared literal value.
-`method = "shared_attribute_v1"` on every row.
+`value_hash` is a **keyed HMAC-SHA256** of the normalized value (pan/
+income_bracket/branch), keyed on `Settings.pii_hmac_key`; for `name`, the HMAC
+of the normalized-and-sorted pair (`f"{min(a,b)}::{max(a,b)}"`) since there's no
+single shared literal value. `method = "shared_attribute_v1"` on every row.
+
+Phase 8 (decision 9) changed this from a bare SHA256: a PAN is ten characters
+from a known alphabet in a known layout, so an unsalted digest of one is
+brute-forceable offline by anyone holding a leaked table. See `_value_hash`.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import combinations
@@ -89,13 +94,38 @@ class DiscoveryStats:
     relationships_skipped_existing: int
 
 
-def _value_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _value_hash(value: str, *, hmac_key: str) -> str:
+    """Keyed HMAC-SHA256 of a PII value (ROADMAP Phase 8, committed decision 9;
+    resolves the item Session 11 deferred).
+
+    **Why not a plain SHA256, which is what this was.** A hash only hides its
+    input when the input is hard to guess, and these inputs are not: a PAN is ten
+    characters from a known alphabet in a known layout, an Aadhaar is twelve
+    digits, an Indian mobile is ten. An attacker with a leaked `relationships`
+    table and a laptop can enumerate the entire space and match the digests back
+    to the raw values offline. Unsalted SHA256 of a low-entropy identifier is not
+    pseudonymisation; it is an encoding.
+
+    Keying it with a secret the database does not contain removes that: without
+    `pii_hmac_key`, the digests are useless even to someone holding the whole
+    table.
+
+    Refuses an empty key rather than quietly degrading to an unkeyed digest —
+    a silently-unkeyed hash is precisely the bug this replaces, and it would be
+    invisible in the data. Relationship rows are *derived*, so rotating the key
+    is a regenerate via `scripts/discover_relationships.py`, not a migration."""
+    if not hmac_key:
+        raise ValueError(
+            "pii_hmac_key is not set — refusing to write an unkeyed hash of a PII "
+            "value (ROADMAP Phase 8, decision 9). Set PII_HMAC_KEY (see "
+            "backend/.env.example)."
+        )
+    return hmac.new(hmac_key.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _name_pair_hash(name_a: str, name_b: str) -> str:
+def _name_pair_hash(name_a: str, name_b: str, *, hmac_key: str) -> str:
     lo, hi = sorted((name_a, name_b))
-    return _value_hash(f"{lo}::{hi}")
+    return _value_hash(f"{lo}::{hi}", hmac_key=hmac_key)
 
 
 def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[str]]:
@@ -114,7 +144,7 @@ def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[s
 
 
 def _matches_for_pair(
-    a: Customer, b: Customer, branch_cities: dict[str, set[str]]
+    a: Customer, b: Customer, branch_cities: dict[str, set[str]], *, hmac_key: str
 ) -> list[tuple[str, str, float]]:
     """Every `(shared_attribute, value_hash, confidence)` this pair matches
     on -- zero, one, or several (a pair can match on more than one
@@ -125,15 +155,21 @@ def _matches_for_pair(
     if a.pan and b.pan:
         norm_a, norm_b = a.pan.strip().upper(), b.pan.strip().upper()
         if norm_a == norm_b:
-            matches.append(("pan", _value_hash(norm_a), _PAN_CONFIDENCE))
+            matches.append(("pan", _value_hash(norm_a, hmac_key=hmac_key), _PAN_CONFIDENCE))
 
     ratio = SequenceMatcher(None, a.name, b.name).ratio()
     if ratio >= _NAME_MATCH_THRESHOLD:
-        matches.append(("name", _name_pair_hash(a.name, b.name), round(ratio, 2)))
+        matches.append(
+            ("name", _name_pair_hash(a.name, b.name, hmac_key=hmac_key), round(ratio, 2))
+        )
 
     if a.income_bracket and b.income_bracket and a.income_bracket == b.income_bracket:
         matches.append(
-            ("income_bracket", _value_hash(a.income_bracket), _INCOME_BRACKET_CONFIDENCE)
+            (
+                "income_bracket",
+                _value_hash(a.income_bracket, hmac_key=hmac_key),
+                _INCOME_BRACKET_CONFIDENCE,
+            )
         )
 
     shared_cities = branch_cities.get(a.customer_id, set()) & branch_cities.get(
@@ -144,13 +180,19 @@ def _matches_for_pair(
         # at demo/current-data scale -- one row per attribute TYPE (not per
         # matched value), hashing the lexicographically-first shared city
         # so the result is deterministic regardless of set iteration order.
-        matches.append(("branch", _value_hash(sorted(shared_cities)[0]), _BRANCH_CONFIDENCE))
+        matches.append(
+            (
+                "branch",
+                _value_hash(sorted(shared_cities)[0], hmac_key=hmac_key),
+                _BRANCH_CONFIDENCE,
+            )
+        )
 
     return matches
 
 
 def discover_relationships(
-    session: Session, *, actor_type: ActorType, actor_id: str | None
+    session: Session, *, actor_type: ActorType, actor_id: str | None, hmac_key: str
 ) -> DiscoveryStats:
     """The batch discovery job: pulls the gated candidate pool
     (`CustomerRepository.list_relationship_candidate_pool`), does the
@@ -158,6 +200,11 @@ def discover_relationships(
     `Relationship` rows via `find_existing`-guarded `create()` so a rerun
     is idempotent (zero new rows for a pair/attribute combination already
     discovered).
+
+    `hmac_key` (from `Settings.pii_hmac_key`) keys the `value_hash` HMAC --
+    required, and empty is refused rather than degraded to an unkeyed digest;
+    see `_value_hash`. Changing the key changes every hash, so a rotation means
+    re-running this job: the rows are derived, not source.
 
     Raises `ValueError` if the gated pool exceeds `MAX_CANDIDATE_POOL_SIZE`
     -- see module docstring's "safety valve, not the primary mechanism"."""
@@ -188,7 +235,9 @@ def discover_relationships(
         # be a caller-side responsibility via a local `_canonical_pair`
         # helper here, now centralized in the repository so it can't be
         # skipped by a future second writer).
-        for shared_attribute, value_hash, confidence in _matches_for_pair(a, b, branch_cities):
+        for shared_attribute, value_hash, confidence in _matches_for_pair(
+            a, b, branch_cities, hmac_key=hmac_key
+        ):
             if (
                 relationship_repo.find_existing(a.customer_id, b.customer_id, shared_attribute)
                 is not None

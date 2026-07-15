@@ -1,20 +1,27 @@
 """
 AI Explanation of Alert / per-account explanation panel -- ROADMAP Phase 5.
 
-**Deliberately a Phase-5 self-contained port, NOT the Phase 8 AI substrate.**
-`SYSTEM_DEVELOPMENT_PLAN.md` §4.1 calls the archive's existing per-account
-LLM explanation panel *already built and genuinely strong*: facts injected
-into the prompt (not generated), low temperature, cached, labeled
-AI-generated. This module ports that behavior near-verbatim (`_call_openrouter`
-from `archive/fund-flow-tracker/api/server.py:111-134`, the prompt template
-from `server.py:767-795`, reworded for the data this codebase's schema
-actually has available) so L1 triage gets this feature now, without waiting
-on -- or duplicating -- Phase 8's LLM gateway/PII-redaction middleware/tool
-catalog. There is NO provider abstraction, NO tool-calling, NO guardrail
-middleware here: a direct `httpx` POST to OpenRouter. Phase 8 may replace or
-wrap this; this module should not itself grow gateway-shaped features later
-(if it starts needing multi-provider routing, tool calls, or free-text
-input, that need belongs to Phase 8, not an extension of this file).
+Originally a Phase-5 self-contained port. `SYSTEM_DEVELOPMENT_PLAN.md` §4.1
+calls the archive's existing per-account LLM explanation panel *already built
+and genuinely strong*: facts injected into the prompt (not generated), low
+temperature, cached, labeled AI-generated. This module ported that behavior
+near-verbatim (`_call_openrouter` from `archive/fund-flow-tracker/api/
+server.py:111-134`, the prompt template from `server.py:767-795`, reworded for
+the data this codebase's schema actually has available).
+
+**ROADMAP Phase 8 replaced the call underneath it.** What was a direct `httpx`
+POST to OpenRouter now goes through `orchestration.gateway.call_llm` — the
+`openai` SDK against a configurable `base_url` (committed decision 6). The
+observable behavior of `explain_account` is unchanged by that port: same
+prompt, same temperature, same cache semantics, same "a failed call is never
+persisted as a cached success" contract. What changed is only *how* the bytes
+leave the process.
+
+This module still has NO tool-calling and NO guardrail middleware, and should
+not grow them: the tool catalog, grounding contract, and PII egress gate are
+Phase 8's own modules (`orchestration/tools/`, `orchestration/grounding.py`,
+`orchestration/redaction.py`). If this file starts needing tool calls or
+free-text input, that need belongs there, not in an extension of this one.
 
 **Guardrail property preserved exactly** (CLAUDE.md: "the existing per-
 account LLM explanation is defensible... because it can't be manipulated by
@@ -47,25 +54,24 @@ from detection.scoring.ensemble import RoleClassifier
 from foundation.config import Settings
 from investigation.account_facts import transaction_stats
 from investigation.case_graph import CASE_SCOPE_TRANSACTION_LIMIT, build_case_graph_store
-from orchestration.llm_client import (
+from orchestration.gateway import (
     _NOT_CONFIGURED_MESSAGE,  # noqa: F401 -- re-exported
     ExplanationUnavailableError,
     find_cached_interaction,
     generate_and_persist_explanation,
 )
-from orchestration.llm_client import call_openrouter as _call_openrouter
+from orchestration.gateway import call_llm as _call_llm
 
-# `_call_openrouter`/`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`
-# are re-exported at module level (not just imported for internal use) --
-# ROADMAP Phase 6: moved verbatim into `orchestration.llm_client` (renamed
-# `call_openrouter`), imported back here under the original names so this
-# module's existing behavior, and every existing test that monkeypatches
-# `account_explanation._call_openrouter` or references
-# `account_explanation.ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE`,
-# needs zero changes. `explain_account` still calls `_call_openrouter`
-# itself, passed as `generate_and_persist_explanation`'s `call_fn` --
-# resolved in THIS module's frame, so the monkeypatch target keeps working
-# exactly as before (see `orchestration.llm_client`'s module docstring).
+# `_call_llm`/`ExplanationUnavailableError`/`_NOT_CONFIGURED_MESSAGE` are
+# re-exported at module level (not just imported for internal use). Phase 6
+# moved them into a shared module; ROADMAP Phase 8 replaced that module's raw
+# httpx POST with the `openai`-SDK gateway (`orchestration.gateway`) and
+# renamed the call `call_openrouter` -> `call_llm`, since the gateway is no
+# longer OpenRouter-specific — it targets any OpenAI-compatible `base_url`
+# (committed decision 6). `explain_account` still calls `_call_llm` itself,
+# passed as `generate_and_persist_explanation`'s `call_fn` — resolved in THIS
+# module's frame, so the monkeypatch seam stays intact (see
+# `orchestration.gateway`'s module docstring).
 
 
 def _assemble_facts(session: Session, case_id: str, account_id: str) -> dict[str, Any]:
@@ -207,10 +213,10 @@ def explain_account(
 
     Unless `force=True`, checks `ai_interactions` for a prior `RECOMMENDATION`
     interaction for this exact (case, account) and returns it (`cached=True`)
-    without calling the LLM again (`orchestration.llm_client.
+    without calling the LLM again (`orchestration.gateway.
     find_cached_interaction`, keyed on `facts["account_id"]`). Otherwise
-    assembles fresh facts and calls `_call_openrouter` via `orchestration.
-    llm_client.generate_and_persist_explanation` (the shared cache-lookup
+    assembles fresh facts and calls `_call_llm` via `orchestration.
+    gateway.generate_and_persist_explanation` (the shared cache-lookup
     and generate-and-persist tail this module shares with `orchestration.
     pattern_explanation.explain_pattern`, code-review finding, Phase 6): on
     success, persists a new `ai_interactions` row (does NOT commit -- caller
@@ -244,7 +250,7 @@ def explain_account(
     try:
         interaction = generate_and_persist_explanation(
             session,
-            call_fn=_call_openrouter,
+            call_fn=_call_llm,
             prompt=prompt,
             settings=settings,
             case_id=case_id,

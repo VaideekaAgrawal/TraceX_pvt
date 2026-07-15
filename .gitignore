@@ -38,3 +38,6 @@ archive/fund-flow-tracker/frontend/.next/
 # OS
 .DS_Store
 Thumbs.db
+
+# uv lockfile — nothing in CI uses uv; this is a local artifact.
+backend/uv.lock

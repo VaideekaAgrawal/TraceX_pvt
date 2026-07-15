@@ -109,7 +109,7 @@ def _load_kyc_pool(session: Session, num_kyc_customers: int) -> list[Customer]:
 
 
 def run_demo_data_studio(
-    session: Session, *, actor_type: ActorType, actor_id: str | None
+    session: Session, *, actor_type: ActorType, actor_id: str | None, hmac_key: str
 ) -> DemoSeedSummary:
     """Orchestrate all five sub-generators. Each of the four RANDOM
     generators gets its own independent `random.Random(DEMO_SEED + offset)`
@@ -118,7 +118,12 @@ def run_demo_data_studio(
     did or didn't actually execute this call (a shared RNG's output would
     depend on how many random draws the earlier generators made, which
     changes based on short-circuiting). `relationship_discovery` is
-    deterministic (no RNG) -- see module docstring."""
+    deterministic (no RNG) -- see module docstring.
+
+    `hmac_key` (from `Settings.pii_hmac_key`) keys the relationship-discovery
+    stage's `value_hash` HMAC (ROADMAP Phase 8, decision 9). Required: an empty
+    key is refused rather than silently degraded to an unkeyed digest.
+    """
     cfg = DEFAULT_DEMO_DATA_CONFIG
     log_repo = IngestionLogRepository(session)
     summary = DemoSeedSummary()
@@ -154,7 +159,9 @@ def run_demo_data_studio(
     if _marker_done(log_repo, _RELATIONSHIP_DISCOVERY_MARKER):
         summary.already_seeded.append("relationship_discovery")
     else:
-        stats = discover_relationships(session, actor_type=actor_type, actor_id=actor_id)
+        stats = discover_relationships(
+            session, actor_type=actor_type, actor_id=actor_id, hmac_key=hmac_key
+        )
         session.flush()
         _mark_done(
             log_repo, _RELATIONSHIP_DISCOVERY_MARKER,

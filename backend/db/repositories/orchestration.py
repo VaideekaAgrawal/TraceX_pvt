@@ -107,7 +107,7 @@ class AiInteractionRepository(BaseRepository[AiInteraction]):
         this case, but `facts[key] == value` isn't a portable SQL predicate
         (SQLite's JSON1 extension and Postgres's `jsonb` operators diverge),
         so that last narrowing step is each caller's job (`orchestration.
-        llm_client.find_cached_interaction`), not this method's.
+        gateway.find_cached_interaction`), not this method's.
 
         Ordered by `created_at` descending *before* `.limit()` (code-review
         finding, Phase 5: without this, once a case passed the limit the

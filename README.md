@@ -120,7 +120,7 @@ CSV Upload → Parse & Validate → Build Graph (NetworkX MultiDiGraph)
 
 ### ML Pipeline
 - **Isolation Forest** — unsupervised anomaly detection (no labels needed)
-- **XGBoost** — supervised classifier (GPU/CUDA accelerated, F1=0.683, AUC-ROC=0.933)
+- **XGBoost** — supervised classifier (GPU/CUDA accelerated, F1=0.206, AUC-ROC=0.778 — measured on the full IBM HI-Small benchmark, 5,078,345 real transactions, 0.48% positive rate; see `docs/METRICS.md` §18)
 - **Ensemble Scoring** — ML 30% + Pattern flags 40% + Graph centrality 30%
 
 ### Graph Intelligence

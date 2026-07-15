@@ -4,9 +4,10 @@ Real ingest path for the two source CSVs Phase 1 seeds the pilot DB from
 "Seed/ingest path for the synthetic dataset with upload validation"):
 
     data/HI-Small_accounts.csv    -> customers + accounts (KYC-ish registry)
-    data/tracex_test_day1.csv     -> transactions (+ customer occupation/
-                                      income enrichment where the account
-                                      already has a linked customer)
+    data/HI-Small_Trans.csv       -> transactions (+ customer occupation/
+                                      income enrichment where the source row
+                                      carries it and the account already has
+                                      a linked customer)
 
 No API/auth layer exists yet (Phase 2+), so the entry point here is a plain
 callable + CLI (`python -m db.ingest`), not an HTTP endpoint. A later upload
@@ -23,16 +24,27 @@ The transactions CSV is ingested second; any `source_account`/`dest_account`
 it references that isn't already in `accounts` gets created as a minimal
 account row with `customer_id=NULL` — exactly the case the schema doc's own
 nullable-FK reasoning anticipates ("some txn accounts have no KYC record").
-In the actual two files at repo root there is **zero account-id overlap**
-between them (verified: `HI-Small_accounts.csv` is the full IBM HI-Small
-account registry, `tracex_test_day1.csv` is a small hand-built demo/test
-transaction set using different, txn-scenario-named account ids like
-`PMFRAUD01`) — so on this real data every transaction account ends up
-customer_id=NULL and the "enrich customers.occupation/declared_annual_income"
-step (below) never finds a linked customer to enrich. The enrichment code
-path is still implemented (and unit-tested with synthetic overlapping data)
-for correctness against future/other data where the two id spaces do
-overlap; it is a documented no-op on today's real files, not a bug.
+
+**Corrected finding (previously documented here as expected, was actually a
+data-source bug — see `docs/SESSION_LOG.md` post-Phase-8 verification and
+`docs/METRICS.md` §17/§18):** the transactions source used to default to
+`tracex_test_day1.csv`, an 8K-row hand-built mock using invented,
+txn-scenario-named account ids (`PMFRAUD01` etc.) that have **zero overlap**
+with `HI-Small_accounts.csv`'s real IBM account-id space — so on that file
+every transaction account ended up `customer_id=NULL` and no case was ever
+both investigable (has money flow) and KYC-linked (has a customer). The real
+`HI-Small_Trans.csv` uses the *same* account-id space as
+`HI-Small_accounts.csv` (verified: 500,000/500,000 sampled real transactions
+have both endpoints present in the accounts file) — ingesting it is the fix,
+not a workaround: transaction accounts now correctly resolve to real
+customers via the accounts-CSV-authoritative join described above.
+`tracex_test_day1.csv` remains ingestible via an explicit `--transactions-csv`
+flag (its `Source_Occupation`/`Dest_Occupation`/`Declared_Income` columns are
+real enrichment data *if* the id spaces ever overlap), but is no longer the
+default — the real file has no occupation/income columns at all (IBM's
+benchmark carries no KYC attributes), so those columns are optional, not
+required (see `TRANSACTIONS_REQUIRED_COLUMNS` vs `OPTIONAL_ENRICHMENT_COLUMNS`
+below).
 
 Idempotency has two layers:
   - File-level: `ingestion_log.file_hash` (PK) — a file already logged with
@@ -74,7 +86,14 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ACCOUNTS_CSV = _REPO_ROOT / "data" / "HI-Small_accounts.csv"
-DEFAULT_TRANSACTIONS_CSV = _REPO_ROOT / "data" / "tracex_test_day1.csv"
+# The real IBM HI-Small transaction ledger (5,078,346 rows, same account-ID
+# space as HI-Small_accounts.csv — see module docstring). Was
+# `tracex_test_day1.csv` (an 8K-row hand-built mock whose invented account
+# ids never overlap the real accounts file at all, so every transaction
+# account it touched got customer_id=NULL): that file is still available for
+# explicit `--transactions-csv` use, but the default seed path now ingests
+# the real file so real cases actually join to a real customer.
+DEFAULT_TRANSACTIONS_CSV = _REPO_ROOT / "data" / "HI-Small_Trans.csv"
 
 # ---------------------------------------------------------------------------
 # Upload validation (SYSTEM_DEVELOPMENT_PLAN.md "Upload validation" /
@@ -83,8 +102,11 @@ DEFAULT_TRANSACTIONS_CSV = _REPO_ROOT / "data" / "tracex_test_day1.csv"
 # later API endpoint wraps this same ingest function directly, so validation
 # is applied exactly as if the file arrived over the wire.
 # ---------------------------------------------------------------------------
-MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024  # 200MB — comfortably above the real
-# ~34MB accounts.csv while still bounding a pathological/malicious upload.
+MAX_FILE_SIZE_BYTES = 600 * 1024 * 1024  # 600MB — recalibrated to the real
+# full-scale IBM HI-Small transactions file (~454MB, see module docstring:
+# the previous 200MB ceiling was sized against the hand-built 8K-row mock,
+# never against the actual benchmark file this product trains/demos on)
+# while still bounding a pathological/malicious upload by a wide margin.
 ALLOWED_EXTENSIONS = frozenset({".csv"})
 # mimetypes has no magic-byte sniffing without an extra dependency; for a
 # same-machine ingest of local files the extension is the reliable signal.
@@ -94,12 +116,23 @@ ALLOWED_EXTENSIONS = frozenset({".csv"})
 # legitimate file is never rejected purely because `mimetypes` guessed
 # nothing or guessed conservatively.
 ALLOWED_MIME_TYPES = frozenset({"text/csv", "application/vnd.ms-excel", "text/plain", None})
-MAX_ROW_COUNT = 5_000_000  # sanity ceiling, not a real capacity limit
+MAX_ROW_COUNT = 6_000_000  # sanity ceiling, recalibrated the same way as
+# MAX_FILE_SIZE_BYTES above — the real file has 5,078,346 data rows.
 MIN_ROW_COUNT = 1
 
 ACCOUNTS_REQUIRED_COLUMNS = frozenset(
     {"Bank Name", "Bank ID", "Account Number", "Entity ID", "Entity Name"}
 )
+# Core columns every supported transactions source has. Occupation/declared-
+# income columns (`Source_Occupation` etc.) are deliberately NOT required
+# here: they only ever existed in the hand-built `tracex_test_day1.csv` mock
+# (see module docstring) — the real IBM `HI-Small_Trans.csv` has no such
+# columns at all, since IBM's benchmark carries no KYC attributes, only the
+# account/entity registry (`HI-Small_accounts.csv`) and the transaction ledger
+# with ground-truth `Is Laundering` labels. `_maybe_enrich_customer` already
+# treats them as optional per-row data; this just stops the file-level
+# validation from rejecting a wholly legitimate source file that never had
+# them.
 TRANSACTIONS_REQUIRED_COLUMNS = frozenset(
     {
         "Timestamp",
@@ -113,11 +146,18 @@ TRANSACTIONS_REQUIRED_COLUMNS = frozenset(
         "Payment Currency",
         "Payment Format",
         "Is Laundering",
-        "Source_Occupation",
-        "Source_Declared_Income",
-        "Dest_Occupation",
-        "Dest_Declared_Income",
     }
+)
+# Enrichment-only columns: present in `tracex_test_day1.csv`, absent from the
+# real `HI-Small_Trans.csv`. Read via `row.get(...)` (never `row[...]`)
+# everywhere, since `csv.DictReader` simply omits keys for columns the
+# header never declared at all — as opposed to `_missing_fields`, which
+# covers a column the header declares but a given *row* leaves blank/short.
+OPTIONAL_ENRICHMENT_COLUMNS = (
+    "Source_Occupation",
+    "Source_Declared_Income",
+    "Dest_Occupation",
+    "Dest_Declared_Income",
 )
 
 # ---------------------------------------------------------------------------
@@ -272,7 +312,13 @@ def validate_upload(
                 if header is None:
                     errors.append("file has no header row")
                 elif required_columns is not None:
-                    missing = required_columns - set(header)
+                    # Dedupe first (see `_dedupe_header`) — a raw header with
+                    # a literal repeated column name (e.g. `HI-Small_Trans.
+                    # csv`'s two `Account` columns) must be compared the same
+                    # way `_iter_rows` will actually key each row, or a
+                    # legitimately-present-but-duplicated column reads as
+                    # "missing" here.
+                    missing = required_columns - set(_dedupe_header(header))
                     if missing:
                         errors.append(f"missing required columns: {sorted(missing)}")
                 row_count = sum(1 for _ in reader)
@@ -397,9 +443,44 @@ def _parse_money(raw: str) -> float | None:
         return None
 
 
-def _iter_rows(path: Path) -> Iterator[dict[str, str]]:
+def _dedupe_header(header: list[str]) -> list[str]:
+    """Pandas-style positional de-duplication of a CSV header row: the first
+    occurrence of a name keeps it, each subsequent occurrence gets a
+    `.1`/`.2`/... suffix.
+
+    `csv.DictReader` collapses duplicate keys onto the *last* value seen per
+    row instead of preserving both — on the real `HI-Small_Trans.csv`, whose
+    header literally repeats `Account` (source and destination columns share
+    the exact same name), that silently discarded every transaction's source
+    account, leaving only the destination behind under the one `"Account"`
+    key. `tracex_test_day1.csv` sidesteps this because it was hand-built with
+    an already-deduped header (`Account.1`); this function makes both shapes
+    read identically so downstream code can always rely on
+    `row["Account"]`/`row["Account.1"]` regardless of source file.
+    """
+    seen: dict[str, int] = {}
+    deduped: list[str] = []
+    for name in header:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        deduped.append(name if count == 0 else f"{name}.{count}")
+    return deduped
+
+
+def _iter_rows(path: Path) -> Iterator[dict[str, str | None]]:
     with path.open(newline="", encoding="utf-8") as f:
-        yield from csv.DictReader(f)
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if header is None:
+            return
+        fieldnames = _dedupe_header(header)
+        width = len(fieldnames)
+        for raw_row in reader:
+            if len(raw_row) < width:
+                raw_row = raw_row + [None] * (width - len(raw_row))
+            elif len(raw_row) > width:
+                raw_row = raw_row[:width]
+            yield dict(zip(fieldnames, raw_row, strict=True))
 
 
 def _missing_fields(row: Mapping[str, str | None], required_columns: frozenset[str]) -> list[str]:
@@ -608,6 +689,12 @@ def _maybe_enrich_customer(
     UPDATE (+ one audit_log row) per transaction row referencing it; once a
     customer has actually been enriched this run, later rows for the same
     customer are skipped instead of re-writing identical values.
+
+    On the real `HI-Small_Trans.csv` default this is a no-op for every row
+    (the file has no occupation/income columns at all — see module
+    docstring); it stays live for `tracex_test_day1.csv` or any future
+    source that does carry these fields for an id space overlapping the
+    accounts CSV.
     """
     account = account_repo.get(account_id)
     if account is None or account.customer_id is None or account.customer_id in enriched:
@@ -766,8 +853,8 @@ def ingest_transactions_csv(
                 customer_repo,
                 account_repo,
                 source_account,
-                row["Source_Occupation"],
-                row["Source_Declared_Income"],
+                row.get("Source_Occupation") or "",
+                row.get("Source_Declared_Income") or "",
                 actor_id=actor_id,
                 enriched=enriched_customers,
             )
@@ -775,8 +862,8 @@ def ingest_transactions_csv(
                 customer_repo,
                 account_repo,
                 dest_account,
-                row["Dest_Occupation"],
-                row["Dest_Declared_Income"],
+                row.get("Dest_Occupation") or "",
+                row.get("Dest_Declared_Income") or "",
                 actor_id=actor_id,
                 enriched=enriched_customers,
             )
@@ -878,7 +965,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(
         description="Ingest the TraceX seed CSVs (data/HI-Small_accounts.csv, "
-        "data/tracex_test_day1.csv) into the configured DB (foundation.config "
+        "data/HI-Small_Trans.csv) into the configured DB (foundation.config "
         "database_url)."
     )
     parser.add_argument("--accounts-csv", type=Path, default=DEFAULT_ACCOUNTS_CSV)

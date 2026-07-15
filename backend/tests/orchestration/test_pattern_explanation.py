@@ -73,7 +73,7 @@ def test_explain_pattern_first_call_writes_interaction_with_rule_anchors(
         calls.append(prompt)
         return "Fake pattern explanation."
 
-    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(pattern_explanation, "_call_llm", _fake_call)
 
     result = pattern_explanation.explain_pattern(
         session, "CASE1", "AL1",
@@ -107,7 +107,7 @@ def test_explain_pattern_cache_hit_on_repeat_alert_id(
         calls.append(prompt)
         return "Fake pattern explanation."
 
-    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(pattern_explanation, "_call_llm", _fake_call)
 
     first = pattern_explanation.explain_pattern(
         session, "CASE1", "AL1",
@@ -138,7 +138,7 @@ def test_explain_pattern_force_bypasses_cache(
         calls.append(prompt)
         return f"Explanation #{len(calls)}."
 
-    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(pattern_explanation, "_call_llm", _fake_call)
 
     first = pattern_explanation.explain_pattern(
         session, "CASE1", "AL1",
@@ -189,7 +189,7 @@ def test_explain_pattern_different_alert_is_a_cache_miss(
         calls.append(prompt)
         return f"Explanation #{len(calls)}."
 
-    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(pattern_explanation, "_call_llm", _fake_call)
 
     pattern_explanation.explain_pattern(
         session, "CASE1", "AL1",
@@ -234,7 +234,7 @@ def test_explain_pattern_same_pattern_shape_different_alerts_do_not_share_cache(
         calls.append(prompt)
         return f"Explanation #{len(calls)}."
 
-    monkeypatch.setattr(pattern_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(pattern_explanation, "_call_llm", _fake_call)
 
     result1 = pattern_explanation.explain_pattern(
         session, "CASE1", "AL1",

@@ -414,7 +414,7 @@ def test_account_explanation_second_call_is_cached(
     def _fake_call(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
         return "Fake explanation."
 
-    monkeypatch.setattr(account_explanation, "_call_openrouter", _fake_call)
+    monkeypatch.setattr(account_explanation, "_call_llm", _fake_call)
 
     _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
     _seed_case(

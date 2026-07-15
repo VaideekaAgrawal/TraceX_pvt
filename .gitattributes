@@ -1,1 +1,2 @@
 fund-flow-tracker/data/HI-Small_Trans.csv filter=lfs diff=lfs merge=lfs -text
+data/HI-Small_Trans.csv filter=lfs diff=lfs merge=lfs -text
