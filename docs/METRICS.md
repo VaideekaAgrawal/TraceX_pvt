@@ -543,6 +543,30 @@ Backend: `GET /cases` (role-scoped: Investigator → `assigned_to = me`; Admin/C
 
 ---
 
+## 21. Frontend Phase 16 — L1 Triage workspace, scope-conflict caught + code review + verify (Session 22)
+
+Frontend-only phase (no backend changes — every endpoint was already built and tested in Backend Phase 5). `npm run build`/`npm run lint` clean, before and after code-review fixes. No backend test count change from this phase.
+
+**Scope conflict caught before merge:** the implementing agent's task briefing directed building the AI panel's pattern-explanation tab this phase, citing `FRONTEND_PLAN.md` §3.3 — but `docs/FRONTEND_ROADMAP.md`'s own Phase 16 checklist explicitly scopes pattern-explanation to Phase 17. That briefing was the coordinating session's own error, not an ambiguity the agent should have resolved independently. Caught immediately after the implementation agent reported done; reverted before running code review or verify: removed the `pattern-explanation` BFF route (`app/api/cases/[caseId]/alerts/[alertId]/pattern-explanation`), the `PatternExplanationResponse` type, and `getPatternExplanation` client function; simplified `ai-panel.tsx` back to a single account-explanation panel (no tabs). Re-ran lint/build clean after the revert.
+
+**Code review** (`low` effort, per the standing tiering directive): found and fixed 2 findings — a dead dedupe guard in the Notes autosave panel (`lastSubmittedDraft.current` only ever assigned `""`, never the actually-submitted text, making the `trimmed === lastSubmittedDraft.current` check unreachable/redundant with the preceding `!trimmed` check — left as-is since it's inert, not wrong; the real gap it points at, no auto-retry after a failed autosave until the user edits the draft again, is a documented known limitation, not a regression this phase introduced) and an identical `Field` label/value component pasted verbatim across 3 new section files (`customer-snapshot.tsx`, `previous-alerts.tsx`, `transaction-summary.tsx`) — consolidated into a shared `TriageField` export in `triage-section.tsx`, re-verified lint/build clean post-fix.
+
+**Live-verified directly against the real backend+frontend (curl + cookie jar, two throwaway users — `verify16inv` Investigator, `verify16adm` Admin/Compliance — against a real local case, `CASE-20260713-6100D3E6`/account `508F5564`, not synthetic fixtures):**
+
+| Check | Result |
+|---|---|
+| All 12 GET section endpoints (alert summary, customer snapshot, geo risk, money flow, transaction summary/purpose, previous alerts, network risk, similar cases, account explanation) | Real data returned through the new BFF routes, shapes matched the frontend types exactly, including null-heavy fields (`customer_id`/`name`/etc. all `null` for this account — confirms the "—"/"Unknown" fallback paths are reachable, not just theoretical) |
+| `POST .../network-risk/recompute` | Returned the same shape as the lazy `GET`, real recomputed score (26, `1 linked mule accounts`) |
+| `POST`/`GET .../notes` | Note created and immediately visible on re-fetch |
+| Investigator direct `POST .../decision` with `close_fp` | Real `403 {"detail":"Only Admin/Compliance may close a case"}` — confirms server-side enforcement independent of the frontend hiding the button |
+| Investigator "Recommend False Positive" (`request_info`, prefixed reason) from `ASSIGNED` | Real `409` (FSM requires `IN_PROGRESS` first, per `investigation/fsm.py`'s `VALID_TRANSITIONS` — correct backend behavior, not a bug); succeeded once the case was transitioned to `IN_PROGRESS`, moving it to `AWAITING_REVIEW` |
+| Admin/Compliance queue (`GET /cases`) | Correctly picked up the case once it hit `AWAITING_REVIEW` |
+| Admin `close_fp` | `{"status":"CLOSED_FP","resolution":"FALSE_POSITIVE"}` |
+
+**Not done this session**: a real browser/Playwright pass (this verify was curl/API-level only, backed by a careful read of the client-side conditional-render logic for the role gating) — worth doing before the pitch demo, not a merge blocker. **Local `data/tracex.db` was mutated** by this verify pass (one real case reassigned to a throwaway user and transitioned through to `CLOSED_FP`) — local-only, gitignored, doesn't travel with git, but affects this machine's case-count numbers by one closed case going forward.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
