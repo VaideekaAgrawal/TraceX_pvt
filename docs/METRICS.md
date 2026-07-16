@@ -524,6 +524,25 @@ Backend: `GET /alerts`, `PATCH /alerts/{alert_id}/assign`, `GET /alerts/workload
 
 ---
 
+## 20. Frontend Phase 15 — Investigation Workspace shell, code review + verify (Session 21)
+
+Backend: `GET /cases` (role-scoped: Investigator → `assigned_to = me`; Admin/Compliance → `AWAITING_REVIEW`/`ESCALATED` review queue) — 9 new tests, **568/568 backend tests passing**, ruff/mypy clean. Frontend: `npm run build`/`npm run lint` clean, before and after code-review fixes.
+
+**Code review** (`low` effort, per the standing tiering directive): found and fixed 2 real findings — a stale-response race in the case queue's filter fetch (no guard against an in-flight older request overwriting a newer one's result), and `case-tab-store.ts`'s `openCase` not refreshing an already-open tab's cached `summary` on re-click (stale stage/fields shown until manual close+reopen).
+
+**Live-verified directly against the real backend+frontend (Playwright + throwaway users):**
+
+| Check | Result |
+|---|---|
+| Investigator queue scoping | Exactly the 2 cases `assigned_to` that user — confirmed via direct `curl` with their token, not just the rendered page |
+| Admin/Compliance queue scoping | Exactly the 2 `AWAITING_REVIEW`/`ESCALATED` cases, not the full system list |
+| Tab-switch state persistence | Notes draft + scroll offset (120) set in one tab, survived switching through 2 other tabs and back — **zero network requests fired on the switch** (Playwright request listener) |
+| Tab close/reopen | Draft/scroll (77) preserved after closing a tab and reopening it from the queue |
+| `?case=` deep link, in-queue | Opens/focuses the correct tab with the correct stage badge |
+| `?case=` deep link, out-of-queue | Renders the documented "Unknown" placeholder rather than asserting a false stage |
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
