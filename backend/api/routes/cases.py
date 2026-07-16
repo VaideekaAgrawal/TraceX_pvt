@@ -14,6 +14,7 @@ functions it calls only flush, never commit.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
@@ -22,12 +23,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.enums import CaseResolution, CaseStatus, NoteSource, UserRole
+from db.enums import CaseResolution, CaseStatus, NoteSource, Priority, UserRole
 from db.models.investigation import Case
 from db.models.platform import User
 from db.models.reference import Account
 from db.repositories.detection import AlertRepository
-from db.repositories.investigation import CaseAccountRepository, NoteRepository
+from db.repositories.investigation import (
+    CASE_SORT_KEYS,
+    CaseAccountRepository,
+    CaseRepository,
+    NoteRepository,
+)
 from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 from db.session import get_db
 from foundation.auth import (
@@ -46,6 +52,120 @@ from investigation.similar_cases import find_similar_cases
 from orchestration.account_explanation import explain_account
 
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+
+# ── System-wide (role-scoped) case list ───────────────────────────────────
+#
+# `GET /cases` -- distinct from every route below, which is scoped to one
+# `{case_id}` via `require_case_access`. This is the Investigation Workspace
+# landing view's data source (`docs/FRONTEND_ROADMAP.md` Phase 15,
+# decision 8): "what am I working on", not the Dashboard's system-wide
+# `GET /alerts` (Phase 14). Placed ahead of the `{case_id}`-scoped routes for
+# visual grouping with this file's other list-style route -- path collision
+# with `/cases/{case_id}/...` isn't a real concern, FastAPI matches `/cases`
+# vs. `/cases/{case_id}/...` by segment count.
+
+#: Admin/Compliance's queue is "cases waiting on my review/closure action" --
+#: NOT "assigned to me" in the Investigator sense (maker-checker model,
+#: `docs/FRONTEND_ROADMAP.md` Phase 15 / §1). A `status` filter they supply
+#: must narrow within this set, not escape it.
+_ADMIN_QUEUE_STATUSES = {CaseStatus.AWAITING_REVIEW, CaseStatus.ESCALATED}
+
+
+class CaseListItem(BaseModel):
+    case_id: str
+    primary_account_id: str
+    status: CaseStatus
+    priority: Priority
+    assigned_to: str | None
+    updated_at: datetime
+
+
+class CaseListResponse(BaseModel):
+    items: list[CaseListItem]
+    total_count: int
+    limit: int
+    offset: int
+
+
+@dataclass
+class _CaseListParams:
+    """Shared query-param set for `GET /cases` -- mirrors `api.routes.
+    alerts._AlertListParams`'s dataclass-`Depends()` convention."""
+
+    status: CaseStatus | None = Query(default=None)
+    priority: Priority | None = Query(default=None)
+    sort: str | None = Query(default=None)
+    limit: int = Query(default=200, le=1000)
+    offset: int = Query(default=0, ge=0)
+
+
+def _case_list_item(case: Case) -> CaseListItem:
+    return CaseListItem(
+        case_id=case.case_id,
+        primary_account_id=case.primary_account_id,
+        status=case.status,
+        priority=case.priority,
+        assigned_to=case.assigned_to,
+        updated_at=case.updated_at,
+    )
+
+
+@router.get("", response_model=CaseListResponse)
+def list_cases(
+    params: _CaseListParams = Depends(),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CaseListResponse:
+    """Role-scoped case list -- the primary way an investigator finds work
+    (`docs/FRONTEND_ROADMAP.md` Phase 15). `sort` defaults to
+    `"updated_at_desc"` when not given; always SQL-ordered (no RL-reranking
+    step here, unlike `GET /alerts`).
+
+    - `ADMIN_COMPLIANCE`: scoped to `_ADMIN_QUEUE_STATUSES` (their
+      review/closure queue, not an assignment-based queue). A `status`
+      filter outside that set is rejected (400) rather than silently
+      returning an empty page. `assigned_to` stays unset -- the admin
+      queue isn't assignee-scoped.
+    - `INVESTIGATOR`: scoped to `assigned_to = user.user_id` (their own
+      queue, reusing the same scoping idea `require_case_access` already
+      enforces per-case). Any `CaseStatus` `status` filter is legal here --
+      it's just an additional narrowing filter, no special validation.
+    """
+    if params.sort is not None and params.sort not in CASE_SORT_KEYS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid sort: {params.sort!r}")
+
+    statuses: list[CaseStatus] | None
+    if user.role == UserRole.ADMIN_COMPLIANCE:
+        if params.status is not None and params.status not in _ADMIN_QUEUE_STATUSES:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "status must be AWAITING_REVIEW or ESCALATED for the Admin/Compliance queue",
+            )
+        statuses = [params.status] if params.status is not None else list(_ADMIN_QUEUE_STATUSES)
+        assigned_to = None
+    else:
+        statuses = [params.status] if params.status is not None else None
+        assigned_to = user.user_id
+
+    repo = CaseRepository(db)
+    total_count = repo.count_filtered(
+        statuses=statuses, priority=params.priority, assigned_to=assigned_to
+    )
+    page = repo.list_filtered(
+        statuses=statuses,
+        priority=params.priority,
+        assigned_to=assigned_to,
+        sort=params.sort or "updated_at_desc",
+        limit=params.limit,
+        offset=params.offset,
+    )
+    return CaseListResponse(
+        items=[_case_list_item(c) for c in page],
+        total_count=total_count,
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 # ── Response models ──────────────────────────────────────────────────────

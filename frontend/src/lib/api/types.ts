@@ -166,3 +166,36 @@ export interface DashboardSummaryResponse {
   alerts_over_time: AlertsOverTimePoint[];
   window_days: number;
 }
+
+// ── `backend/api/routes/cases.py::GET /cases` (ROADMAP Phase 15) ──────────
+//
+// Role-scoped case list — distinct from `GET /alerts` above (system-wide).
+// `status`/`priority` are typed as plain `string` here, same convention as
+// `AlertListItem` above: the backend's `db.enums.CaseStatus`/`Priority` are
+// the real source of truth, duplicating their member lists as a TS union
+// here would just be a second place for it to drift.
+
+export interface CaseListItem {
+  case_id: string;
+  primary_account_id: string;
+  status: string;
+  priority: string;
+  assigned_to: string | null;
+  updated_at: string;
+}
+
+export interface CaseListResponse {
+  items: CaseListItem[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+// Query params accepted by `GET /cases` (`api.routes.cases._CaseListParams`).
+export interface CaseListParams {
+  status?: string;
+  priority?: string;
+  sort?: string;
+  limit?: number | string;
+  offset?: number | string;
+}
