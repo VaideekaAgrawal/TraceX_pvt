@@ -81,18 +81,23 @@ export const useCaseTabStore = create<CaseTabStore>((set) => ({
 
   openCase: (item) =>
     set((state) => {
+      const existing = state.tabState[item.case_id];
+      const nextTabState = {
+        ...state.tabState,
+        [item.case_id]: existing ? { ...existing, summary: item } : defaultTabState(item),
+      };
+
       if (state.openTabIds.includes(item.case_id)) {
-        return { activeTabId: item.case_id };
+        // Already open — just refresh the cached summary (e.g. the case's
+        // status changed server-side since it was opened) and focus it,
+        // rather than leaving stale fields displayed until a close/reopen.
+        return { activeTabId: item.case_id, tabState: nextTabState };
       }
 
-      const existing = state.tabState[item.case_id];
       return {
         openTabIds: [...state.openTabIds, item.case_id],
         activeTabId: item.case_id,
-        tabState: {
-          ...state.tabState,
-          [item.case_id]: existing ? { ...existing, summary: item } : defaultTabState(item),
-        },
+        tabState: nextTabState,
       };
     }),
 

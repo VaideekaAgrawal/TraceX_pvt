@@ -74,8 +74,14 @@ export function CaseQueue({ initialData }: { initialData: CaseListResponse }) {
   const [error, setError] = useState<string | null>(null);
 
   const skipNextFetch = useRef(true);
+  // Guards against a stale response overwriting a newer one when the user
+  // toggles filters faster than a request round-trips (no AbortController
+  // needed — we just ignore any response that isn't from the most recent
+  // call).
+  const latestRequestId = useRef(0);
 
   const fetchCases = useCallback(async () => {
+    const requestId = ++latestRequestId.current;
     setLoading(true);
     setError(null);
     try {
@@ -88,11 +94,17 @@ export function CaseQueue({ initialData }: { initialData: CaseListResponse }) {
       if (!res.ok) {
         throw new Error(typeof body.detail === "string" ? body.detail : "Failed to load cases");
       }
-      setData(body as CaseListResponse);
+      if (requestId === latestRequestId.current) {
+        setData(body as CaseListResponse);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load cases");
+      if (requestId === latestRequestId.current) {
+        setError(err instanceof Error ? err.message : "Failed to load cases");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === latestRequestId.current) {
+        setLoading(false);
+      }
     }
   }, [status, priority]);
 
