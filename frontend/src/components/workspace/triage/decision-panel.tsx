@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useRole } from "@/lib/auth/auth-provider";
-import { getCaseStageLabel } from "@/lib/workspace/case-stage";
+import { getCaseStageLabel, getDefaultActiveView } from "@/lib/workspace/case-stage";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
 import type { DecisionRequest, DecisionResponse, DecisionValue } from "@/lib/api/types";
 
@@ -69,10 +69,17 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
       // Update the tab's cached summary status immediately so the stage
       // badge reflects the new status without a manual refresh — same
       // principle as Phase 15's `openCase` fix that always refreshes
-      // `summary` (see `case-tab-store.ts`).
+      // `summary` (see `case-tab-store.ts`). Also recomputes the default
+      // `activeView` for this same status transition (ROADMAP Phase 17) —
+      // e.g. escalating a case here flips the investigator straight into
+      // Deep Investigation, the same "status changed -> re-derive default"
+      // rule `case-tab-store.ts`'s `openCase` applies on a queue refresh.
       const currentSummary = useCaseTabStore.getState().tabState[caseId]?.summary;
       if (currentSummary) {
-        updateTabState(caseId, { summary: { ...currentSummary, status: result.status } });
+        updateTabState(caseId, {
+          summary: { ...currentSummary, status: result.status },
+          activeView: getDefaultActiveView(result.status),
+        });
       }
 
       setSuccess(successMessage);

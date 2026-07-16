@@ -22,28 +22,46 @@ import { BackendUnavailableError } from "@/lib/api/auth-client";
 import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type {
   AlertSummaryItem,
+  BehaviorAnalysisResponse,
+  CustomerProfileResponse,
   CustomerSnapshotResponse,
   DecisionRequest,
   DecisionResponse,
   ExplanationResponse,
   GeoRiskResponse,
+  GraphQueryParams,
   MoneyFlowResponse,
   NetworkRiskResponse,
+  NHopGraphResponse,
   NoteCreateRequest,
   NoteItem,
   PreviousAlertsResponse,
   SimilarCasesResponse,
+  TimelineQueryParams,
+  TimelineResponse,
   TransactionPurposeResponse,
+  TransactionSearchParams,
+  TransactionSearchResponse,
   TransactionSummaryResponse,
 } from "@/lib/api/types";
 
 const UNAVAILABLE = "Unable to reach the case service";
 
+// `channels`/`roles` (L2 graph + transaction-search query params) are real
+// arrays serialized as repeated query keys (`?channels=UPI&channels=NEFT`),
+// matching FastAPI's `list[str]` `Query(...)` parsing server-side — same
+// convention `audit-client.ts`'s `toQueryString` already established for
+// `AuditLogParams.action`. Extended here (rather than duplicated) since this
+// module now has its own array-valued params to serialize.
 function toQueryString(params: Record<string, unknown>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
-    qs.set(key, String(value));
+    if (Array.isArray(value)) {
+      for (const item of value) qs.append(key, String(item));
+    } else {
+      qs.set(key, String(value));
+    }
   }
   return qs.toString();
 }
@@ -197,5 +215,68 @@ export async function postDecision(
     `/cases/${encodeURIComponent(caseId)}/decision`,
     body,
     "Failed to submit decision",
+  );
+}
+
+// ── L2 Deep Investigation (`backend/api/routes/l2.py`, ROADMAP Phase 17) ──
+
+export async function getAccountGraph(
+  caseId: string,
+  accountId: string,
+  params: GraphQueryParams = {},
+): Promise<NHopGraphResponse | null> {
+  const qs = toQueryString(params as Record<string, unknown>);
+  return getJson<NHopGraphResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/graph${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function getAccountTimeline(
+  caseId: string,
+  accountId: string,
+  params: TimelineQueryParams = {},
+): Promise<TimelineResponse | null> {
+  const qs = toQueryString(params as Record<string, unknown>);
+  return getJson<TimelineResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/timeline${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function searchCaseTransactions(
+  caseId: string,
+  params: TransactionSearchParams = {},
+): Promise<TransactionSearchResponse | null> {
+  const qs = toQueryString(params as Record<string, unknown>);
+  return getJson<TransactionSearchResponse>(
+    `/cases/${encodeURIComponent(caseId)}/transactions/search${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function searchAccountTransactions(
+  caseId: string,
+  accountId: string,
+  params: TransactionSearchParams = {},
+): Promise<TransactionSearchResponse | null> {
+  const qs = toQueryString(params as Record<string, unknown>);
+  return getJson<TransactionSearchResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/transactions/search${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function getCustomerProfile(
+  caseId: string,
+  accountId: string,
+): Promise<CustomerProfileResponse | null> {
+  return getJson<CustomerProfileResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/profile`,
+  );
+}
+
+export async function getAccountBehavior(
+  caseId: string,
+  accountId: string,
+): Promise<BehaviorAnalysisResponse | null> {
+  return getJson<BehaviorAnalysisResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/behavior`,
   );
 }

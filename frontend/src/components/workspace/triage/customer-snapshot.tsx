@@ -102,7 +102,9 @@ export function CustomerSnapshotSection({ caseId, accountId }: { caseId: string;
   );
 }
 
-function FlagBadge({ label, active }: { label: string; active: boolean | null }) {
+/** Exported for reuse by `deep/customer-profile.tsx` (ROADMAP Phase 17) —
+ * same PEP/sanctions flag treatment, not a second implementation. */
+export function FlagBadge({ label, active }: { label: string; active: boolean | null }) {
   if (active === null) {
     return (
       <Badge variant="outline" className="text-muted-foreground">

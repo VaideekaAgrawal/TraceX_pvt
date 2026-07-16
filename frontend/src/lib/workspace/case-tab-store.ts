@@ -18,9 +18,15 @@
  */
 import { create } from "zustand";
 
+import { getDefaultActiveView } from "@/lib/workspace/case-stage";
 import type { CaseListItem } from "@/lib/api/types";
 
 export interface CaseTabState {
+  // Defaulted from the case's own status (`getDefaultActiveView`, ROADMAP
+  // Phase 17) whenever a genuinely new tab opens, or an already-open tab's
+  // cached `summary.status` changes (see `openCase` below) — freely
+  // switchable afterward via `case-tab-content.tsx`'s view toggle, this is
+  // only ever the *default*.
   activeView: "triage" | "deep";
   scrollOffset: number;
   graphFilters: Record<string, unknown>;
@@ -64,7 +70,7 @@ interface CaseTabStore {
 
 function defaultTabState(item: CaseListItem): CaseTabState {
   return {
-    activeView: "triage",
+    activeView: getDefaultActiveView(item.status),
     scrollOffset: 0,
     graphFilters: {},
     graphExpandState: {},
@@ -82,9 +88,23 @@ export const useCaseTabStore = create<CaseTabStore>((set) => ({
   openCase: (item) =>
     set((state) => {
       const existing = state.tabState[item.case_id];
+      // Recompute the default view only when the case's status actually
+      // changed since it was last cached here (a real server-side
+      // transition, e.g. someone escalated it) — not on every re-open of an
+      // already-current tab, which would otherwise clobber a manual
+      // triage<->deep toggle every time the investigator just refocuses the
+      // tab from the queue (ROADMAP Phase 17 judgment call, documented in
+      // `case-stage.ts`'s `getDefaultActiveView` docstring).
+      const statusChanged = existing != null && existing.summary.status !== item.status;
       const nextTabState = {
         ...state.tabState,
-        [item.case_id]: existing ? { ...existing, summary: item } : defaultTabState(item),
+        [item.case_id]: existing
+          ? {
+              ...existing,
+              summary: item,
+              activeView: statusChanged ? getDefaultActiveView(item.status) : existing.activeView,
+            }
+          : defaultTabState(item),
       };
 
       if (state.openTabIds.includes(item.case_id)) {

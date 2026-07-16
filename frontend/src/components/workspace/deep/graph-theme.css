@@ -1,0 +1,58 @@
+/*
+ * Investigation Graph (ROADMAP Phase 17) color tokens. Deliberately NOT an
+ * extension of the app's `--chart-1..5` tokens in `globals.css` — those are
+ * literal 0-chroma grays, a placeholder categorical scheme, not meant for
+ * real identity/magnitude encoding (see that file's own tokens).
+ *
+ * Values are flat hex, not `oklch(...)`, specifically so they can be read
+ * back via `getComputedStyle` (in `graph-theme.ts`) and handed directly to
+ * cytoscape's canvas-rendered stylesheet, which cannot resolve a nested
+ * `var(...)` reference itself (canvas `fillStyle` needs a final literal
+ * color string, not a CSS custom property name).
+ *
+ * `--l2-role-*` are validated hex slots 1/3/4 of the documented default
+ * categorical palette (`SOURCE`=blue, `MULE`=magenta, `SINK`=yellow) — these
+ * three specifically because any two of {SOURCE, MULE, SINK} can sit
+ * adjacent in a real ego-graph layout, so the "first four slots under the
+ * all-pairs check" guarantee is what applies here, not just the weaker
+ * adjacent-only check. `NORMAL` gets a neutral gray (no hue spent on the
+ * role most ego-graph nodes will actually have).
+ *
+ * `--l2-center-*` mirror `--primary`/`--primary-foreground`'s actual
+ * light/dark oklch values as literal duplicates (see above for why a
+ * `var(--primary)` reference can't be used directly here) — this is what
+ * lets the Investigation Graph's center-account highlight read identically
+ * to `money-flow.tsx`'s `fill-primary/10 stroke-primary` L1 convention.
+ *
+ * Both light (`:root`) and `.dark` variants are defined even though no
+ * runtime theme toggle exists yet in this app — matching the existing
+ * unwired `dark:` utility-class convention elsewhere (e.g.
+ * `customer-snapshot.tsx`'s `FlagBadge`), not introducing a new toggle.
+ */
+:root {
+  --l2-role-source: #2a78d6;
+  --l2-role-mule: #e87ba4;
+  --l2-role-sink: #eda100;
+  --l2-role-normal: #9ca3af;
+  --l2-role-unknown: #9ca3af;
+  --l2-center-fill: oklch(0.205 0 0 / 10%);
+  --l2-center-stroke: oklch(0.205 0 0);
+  --l2-edge: #b8b8b8;
+  --l2-status-flag: #dc2626;
+  --l2-selection: #7c3aed;
+  --l2-label: oklch(0.145 0 0);
+}
+
+.dark {
+  --l2-role-source: #3987e5;
+  --l2-role-mule: #d55181;
+  --l2-role-sink: #c98500;
+  --l2-role-normal: #6b7280;
+  --l2-role-unknown: #6b7280;
+  --l2-center-fill: oklch(0.922 0 0 / 10%);
+  --l2-center-stroke: oklch(0.922 0 0);
+  --l2-edge: #4b5563;
+  --l2-status-flag: #f87171;
+  --l2-selection: #a78bfa;
+  --l2-label: oklch(0.985 0 0);
+}

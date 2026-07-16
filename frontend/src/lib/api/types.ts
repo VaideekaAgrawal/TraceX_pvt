@@ -370,3 +370,212 @@ export interface NoteItem {
   body: string;
   created_at: string;
 }
+
+// ── `backend/api/routes/l2.py` (ROADMAP Phase 17, L2 Deep Investigation —
+// graph, timeline, transaction search, profile, behavior) ─────────────────
+//
+// Same "backend enum -> plain `string`" convention as the L1 types above.
+// `GraphNode.role` is documented as exactly `"SOURCE" | "SINK" | "MULE" |
+// "NORMAL"` by `detection/scoring/ensemble.py::RoleClassifier` (with a
+// theoretical `"UNKNOWN"` fallback in `investigation/graph_filters.py` for a
+// node `RoleClassifier` never scored) — kept as plain `string` anyway,
+// matching this file's own stated rationale for every other backend-enum
+// field, rather than special-casing this one field as a literal union.
+
+export interface GraphNode {
+  account_id: string;
+  branch_city: string | null;
+  role: string;
+  role_confidence: number;
+  current_risk_score: number | null;
+  has_prior_sar: boolean;
+  hop_distance: number | null;
+}
+
+export interface GraphEdge {
+  txn_id: string;
+  source_account: string;
+  dest_account: string;
+  amount: number;
+  timestamp: string;
+  channel: string;
+  is_laundering: boolean;
+  from_bank: string | null;
+  to_bank: string | null;
+}
+
+export interface NHopGraphResponse {
+  center: string;
+  radius: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+// Query params accepted by `GET /cases/{case_id}/accounts/{account_id}/graph`
+// (`api.routes.l2.get_account_graph`). `channels`/`roles` are real arrays
+// (repeated query params server-side), same convention as `AuditLogParams.
+// action` above — a plain `String(value)` join would produce the wrong
+// query string shape for these.
+export interface GraphQueryParams {
+  radius?: number;
+  suspicious_only?: boolean;
+  min_risk_score?: number;
+  min_amount?: number;
+  max_amount?: number;
+  start?: string;
+  end?: string;
+  channels?: string[];
+  direction?: "in" | "out";
+  roles?: string[];
+  prior_sar_only?: boolean;
+}
+
+export interface TimelineEventItem {
+  txn_id: string;
+  timestamp: string;
+  direction: "in" | "out";
+  counterparty_account_id: string;
+  amount: number;
+  channel: string;
+  is_laundering: boolean;
+}
+
+export interface TimelineResponse {
+  account_id: string;
+  events: TimelineEventItem[];
+}
+
+export interface TimelineQueryParams {
+  start?: string;
+  end?: string;
+}
+
+export interface TransactionSearchItem {
+  txn_id: string;
+  timestamp: string;
+  amount: number;
+  channel: string;
+  txn_type: string;
+  source_account: string;
+  dest_account: string;
+  source_branch_city: string | null;
+  dest_branch_city: string | null;
+  source_account_type: string | null;
+  dest_account_type: string | null;
+  direction: "in" | "out" | null;
+  is_laundering: boolean;
+}
+
+export interface TransactionSearchResponse {
+  items: TransactionSearchItem[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+// Query params shared by both `GET /cases/{case_id}/transactions/search`
+// (case-wide) and `GET /cases/{case_id}/accounts/{account_id}/transactions/
+// search` (account-scoped) — mirrors `api.routes.l2._TransactionSearchParams`
+// exactly. `sort` is typed as plain `string` (not the 4-member literal
+// union) for the same "unrecognized value falls back silently server-side,
+// not a 400" reason `l2.py`'s own docstring gives — a client typo here
+// degrades to the default sort, it doesn't need a TS-level guarantee.
+export interface TransactionSearchParams {
+  min_amount?: number;
+  max_amount?: number;
+  start?: string;
+  end?: string;
+  channels?: string[];
+  direction?: "in" | "out";
+  txn_type?: string;
+  limit?: number;
+  offset?: number;
+  sort?: string;
+}
+
+export interface CustomerProfileResponse {
+  account_id: string;
+  customer_id: string | null;
+  name: string | null;
+  entity_type: string | null;
+  kyc_status: string | null;
+  edd_status: string | null;
+  pep_status: boolean | null;
+  sanction_status: boolean | null;
+  risk_rating: string | null;
+  occupation: string | null;
+  employer: string | null;
+  declared_annual_income: number | null;
+  income_bracket: string | null;
+  account_type: string | null;
+  bank_name: string | null;
+  branch_city: string | null;
+  account_status: string | null;
+  kyc_tier: string | null;
+  opening_date: string | null;
+  current_risk_score: number | null;
+  expected_monthly_volume: number | null;
+  actual_monthly_volume_avg: number | null;
+  expected_vs_actual_variance_ratio: number | null;
+  prior_sar_count: number;
+  total_prior_alerts: number;
+  sibling_accounts: SiblingAccount[];
+  // Always `["beneficial_owner", "linked_cards", "linked_loans",
+  // "linked_deposits", "risk_score_trend"]` today (unconditional documented
+  // schema gaps, not per-account variance) — rendered explicitly as "Not
+  // available" rows, per `docs/FRONTEND_ROADMAP.md` Phase 17 scope, rather
+  // than hidden/blank.
+  omitted_fields: string[];
+}
+
+export interface MonthlyTotalItem {
+  month: string;
+  total_in: number;
+  total_out: number;
+  total: number;
+  txn_count: number;
+}
+
+export interface CashDepositMonthItem {
+  month: string;
+  cash_deposit_total: number;
+  txn_count: number;
+}
+
+export interface TransferMonthItem {
+  month: string;
+  transfer_total: number;
+  txn_count: number;
+}
+
+export interface DormancyReactivationEvent {
+  gap_start: string;
+  gap_end: string;
+  gap_days: number;
+  burst_txn_count: number;
+}
+
+export interface DormancyReactivationResult {
+  reactivation_detected: boolean;
+  events: DormancyReactivationEvent[];
+}
+
+export interface VelocityIncreaseResult {
+  recent_avg_weekly_txn_count: number;
+  baseline_avg_weekly_txn_count: number;
+  ratio: number | null;
+  velocity_increase_detected: boolean;
+}
+
+export interface BehaviorAnalysisResponse {
+  account_id: string;
+  monthly_totals: MonthlyTotalItem[];
+  cash_deposit_trend: CashDepositMonthItem[];
+  transfer_trend: TransferMonthItem[];
+  dormancy_reactivation: DormancyReactivationResult;
+  velocity_increase: VelocityIncreaseResult;
+  // Always `["salary_mismatch", "seasonal_trends"]` today — rendered as
+  // "Not yet available," matching `CustomerProfileResponse.omitted_fields`'s
+  // treatment (same honesty pattern, not a second UI convention).
+  deferred: string[];
+}
