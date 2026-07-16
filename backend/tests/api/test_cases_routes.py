@@ -111,6 +111,7 @@ def _seed_case(
     account_ids: list[str],
     assigned_to: str | None,
     status: CaseStatus = CaseStatus.ASSIGNED,
+    priority: Priority = Priority.P2,
 ) -> None:
     with db_sessionmaker() as db:
         for account_id in account_ids:
@@ -123,7 +124,7 @@ def _seed_case(
             primary_account_id=primary_account_id,
             status=status,
             level=CaseLevel.L1,
-            priority=Priority.P2,
+            priority=priority,
             assigned_to=assigned_to,
             actor_type=ActorType.SYSTEM,
             actor_id=None,
@@ -471,3 +472,200 @@ def test_account_explanation_not_configured_is_never_cached(
             "CASE1", AiAgent.RECOMMENDATION
         )
         assert interactions == []
+
+
+# ── GET /cases: role-scoped case list (ROADMAP Phase 15) ─────────────────
+
+
+def test_investigator_only_sees_own_assigned_cases_regardless_of_status(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV1", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_case(
+        db_sessionmaker, case_id="CASE_MINE_NEW", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV1", status=CaseStatus.NEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_MINE_CLOSED", primary_account_id="A2",
+        account_ids=["A2"], assigned_to="U_INV1", status=CaseStatus.CLOSED_FP,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_OTHERS", primary_account_id="A3",
+        account_ids=["A3"], assigned_to="U_INV2", status=CaseStatus.NEW,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_count"] == 2
+    ids = {item["case_id"] for item in body["items"]}
+    assert ids == {"CASE_MINE_NEW", "CASE_MINE_CLOSED"}
+
+
+def test_admin_only_sees_awaiting_review_or_escalated_cases(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_NEW", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV", status=CaseStatus.NEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_AWAITING", primary_account_id="A2",
+        account_ids=["A2"], assigned_to="U_INV", status=CaseStatus.AWAITING_REVIEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_ESCALATED", primary_account_id="A3",
+        account_ids=["A3"], assigned_to="U_INV", status=CaseStatus.ESCALATED,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_CLOSED", primary_account_id="A4",
+        account_ids=["A4"], assigned_to="U_INV", status=CaseStatus.CLOSED_FP,
+    )
+    admin_token = _login(client, "admin1")
+
+    resp = client.get("/cases", headers=_auth_headers(admin_token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_count"] == 2
+    ids = {item["case_id"] for item in body["items"]}
+    assert ids == {"CASE_AWAITING", "CASE_ESCALATED"}
+
+
+def test_admin_out_of_set_status_filter_returns_400(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    admin_token = _login(client, "admin1")
+
+    resp = client.get(
+        "/cases", params={"status": "NEW"}, headers=_auth_headers(admin_token)
+    )
+    assert resp.status_code == 400
+
+
+def test_admin_status_filter_within_set_narrows(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_AWAITING", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV", status=CaseStatus.AWAITING_REVIEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_ESCALATED", primary_account_id="A2",
+        account_ids=["A2"], assigned_to="U_INV", status=CaseStatus.ESCALATED,
+    )
+    admin_token = _login(client, "admin1")
+
+    resp = client.get(
+        "/cases", params={"status": "ESCALATED"}, headers=_auth_headers(admin_token)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_count"] == 1
+    assert body["items"][0]["case_id"] == "CASE_ESCALATED"
+
+
+def test_investigator_status_filter_narrows_own_queue(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV1", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE_NEW", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV1", status=CaseStatus.NEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_CLOSED", primary_account_id="A2",
+        account_ids=["A2"], assigned_to="U_INV1", status=CaseStatus.CLOSED_TP,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.get(
+        "/cases", params={"status": "CLOSED_TP"}, headers=_auth_headers(token)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_count"] == 1
+    assert body["items"][0]["case_id"] == "CASE_CLOSED"
+
+
+def test_cases_pagination_and_total_count(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    for i in range(5):
+        _seed_case(
+            db_sessionmaker, case_id=f"CASE{i}", primary_account_id=f"A{i}",
+            account_ids=[f"A{i}"], assigned_to="U_INV", status=CaseStatus.NEW,
+        )
+    token = _login(client, "inv1")
+
+    page1 = client.get(
+        "/cases", params={"limit": 2, "offset": 0}, headers=_auth_headers(token)
+    )
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert body1["total_count"] == 5
+    assert len(body1["items"]) == 2
+    assert body1["limit"] == 2
+    assert body1["offset"] == 0
+
+    page3 = client.get(
+        "/cases", params={"limit": 2, "offset": 4}, headers=_auth_headers(token)
+    )
+    assert page3.status_code == 200
+    body3 = page3.json()
+    assert body3["total_count"] == 5
+    assert len(body3["items"]) == 1
+
+
+def test_cases_default_sort_is_updated_at_desc(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    # Seeded in this order -- `created_at`/`updated_at` both default to
+    # `utcnow()` at insert time, so this order is also the ascending
+    # `updated_at` order.
+    _seed_case(
+        db_sessionmaker, case_id="CASE_OLDEST", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV", status=CaseStatus.NEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_MIDDLE", primary_account_id="A2",
+        account_ids=["A2"], assigned_to="U_INV", status=CaseStatus.NEW,
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE_NEWEST", primary_account_id="A3",
+        account_ids=["A3"], assigned_to="U_INV", status=CaseStatus.NEW,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["case_id"] for item in body["items"]] == [
+        "CASE_NEWEST", "CASE_MIDDLE", "CASE_OLDEST",
+    ]
+
+
+def test_cases_rejects_invalid_sort(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    token = _login(client, "inv1")
+
+    resp = client.get(
+        "/cases", params={"sort": "nonsense"}, headers=_auth_headers(token)
+    )
+    assert resp.status_code == 400

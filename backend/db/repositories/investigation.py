@@ -18,6 +18,7 @@ own repos now so nothing here needs "unwinding" once Phase 4 lands.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, ClassVar
 
 from sqlalchemy import func, select
 
@@ -50,6 +51,19 @@ class CaseRepository(BaseRepository[Case]):
     model = Case
     entity_type = "case"
     pk_attr = "case_id"
+
+    #: `sort=` values `list_filtered`/`GET /cases` (ROADMAP Phase 15) accept,
+    #: mapped to the SQLAlchemy ORDER BY expression each represents. Mirrors
+    #: `AlertRepository._LIST_SORTS`'s exact pattern -- unlike Alert's list
+    #: route, `GET /cases` has no unsorted RL-reranking mode, so every case
+    #: list query always applies one of these in SQL.
+    _LIST_SORTS: ClassVar[dict[str, Any]] = {
+        "updated_at_desc": Case.updated_at.desc(),
+        "updated_at_asc": Case.updated_at.asc(),
+        "priority_desc": Case.priority.desc(),
+        "priority_asc": Case.priority.asc(),
+        "created_at_desc": Case.created_at.desc(),
+    }
 
     def create(
         self,
@@ -283,6 +297,69 @@ class CaseRepository(BaseRepository[Case]):
         status_set = {statuses} if isinstance(statuses, CaseStatus) else statuses
         stmt = select(func.count()).select_from(Case).where(Case.status.in_(status_set))
         return self.session.scalar(stmt) or 0
+
+    def _list_where_clause(
+        self,
+        *,
+        statuses: list[CaseStatus] | None = None,
+        priority: Priority | None = None,
+        assigned_to: str | None = None,
+    ) -> list[Any]:
+        """Shared WHERE-clause builder for `list_filtered`/`count_filtered`
+        (ROADMAP Phase 15: `GET /cases`) -- one filter set, two callers, so
+        the count a caller sees for a page always matches the page's own
+        filters. Mirrors `AlertRepository._list_where_clause`'s exact
+        pattern."""
+        clauses: list[Any] = []
+        if statuses:
+            clauses.append(Case.status.in_(statuses))
+        if priority is not None:
+            clauses.append(Case.priority == priority)
+        if assigned_to is not None:
+            clauses.append(Case.assigned_to == assigned_to)
+        return clauses
+
+    def list_filtered(
+        self,
+        *,
+        statuses: list[CaseStatus] | None = None,
+        priority: Priority | None = None,
+        assigned_to: str | None = None,
+        sort: str = "updated_at_desc",
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Case]:
+        """`GET /cases`'s data source (ROADMAP Phase 15). Unlike
+        `AlertRepository.list_filtered` (which supports an unsorted mode for
+        Python-side RL reranking), cases always sort in SQL -- there is no
+        reranking step here, so `sort` always applies."""
+        clauses = self._list_where_clause(
+            statuses=statuses, priority=priority, assigned_to=assigned_to
+        )
+        stmt = select(Case).where(*clauses).order_by(self._LIST_SORTS[sort])
+        if limit is not None:
+            stmt = stmt.limit(limit).offset(offset)
+        return list(self.session.scalars(stmt))
+
+    def count_filtered(
+        self,
+        *,
+        statuses: list[CaseStatus] | None = None,
+        priority: Priority | None = None,
+        assigned_to: str | None = None,
+    ) -> int:
+        clauses = self._list_where_clause(
+            statuses=statuses, priority=priority, assigned_to=assigned_to
+        )
+        stmt = select(func.count()).select_from(Case).where(*clauses)
+        return self.session.scalar(stmt) or 0
+
+
+#: Public surface for `CaseRepository._LIST_SORTS`'s keys (mirrors
+#: `db.repositories.detection.ALERT_SORT_KEYS`) -- `api.routes.cases`
+#: validates a caller-supplied `sort` query param against this set instead of
+#: reaching into a "private" class attribute directly.
+CASE_SORT_KEYS: set[str] = set(CaseRepository._LIST_SORTS)
 
 
 class CaseAccountRepository(BaseRepository[CaseAccount]):
