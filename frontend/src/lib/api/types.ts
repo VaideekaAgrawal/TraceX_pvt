@@ -199,3 +199,174 @@ export interface CaseListParams {
   limit?: number | string;
   offset?: number | string;
 }
+
+// ── `backend/api/routes/cases.py`, `backend/api/routes/l2.py` (ROADMAP
+// Phase 16, L1 Triage) ──────────────────────────────────────────────────
+//
+// Shapes mirrored 1:1 from those routes' Pydantic response models — same
+// "backend enum -> plain `string`" convention as above, do not invent
+// fields the backend doesn't actually return. `notes` lives in `l2.py` (a
+// separate router file, same `/cases` prefix) but is an L1 feature per
+// `FRONTEND_PLAN.md` §3.3. Pattern-explanation is explicitly Phase 17
+// scope per `docs/FRONTEND_ROADMAP.md`'s Phase 16 checklist — not built
+// here.
+
+export interface AlertSummaryItem {
+  alert_id: string;
+  detection_type: string;
+  primary_account_id: string;
+  account_ids: string[];
+  score: number;
+  risk_score: number;
+  severity: string;
+  priority: string;
+  confidence: string | null;
+  status: string;
+  rule_ids: string[] | null;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface SiblingAccount {
+  account_id: string;
+  account_type: string;
+  bank_name: string | null;
+  branch_city: string | null;
+  status: string;
+  current_risk_score: number | null;
+}
+
+export interface CustomerSnapshotResponse {
+  account_id: string;
+  customer_id: string | null;
+  name: string | null;
+  entity_type: string | null;
+  kyc_status: string | null;
+  edd_status: string | null;
+  pep_status: boolean | null;
+  sanction_status: boolean | null;
+  risk_rating: string | null;
+  occupation: string | null;
+  declared_annual_income: number | null;
+  income_bracket: string | null;
+  sibling_accounts: SiblingAccount[];
+}
+
+export interface GeoRiskResponse {
+  account_id: string;
+  branch_city: string | null;
+  bank_name: string | null;
+  bank_id: string | null;
+  counterparty_bank_count: number;
+  counterparty_banks: string[];
+  counterparty_city_count: number;
+  counterparty_cities: string[];
+}
+
+export interface TransactionSummaryResponse {
+  account_id: string;
+  total_in: number;
+  total_out: number;
+  txn_count: number;
+  counterparty_count: number;
+  channel_breakdown: Record<string, number>;
+}
+
+export interface TransactionPurposeItem {
+  txn_id: string;
+  timestamp: string;
+  direction: "in" | "out";
+  counterparty_account_id: string;
+  amount: number;
+  channel: string;
+  purpose: string | null;
+  narration: string | null;
+}
+
+export interface TransactionPurposeResponse {
+  account_id: string;
+  transactions: TransactionPurposeItem[];
+  purpose_distribution: Record<string, number>;
+}
+
+export interface RiskTrendPoint {
+  alert_id: string;
+  created_at: string;
+  risk_score: number;
+}
+
+export interface PreviousAlertsResponse {
+  account_id: string;
+  total_prior_alerts: number;
+  prior_sar_count: number;
+  prior_false_positive_count: number;
+  prior_monitoring_count: number;
+  risk_trend: RiskTrendPoint[];
+}
+
+export interface MoneyFlowNode {
+  account_id: string;
+  total_amount: number;
+  txn_count: number;
+  pct_of_total: number;
+}
+
+export interface MoneyFlowResponse {
+  center: string;
+  sources: MoneyFlowNode[];
+  beneficiaries: MoneyFlowNode[];
+}
+
+export interface NetworkRiskResponse {
+  case_id: string;
+  network_risk_score: number | null;
+  network_risk_reasons: Record<string, unknown> | null;
+}
+
+export interface SimilarCaseItem {
+  case_id: string;
+  similarity: number;
+  typology: string | null;
+  outcome: string | null;
+  computed_at: string;
+}
+
+export interface SimilarCasesResponse {
+  case_id: string;
+  similar_cases: SimilarCaseItem[];
+}
+
+export interface ExplanationResponse {
+  account_id: string;
+  explanation: string;
+  cached: boolean;
+  model: string;
+  generated_at: string;
+}
+
+export type DecisionValue = "close_fp" | "request_info" | "escalate";
+
+export interface DecisionRequest {
+  decision: DecisionValue;
+  reason: string;
+  note?: string;
+}
+
+export interface DecisionResponse {
+  case_id: string;
+  status: string;
+  resolution: string | null;
+}
+
+export interface NoteCreateRequest {
+  body: string;
+}
+
+export interface NoteItem {
+  note_id: string;
+  case_id: string;
+  author_id: string | null;
+  source: string;
+  body: string;
+  created_at: string;
+}
