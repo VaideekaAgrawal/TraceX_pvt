@@ -108,8 +108,10 @@ def catalog(seeded: Session) -> ToolCatalog:
 # ── the catalog is fixed ──────────────────────────────────────────────────
 
 
-def test_catalog_exposes_exactly_the_twelve_named_tools(catalog: ToolCatalog) -> None:
-    assert len(TOOL_NAMES) == 12
+def test_catalog_exposes_exactly_the_named_tools(catalog: ToolCatalog) -> None:
+    # Twelve Phase-8 tools plus the Phase-9 get_ego_graph_summary (Finding C).
+    assert len(TOOL_NAMES) == 13
+    assert "get_ego_graph_summary" in TOOL_NAMES
     assert [s["function"]["name"] for s in catalog.schemas()] == list(TOOL_NAMES)
 
 
