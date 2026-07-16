@@ -40,7 +40,13 @@ export function InvestigationTimelineSection({
   const url = useMemo(() => {
     const qs = new URLSearchParams();
     if (start) qs.set("start", start);
-    if (end) qs.set("end", end);
+    // `end` is a bare `YYYY-MM-DD` string from a `type="date"` input; the
+    // backend parses it as an exact `datetime` compared with `<=`, so
+    // passing it through as-is lands on that date's midnight and silently
+    // excludes almost the entire selected end day — same fix as
+    // `alert-query.ts::endOfDayParam` / `transaction-summary.tsx`'s
+    // identical local convention, applied here too.
+    if (end) qs.set("end", `${end}T23:59:59.999`);
     const query = qs.toString();
     return `/api/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/timeline${query ? `?${query}` : ""}`;
   }, [caseId, accountId, start, end]);

@@ -19,7 +19,7 @@ import { formatDateTime } from "@/components/dashboard/format";
 import { PaginationControls } from "@/components/dashboard/pagination-controls";
 import { CHANNEL_OPTIONS } from "@/lib/workspace/channel-options";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
-import { TriageSection } from "@/components/workspace/triage/triage-section";
+import { FilterField, TriageSection } from "@/components/workspace/triage/triage-section";
 import type { TransactionSearchItem, TransactionSearchResponse } from "@/lib/api/types";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
@@ -55,6 +55,18 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "amount_asc", label: "Amount: low to high" },
 ];
 
+/**
+ * `filters.end` is a bare `YYYY-MM-DD` string from a `type="date"` input;
+ * the backend parses `end` as an exact `datetime` compared with `<=`, so
+ * passing it through as-is lands on that date's midnight and silently
+ * excludes almost the entire selected end day — same fix as
+ * `alert-query.ts::endOfDayParam` / `transaction-summary.tsx`'s identical
+ * local convention, applied here too.
+ */
+function endOfDayParam(dateOnly: string): string {
+  return `${dateOnly}T23:59:59.999`;
+}
+
 function buildSearchUrl(
   caseId: string,
   accountId: string | null,
@@ -66,7 +78,7 @@ function buildSearchUrl(
   if (filters.minAmount) qs.set("min_amount", filters.minAmount);
   if (filters.maxAmount) qs.set("max_amount", filters.maxAmount);
   if (filters.start) qs.set("start", filters.start);
-  if (filters.end) qs.set("end", filters.end);
+  if (filters.end) qs.set("end", endOfDayParam(filters.end));
   for (const c of filters.channels) qs.append("channels", c);
   if (filters.direction) qs.set("direction", filters.direction);
   if (filters.txnType) qs.set("txn_type", filters.txnType);
@@ -185,7 +197,7 @@ export function TransactionExplorerSection({
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-end gap-4 rounded-lg border p-3">
-          <Field label="Scope">
+          <FilterField label="Scope">
             <Select value={scope} onValueChange={(value) => { setScope(value as "account" | "case"); setPage(0); }}>
               <SelectTrigger size="sm" className="w-44">
                 <SelectValue />
@@ -195,9 +207,9 @@ export function TransactionExplorerSection({
                 <SelectItem value="case">Whole case (all linked accounts)</SelectItem>
               </SelectContent>
             </Select>
-          </Field>
+          </FilterField>
 
-          <Field label="Sort">
+          <FilterField label="Sort">
             <Select value={filters.sort} onValueChange={(value) => updateFilter("sort", String(value))}>
               <SelectTrigger size="sm" className="w-40">
                 <SelectValue />
@@ -210,9 +222,9 @@ export function TransactionExplorerSection({
                 ))}
               </SelectContent>
             </Select>
-          </Field>
+          </FilterField>
 
-          <Field label="Direction">
+          <FilterField label="Direction">
             <Select
               value={filters.direction || ALL}
               onValueChange={(value) => updateFilter("direction", value === ALL ? "" : (String(value) as "in" | "out"))}
@@ -226,9 +238,9 @@ export function TransactionExplorerSection({
                 <SelectItem value="out">Outbound</SelectItem>
               </SelectContent>
             </Select>
-          </Field>
+          </FilterField>
 
-          <Field label="Min amount">
+          <FilterField label="Min amount">
             <Input
               type="number"
               inputMode="decimal"
@@ -236,8 +248,8 @@ export function TransactionExplorerSection({
               value={filters.minAmount}
               onChange={(e) => updateFilter("minAmount", e.target.value)}
             />
-          </Field>
-          <Field label="Max amount">
+          </FilterField>
+          <FilterField label="Max amount">
             <Input
               type="number"
               inputMode="decimal"
@@ -245,21 +257,21 @@ export function TransactionExplorerSection({
               value={filters.maxAmount}
               onChange={(e) => updateFilter("maxAmount", e.target.value)}
             />
-          </Field>
-          <Field label="From">
+          </FilterField>
+          <FilterField label="From">
             <Input type="date" className="w-36" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} />
-          </Field>
-          <Field label="To">
+          </FilterField>
+          <FilterField label="To">
             <Input type="date" className="w-36" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} />
-          </Field>
-          <Field label="Transaction type">
+          </FilterField>
+          <FilterField label="Transaction type">
             <Input
               className="w-36"
               placeholder="e.g. transfer"
               value={filters.txnType}
               onChange={(e) => updateFilter("txnType", e.target.value)}
             />
-          </Field>
+          </FilterField>
 
           {hasActiveFilters && (
             <Button variant="ghost" size="sm" onClick={() => { setFilters(DEFAULT_FILTERS); setPage(0); }}>
@@ -273,11 +285,11 @@ export function TransactionExplorerSection({
               {CHANNEL_OPTIONS.map((opt) => (
                 <div key={opt.value} className="flex items-center gap-1.5">
                   <Checkbox
-                    id={`txn-channel-${accountId}-${opt.value}`}
+                    id={`txn-channel-${caseId}-${accountId}-${opt.value}`}
                     checked={filters.channels.includes(opt.value)}
                     onCheckedChange={(checked) => toggleChannel(opt.value, !!checked)}
                   />
-                  <Label htmlFor={`txn-channel-${accountId}-${opt.value}`} className="text-sm font-normal">
+                  <Label htmlFor={`txn-channel-${caseId}-${accountId}-${opt.value}`} className="text-sm font-normal">
                     {opt.label}
                   </Label>
                 </div>
@@ -368,14 +380,5 @@ export function TransactionExplorerSection({
         )}
       </div>
     </TriageSection>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <Label className="text-muted-foreground text-xs font-normal">{label}</Label>
-      {children}
-    </div>
   );
 }

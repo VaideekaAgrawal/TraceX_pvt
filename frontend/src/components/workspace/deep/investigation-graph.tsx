@@ -22,7 +22,7 @@ import { readGraphTheme, roleColor, roleLabel, type GraphTheme } from "@/compone
 import { formatRiskScore } from "@/components/dashboard/format";
 import { CHANNEL_OPTIONS, GRAPH_ROLE_OPTIONS } from "@/lib/workspace/channel-options";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
-import { TriageSection } from "@/components/workspace/triage/triage-section";
+import { FilterField, TriageSection } from "@/components/workspace/triage/triage-section";
 import type { GraphNode, NHopGraphResponse } from "@/lib/api/types";
 
 const MAX_RADIUS = 4;
@@ -62,6 +62,18 @@ const DEFAULT_FILTERS: GraphFilterState = {
 
 const ALL = "__all__";
 
+/**
+ * `filters.end` is a bare `YYYY-MM-DD` string from a `type="date"` input;
+ * the backend parses `end` as an exact `datetime` compared with `<=`, so
+ * passing it through as-is lands on that date's midnight and silently
+ * excludes almost the entire selected end day — same fix as
+ * `alert-query.ts::endOfDayParam` / `transaction-summary.tsx`'s identical
+ * local convention, applied here too.
+ */
+function endOfDayParam(dateOnly: string): string {
+  return `${dateOnly}T23:59:59.999`;
+}
+
 function buildGraphUrl(caseId: string, accountId: string, filters: GraphFilterState): string {
   const qs = new URLSearchParams();
   qs.set("radius", String(filters.radius));
@@ -70,7 +82,7 @@ function buildGraphUrl(caseId: string, accountId: string, filters: GraphFilterSt
   if (filters.minAmount) qs.set("min_amount", filters.minAmount);
   if (filters.maxAmount) qs.set("max_amount", filters.maxAmount);
   if (filters.start) qs.set("start", filters.start);
-  if (filters.end) qs.set("end", filters.end);
+  if (filters.end) qs.set("end", endOfDayParam(filters.end));
   for (const c of filters.channels) qs.append("channels", c);
   if (filters.direction) qs.set("direction", filters.direction);
   for (const r of filters.roles) qs.append("roles", r);
@@ -358,7 +370,7 @@ export function InvestigationGraphSection({
               />
             </div>
 
-            <Field label="Min amount">
+            <FilterField label="Min amount">
               <Input
                 type="number"
                 inputMode="decimal"
@@ -366,8 +378,8 @@ export function InvestigationGraphSection({
                 value={filters.minAmount}
                 onChange={(e) => updateFilter("minAmount", e.target.value)}
               />
-            </Field>
-            <Field label="Max amount">
+            </FilterField>
+            <FilterField label="Max amount">
               <Input
                 type="number"
                 inputMode="decimal"
@@ -375,24 +387,24 @@ export function InvestigationGraphSection({
                 value={filters.maxAmount}
                 onChange={(e) => updateFilter("maxAmount", e.target.value)}
               />
-            </Field>
-            <Field label="From">
+            </FilterField>
+            <FilterField label="From">
               <Input
                 type="date"
                 className="w-36"
                 value={filters.start}
                 onChange={(e) => updateFilter("start", e.target.value)}
               />
-            </Field>
-            <Field label="To">
+            </FilterField>
+            <FilterField label="To">
               <Input
                 type="date"
                 className="w-36"
                 value={filters.end}
                 onChange={(e) => updateFilter("end", e.target.value)}
               />
-            </Field>
-            <Field label="Direction">
+            </FilterField>
+            <FilterField label="Direction">
               <Select
                 value={filters.direction || ALL}
                 onValueChange={(value) =>
@@ -408,27 +420,27 @@ export function InvestigationGraphSection({
                   <SelectItem value="out">Outbound</SelectItem>
                 </SelectContent>
               </Select>
-            </Field>
+            </FilterField>
           </div>
 
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-1.5">
               <Checkbox
-                id={`graph-suspicious-${accountId}`}
+                id={`graph-suspicious-${caseId}-${accountId}`}
                 checked={filters.suspiciousOnly}
                 onCheckedChange={(checked) => updateFilter("suspiciousOnly", !!checked)}
               />
-              <Label htmlFor={`graph-suspicious-${accountId}`} className="text-sm font-normal">
+              <Label htmlFor={`graph-suspicious-${caseId}-${accountId}`} className="text-sm font-normal">
                 Suspicious transactions only
               </Label>
             </div>
             <div className="flex items-center gap-1.5">
               <Checkbox
-                id={`graph-prior-sar-${accountId}`}
+                id={`graph-prior-sar-${caseId}-${accountId}`}
                 checked={filters.priorSarOnly}
                 onCheckedChange={(checked) => updateFilter("priorSarOnly", !!checked)}
               />
-              <Label htmlFor={`graph-prior-sar-${accountId}`} className="text-sm font-normal">
+              <Label htmlFor={`graph-prior-sar-${caseId}-${accountId}`} className="text-sm font-normal">
                 Prior SAR accounts only
               </Label>
             </div>
@@ -445,12 +457,12 @@ export function InvestigationGraphSection({
               {CHANNEL_OPTIONS.map((opt) => (
                 <div key={opt.value} className="flex items-center gap-1.5">
                   <Checkbox
-                    id={`graph-channel-${accountId}-${opt.value}`}
+                    id={`graph-channel-${caseId}-${accountId}-${opt.value}`}
                     checked={filters.channels.includes(opt.value)}
                     onCheckedChange={(checked) => toggleListValue("channels", opt.value, !!checked)}
                   />
                   <Label
-                    htmlFor={`graph-channel-${accountId}-${opt.value}`}
+                    htmlFor={`graph-channel-${caseId}-${accountId}-${opt.value}`}
                     className="text-sm font-normal"
                   >
                     {opt.label}
@@ -466,11 +478,11 @@ export function InvestigationGraphSection({
               {GRAPH_ROLE_OPTIONS.map((opt) => (
                 <div key={opt.value} className="flex items-center gap-1.5">
                   <Checkbox
-                    id={`graph-role-${accountId}-${opt.value}`}
+                    id={`graph-role-${caseId}-${accountId}-${opt.value}`}
                     checked={filters.roles.includes(opt.value)}
                     onCheckedChange={(checked) => toggleListValue("roles", opt.value, !!checked)}
                   />
-                  <Label htmlFor={`graph-role-${accountId}-${opt.value}`} className="text-sm font-normal">
+                  <Label htmlFor={`graph-role-${caseId}-${accountId}-${opt.value}`} className="text-sm font-normal">
                     {opt.label}
                   </Label>
                 </div>
@@ -515,15 +527,6 @@ export function InvestigationGraphSection({
         )}
       </div>
     </TriageSection>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <Label className="text-muted-foreground text-xs font-normal">{label}</Label>
-      {children}
-    </div>
   );
 }
 

@@ -95,11 +95,17 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
         onScroll={(e) => updateTabState(caseId, { scrollOffset: e.currentTarget.scrollTop })}
         className="max-h-[75vh] overflow-y-auto rounded-lg border p-3"
       >
-        {tab.activeView === "deep" ? (
+        {/* Both views stay mounted; only visibility toggles via CSS — same
+            keep-alive convention `workspace-shell.tsx` uses one level up for
+            tabs themselves, so switching Triage<->Deep Investigation doesn't
+            discard Deep Investigation's own local state (graph filters,
+            selected node/edge, transaction explorer scope/pagination, etc.). */}
+        <div className={tab.activeView === "deep" ? undefined : "hidden"}>
           <DeepView caseId={caseId} accountId={tab.summary.primary_account_id} />
-        ) : (
+        </div>
+        <div className={tab.activeView === "triage" ? undefined : "hidden"}>
           <TriageView caseId={caseId} accountId={tab.summary.primary_account_id} />
-        )}
+        </div>
       </div>
     </div>
   );
