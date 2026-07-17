@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
+from openai.types.chat.chat_completion_message_function_tool_call import Function
 from sqlalchemy.orm import Session
 
 from db.enums import ActorType
@@ -37,7 +38,7 @@ _SUBMIT_TOOL = {
 
 def _tool_call(call_id: str, name: str, arguments: str) -> ChatCompletionMessageFunctionToolCall:
     return ChatCompletionMessageFunctionToolCall(
-        id=call_id, type="function", function={"name": name, "arguments": arguments}
+        id=call_id, type="function", function=Function(name=name, arguments=arguments)
     )
 
 
