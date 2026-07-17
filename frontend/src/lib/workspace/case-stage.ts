@@ -36,3 +36,23 @@ export const CASE_STAGE_LABELS: Record<string, string> = {
 export function getCaseStageLabel(status: string): string {
   return CASE_STAGE_LABELS[status] ?? "Unknown";
 }
+
+// Statuses reachable only via escalation out of Triage (ROADMAP Phase 17,
+// `case-tab-store.ts`'s `activeView` default derivation). `CLOSED_FP` is
+// deliberately excluded — it's reachable directly from Triage (`close_fp`),
+// not only through Deep Investigation, so it doesn't default an investigator
+// into a view they may never have opened.
+const DEEP_DEFAULT_STATUSES = new Set(["ESCALATED", "MONITORING", "CLOSED_TP"]);
+
+/**
+ * Derives which workspace view (`"triage" | "deep"`) a case tab should open
+ * into by default, from its own `status` — used both for a genuinely new
+ * tab (`case-tab-store.ts`'s `defaultTabState`) and when an already-open
+ * tab's cached status changes (a decision transitions it, or a background
+ * refresh picks up someone else's transition). Manually switchable either
+ * way afterward via the toggle in `case-tab-content.tsx` — this is only the
+ * default, not a hard gate.
+ */
+export function getDefaultActiveView(status: string): "triage" | "deep" {
+  return DEEP_DEFAULT_STATUSES.has(status) ? "deep" : "triage";
+}
