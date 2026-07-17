@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CopilotPlaceholder } from "@/components/workspace/ai-widget/copilot-placeholder";
 import { RecommendationsPanel } from "@/components/workspace/ai-widget/recommendations-panel";
 import { useAuth, useRole } from "@/lib/auth/auth-provider";
+import { isAssignedToUser } from "@/lib/workspace/case-assignment";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
 
 // A pointer movement under this many pixels (either axis) between
@@ -74,12 +75,11 @@ export function AiWidget() {
   const role = useRole();
   const isAdmin = role === "ADMIN_COMPLIANCE";
   const { user } = useAuth();
-  // Same assignment check `decision-panel.tsx` computes for its own
-  // read-only gating — both `/recommendations` and `/recommendations/
+  // Same shared `isAssignedToUser` check `decision-panel.tsx` uses for its
+  // own read-only gating — both `/recommendations` and `/recommendations/
   // challenge` are assignment-gated (`require_case_access`), not the
   // read-only dependency every other L1/L2 GET uses.
-  const canAct =
-    scopedCaseId != null && (isAdmin || (summary != null && summary.assigned_to === (user?.user_id ?? null)));
+  const canAct = scopedCaseId != null && (isAdmin || isAssignedToUser(summary, user?.user_id));
 
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {

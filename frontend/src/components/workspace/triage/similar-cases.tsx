@@ -1,15 +1,14 @@
 "use client";
 
-import { useState } from "react";
-
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/components/dashboard/format";
 import { cn } from "@/lib/utils";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
+import { useOpenCaseTab } from "@/lib/workspace/use-open-case-tab";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { TriageSection } from "@/components/workspace/triage/triage-section";
-import type { CaseListItem, SimilarCasesResponse } from "@/lib/api/types";
+import type { SimilarCasesResponse } from "@/lib/api/types";
 
 // Backend clamps `top_k` to 20 internally (`investigation/similar_cases.py`
 // `_MAX_TOP_K`) regardless of what's requested — this is comfortably above
@@ -36,32 +35,13 @@ const COMPACT_TOP_K = 3;
 export function SimilarCasesSection({ caseId }: { caseId: string }) {
   const expanded = useCaseTabStore((state) => state.tabState[caseId]?.similarCasesExpanded ?? false);
   const updateTabState = useCaseTabStore((state) => state.updateTabState);
-  const openCase = useCaseTabStore((state) => state.openCase);
 
   const topK = expanded ? EXPANDED_TOP_K : COMPACT_TOP_K;
   const { data, loading, error } = useTriageFetch<SimilarCasesResponse>(
     `/api/cases/${encodeURIComponent(caseId)}/similar-cases?top_k=${topK}`,
   );
 
-  const [openingId, setOpeningId] = useState<string | null>(null);
-  const [openError, setOpenError] = useState<string | null>(null);
-
-  async function handleOpen(targetCaseId: string) {
-    setOpenError(null);
-    setOpeningId(targetCaseId);
-    try {
-      const res = await fetch(`/api/cases/${encodeURIComponent(targetCaseId)}`, { cache: "no-store" });
-      const body = await res.json();
-      if (!res.ok) {
-        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to open case");
-      }
-      openCase(body as CaseListItem);
-    } catch (err) {
-      setOpenError(err instanceof Error ? err.message : "Failed to open case");
-    } finally {
-      setOpeningId(null);
-    }
-  }
+  const { openingId, openError, handleOpen } = useOpenCaseTab();
 
   return (
     <TriageSection

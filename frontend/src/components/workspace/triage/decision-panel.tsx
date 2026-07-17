@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useAuth, useRole } from "@/lib/auth/auth-provider";
+import { isAssignedToUser } from "@/lib/workspace/case-assignment";
 import { getCaseStageLabel, getDefaultActiveView } from "@/lib/workspace/case-stage";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
 import type { DecisionRequest, DecisionResponse, DecisionValue } from "@/lib/api/types";
@@ -89,7 +90,7 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
 
   const summary = useCaseTabStore((state) => state.tabState[caseId]?.summary);
   const status = summary?.status ?? "";
-  const isReadOnly = !isAdmin && summary != null && summary.assigned_to !== (user?.user_id ?? null);
+  const isReadOnly = !isAdmin && summary != null && !isAssignedToUser(summary, user?.user_id);
   const updateTabState = useCaseTabStore((state) => state.updateTabState);
 
   const [reason, setReason] = useState("");
