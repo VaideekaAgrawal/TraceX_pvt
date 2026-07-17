@@ -567,6 +567,26 @@ Frontend-only phase (no backend changes — every endpoint was already built and
 
 ---
 
+## 22. Frontend Phase 17 — L2 graph & data surfaces, code review + verify (Session 23)
+
+Frontend-only phase (no backend changes — every endpoint was already built and tested in Backend Phase 6). First real `cytoscape` consumer in this app (`cytoscape` + `react-cytoscapejs` added as new deps). `npm run build`/`npm run lint` clean, before and after code-review fixes. No backend test count change from this phase.
+
+**Code review** (`low` effort, per the standing tiering directive): found and fixed 4 findings — most notably a conditional-mount ternary (`case-tab-content.tsx`) that unmounted/remounted `TriageView`/`DeepView` on every Triage↔Deep toggle, silently discarding all of Deep Investigation's local component state (graph filters, selected node/edge, transaction explorer scope/pagination) each switch — this directly contradicted the "keep-alive, never conditional unmount" invariant Phase 15 built for case tabs one level up; fixed by keeping both views permanently mounted with visibility toggled via CSS. Also: a reintroduced end-of-day date bug in 3 new components (`investigation-graph.tsx`, `investigation-timeline.tsx`, `transaction-explorer.tsx`) sending a raw `YYYY-MM-DD` "To" filter value instead of the established `endOfDayParam`-style `T23:59:59.999` adjustment (`alert-query.ts`'s convention, already correctly followed by Phase 16's `transaction-summary.tsx`) — the identical bug class already found and fixed once in this codebase (Session 20), reintroduced in 3 new places; a duplicated local filter-field wrapper in `investigation-graph.tsx`/`transaction-explorer.tsx`, consolidated into a new shared `FilterField` export in `triage-section.tsx`; and DOM `id`/`htmlFor` collisions on filter checkboxes keyed only on `accountId` (now `caseId`+`accountId`), which would misfire under Phase 15's keep-alive architecture if two open case tabs investigate the same account.
+
+**Live-verified directly against the real backend+frontend (curl + cookie jar, Node 20, one throwaway user `verify17` — no browser/Playwright available this session, same caveat as Phase 16):**
+
+| Check | Result |
+|---|---|
+| Escalated a real non-demo case (`CASE-20260713-ABB021A4`, account `508F5564`) live | `IN_PROGRESS` transition applied directly via `investigation.fsm.transition_case` (no route exposes `ASSIGNED->IN_PROGRESS` yet — same documented gap Session 22 hit), then a real `POST .../decision` `escalate` call succeeded (`200`, status `ESCALATED`) |
+| All 6 new BFF routes (graph, timeline, case-wide + account-scoped transaction search, profile, behavior) | Real, correctly-shaped data on every route |
+| `txn_id` graph↔timeline sync contract | Confirmed directly: a real graph edge's `txn_id` was found present in the same account's timeline response |
+| End-of-day date-filter fix (`/code-review` finding above) | **Directly proved live, before/after**: the identical `start=end=<date>` graph query returned **0 edges** with a raw `YYYY-MM-DD` end value vs. **156 edges** with the `T23:59:59.999`-adjusted value — confirms both that the bug was real and that the fix resolves it |
+| Case-wide vs. account-scoped transaction search `direction` field | Case-wide always `null`, account-scoped populated (`"in"`/`"out"`) — matches the documented contract |
+
+**Not done this session**: a real browser/Playwright pass (curl/API-level only) — worth doing before the pitch demo, not a merge blocker. **Local `data/tracex.db` was mutated** by this verify pass (one real case's `assigned_to` reassigned to a throwaway user and status transitioned `ASSIGNED -> IN_PROGRESS -> ESCALATED`) — local-only, gitignored, doesn't travel with git, but affects this machine's case-status numbers going forward (adds to Session 20/22's existing notes about divergent local DB state across machines).
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
