@@ -522,7 +522,7 @@ Backend: `GET /alerts`, `PATCH /alerts/{alert_id}/assign`, `GET /alerts/workload
 
 **Note on scale**: this verify pass ran against the machine's existing local `data/tracex.db` (3,995 alerts, pre-dating Session 19's full-IBM-benchmark rebuild — `tracex.db` is gitignored/local-only per §17, so it doesn't travel with git history). Numbers above are internally consistent for that dataset; they are not the same as §18's 44,790-alert full-scale figures and shouldn't be compared to them.
 
-## 20. Recommendation Engine — live end-to-end verify (Phase 9 — Session 21)
+## 20. Recommendation Engine — live end-to-end verify (Phase 9 — Session 23)
 
 Branch `phase/9-recommendation-engine`. Model `anthropic/claude-sonnet-4.5` via OpenRouter. Live run against a real round-trip case (`CASE-20260714-0998E497`) in the local full-scale `data/tracex.db` (§18 rebuild).
 
