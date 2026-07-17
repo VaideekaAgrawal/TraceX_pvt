@@ -190,9 +190,16 @@ def test_account_not_in_case_scope_returns_404(
     assert resp.status_code == 404
 
 
-def test_unassigned_investigator_403_admin_bypasses(
+def test_unassigned_investigator_can_read_summary_alerts_admin_too(
     client: TestClient, db_sessionmaker: sessionmaker[Session]
 ) -> None:
+    """RBAC read/write split (bug-fix pass, `fix/l1-l2-usability-and-bugs`):
+    `GET /{case_id}/summary/alerts` moved from `require_case_access` to
+    `require_case_read_access` -- any authenticated user may now view it
+    regardless of case assignment, not just the assigned Investigator or
+    Admin/Compliance. This used to 403 an unassigned Investigator (see git
+    history); it no longer does, by design -- see `foundation.auth.
+    require_case_read_access`'s docstring."""
     _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
     _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
     _seed_user(
@@ -205,10 +212,45 @@ def test_unassigned_investigator_403_admin_bypasses(
 
     other_token = _login(client, "inv2")
     resp = client.get("/cases/CASE1/summary/alerts", headers=_auth_headers(other_token))
-    assert resp.status_code == 403
+    assert resp.status_code == 200
 
     admin_token = _login(client, "admin1")
     resp = client.get("/cases/CASE1/summary/alerts", headers=_auth_headers(admin_token))
+    assert resp.status_code == 200
+
+
+def test_unassigned_investigator_403_on_write_admin_bypasses(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """Write routes remain assignment-gated for Investigators -- the RBAC
+    read/write split only widened GET access; every mutation route is
+    still `require_case_access`, unchanged. `POST /decision` used here as
+    the write-route exemplar; Admin/Compliance still bypasses, exactly as
+    before."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1",
+        account_ids=["A1"], assigned_to="U_INV", status=CaseStatus.IN_PROGRESS,
+    )
+
+    other_token = _login(client, "inv2")
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "escalate", "reason": "test"},
+        headers=_auth_headers(other_token),
+    )
+    assert resp.status_code == 403
+
+    admin_token = _login(client, "admin1")
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "escalate", "reason": "test"},
+        headers=_auth_headers(admin_token),
+    )
     assert resp.status_code == 200
 
 
@@ -391,9 +433,14 @@ def test_similar_cases_returns_ranked_resolved_corpus_excluding_self(
     assert len(resp_top1.json()["similar_cases"]) == 1
 
 
-def test_similar_cases_requires_case_access(
+def test_similar_cases_is_read_access_not_assignment_gated(
     client: TestClient, db_sessionmaker: sessionmaker[Session]
 ) -> None:
+    """RBAC read/write split (bug-fix pass): Similar Historical Cases is a
+    read-only panel and surfaces other investigators' case_ids regardless of
+    assignment already -- `GET .../similar-cases` moved to `require_case_
+    read_access` to match, so an unassigned Investigator can open what this
+    panel already tells them exists."""
     _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
     _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
     _seed_case(
@@ -402,7 +449,7 @@ def test_similar_cases_requires_case_access(
     )
     other_token = _login(client, "inv2")
     resp = client.get("/cases/CASE1/similar-cases", headers=_auth_headers(other_token))
-    assert resp.status_code == 403
+    assert resp.status_code == 200
 
 
 def test_account_explanation_second_call_is_cached(
@@ -669,3 +716,196 @@ def test_cases_rejects_invalid_sort(
         "/cases", params={"sort": "nonsense"}, headers=_auth_headers(token)
     )
     assert resp.status_code == 400
+
+
+# ── POST /cases/{case_id}/start: the missing ASSIGNED -> IN_PROGRESS step ──
+
+
+def test_start_investigation_succeeds_from_assigned(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.ASSIGNED,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.post("/cases/CASE1/start", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["case_id"] == "CASE1"
+    assert body["status"] == "IN_PROGRESS"
+
+    with db_sessionmaker() as db:
+        case = CaseRepository(db).get("CASE1")
+        assert case is not None
+        assert case.status == CaseStatus.IN_PROGRESS
+
+    # Now legally reachable, closing the gap this route exists to fix:
+    # ASSIGNED could never reach ESCALATED directly (correctly rejected),
+    # but IN_PROGRESS -> ESCALATED is legal once /start has run.
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "escalate", "reason": "needs compliance review"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ESCALATED"
+
+
+def test_start_investigation_illegal_transition_returns_409(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.IN_PROGRESS,  # already past ASSIGNED
+    )
+    token = _login(client, "inv1")
+
+    resp = client.post("/cases/CASE1/start", headers=_auth_headers(token))
+    assert resp.status_code == 409
+
+    with db_sessionmaker() as db:
+        case = CaseRepository(db).get("CASE1")
+        assert case is not None
+        assert case.status == CaseStatus.IN_PROGRESS  # unchanged
+
+
+def test_start_investigation_from_new_returns_409(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.NEW,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.post("/cases/CASE1/start", headers=_auth_headers(token))
+    assert resp.status_code == 409
+
+
+def test_start_investigation_requires_case_access(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """`/start` is a real state mutation and stays assignment-gated, unlike
+    the read-only GET routes this same bug-fix pass widened."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.ASSIGNED,
+    )
+    other_token = _login(client, "inv2")
+
+    resp = client.post("/cases/CASE1/start", headers=_auth_headers(other_token))
+    assert resp.status_code == 403
+
+
+# ── GET /cases/{case_id}: single-case lookup ───────────────────────────────
+
+
+def test_get_single_case_returns_case_list_item_shape(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", priority=Priority.P1,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases/CASE1", headers=_auth_headers(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["case_id"] == "CASE1"
+    assert body["primary_account_id"] == "A1"
+    assert body["assigned_to"] == "U_INV"
+    assert body["priority"] == "P1"
+
+
+def test_get_single_case_404s_for_unknown_case_id(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    token = _login(client, "inv1")
+
+    resp = client.get("/cases/NOPE", headers=_auth_headers(token))
+    assert resp.status_code == 404
+
+
+def test_get_single_case_is_read_access_not_assignment_gated(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """The exact gap this route exists to close: Similar Historical Cases /
+    Previous Investigation History surface other investigators' case_ids
+    already; this route lets an investigator actually open one."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV",
+    )
+    other_token = _login(client, "inv2")
+
+    resp = client.get("/cases/CASE1", headers=_auth_headers(other_token))
+    assert resp.status_code == 200
+    assert resp.json()["case_id"] == "CASE1"
+
+
+def test_get_single_case_requires_authentication(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to=None,
+    )
+    resp = client.get("/cases/CASE1")
+    assert resp.status_code == 401
+
+
+# ── RBAC read/write split, end to end on one case ──────────────────────────
+
+
+def test_rbac_read_write_split_unassigned_investigator(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """An unassigned Investigator can now GET a case's L1 detail (the RBAC
+    read/write split this bug-fix pass adds), but every write route --
+    `/decision` and the new `/start` -- still 403s for them, unchanged."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(db_sessionmaker, user_id="U_INV2", username="inv2")
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.IN_PROGRESS,
+    )
+    other_token = _login(client, "inv2")
+
+    read_routes = [
+        "/cases/CASE1",
+        "/cases/CASE1/summary/alerts",
+        "/cases/CASE1/accounts/A1/customer-snapshot",
+        "/cases/CASE1/accounts/A1/geo-risk",
+        "/cases/CASE1/accounts/A1/transaction-summary",
+        "/cases/CASE1/accounts/A1/transaction-purpose",
+        "/cases/CASE1/accounts/A1/previous-alerts",
+        "/cases/CASE1/accounts/A1/money-flow",
+        "/cases/CASE1/network-risk",
+        "/cases/CASE1/similar-cases",
+        "/cases/CASE1/accounts/A1/explanation",  # fails open (no API key) but must not 403
+    ]
+    for path in read_routes:
+        resp = client.get(path, headers=_auth_headers(other_token))
+        assert resp.status_code == 200, f"{path} did not 200 for an unassigned investigator"
+
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "escalate", "reason": "test"},
+        headers=_auth_headers(other_token),
+    )
+    assert resp.status_code == 403
+
+    resp = client.post("/cases/CASE1/start", headers=_auth_headers(other_token))
+    assert resp.status_code == 403
