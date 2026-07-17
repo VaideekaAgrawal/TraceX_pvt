@@ -301,6 +301,21 @@ class ToolCatalog:
                 handler=self._ego_graph,
             ),
             Tool(
+                name="get_ego_graph_summary",
+                description=(
+                    "A COMPACT summary of the N-hop transaction neighbourhood around one "
+                    "account: node and edge counts, total flow, the highest-risk accounts, "
+                    "and the largest individual flows — without the full node/edge dump. "
+                    "Prefer this over get_ego_graph for reasoning about network shape; only "
+                    "reach for the full get_ego_graph when a specific edge or node is needed."
+                ),
+                properties={
+                    "account_id": _ACCOUNT_ID,
+                    "radius": _nullable("integer", f"Hops to expand, 1-{MAX_RADIUS}."),
+                },
+                handler=self._ego_graph_summary,
+            ),
+            Tool(
                 name="get_network_risk",
                 description=(
                     "The case's network risk score and the structural reasons behind it "
@@ -515,6 +530,67 @@ class ToolCatalog:
             case_account_ids=self._scoped_account_ids(),
         )
 
+    def _ego_graph_summary(self, *, account_id: str, radius: int = 2) -> dict[str, Any]:
+        """A small, citable digest of the ego graph — the Finding-C fix.
+
+        Live measurement (docs/METRICS.md §17) found a full `get_ego_graph`
+        return dominated a recommendation's fact bundle: 2,505 of 3,156 facts,
+        ~56k tokens, ~$0.17/prompt. An agent reasoning about *network shape*
+        (is there a hub? how much flows through? who is riskiest?) does not need
+        every edge — it needs the shape. This returns counts and the top few by
+        risk/amount, so the model can reason cheaply and still cite real numbers,
+        and only fall through to the full `get_ego_graph` when it genuinely needs
+        a specific edge. Same underlying, already-gated data — just summarised."""
+        graph = get_filtered_ego_graph(
+            self._session,
+            self._case_id,
+            account_id,
+            radius=min(radius, MAX_RADIUS),
+            filters=GraphFilters(),
+            case_account_ids=self._scoped_account_ids(),
+        )
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+
+        def _risk(node: dict[str, Any]) -> float:
+            score = node.get("current_risk_score")
+            return float(score) if score is not None else -1.0
+
+        def _amount(edge: dict[str, Any]) -> float:
+            amt = edge.get("amount")
+            return float(amt) if amt is not None else 0.0
+
+        top_by_risk = sorted(nodes, key=_risk, reverse=True)[:5]
+        largest_flows = sorted(edges, key=_amount, reverse=True)[:5]
+        node_risks = [_risk(n) for n in nodes if n.get("current_risk_score") is not None]
+
+        return {
+            "account_id": account_id,
+            "radius": min(radius, MAX_RADIUS),
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "total_flow_amount": round(sum(_amount(e) for e in edges), 2),
+            "max_node_risk_score": max(node_risks) if node_risks else None,
+            "prior_sar_node_count": sum(1 for n in nodes if n.get("has_prior_sar")),
+            "top_accounts_by_risk": [
+                {
+                    "account_id": n.get("account_id"),
+                    "role": n.get("role"),
+                    "current_risk_score": n.get("current_risk_score"),
+                    "has_prior_sar": bool(n.get("has_prior_sar")),
+                }
+                for n in top_by_risk
+            ],
+            "largest_flows": [
+                {
+                    "source_account": e.get("source_account"),
+                    "dest_account": e.get("dest_account"),
+                    "amount": _amount(e),
+                }
+                for e in largest_flows
+            ],
+        }
+
     def _network_risk(self) -> dict[str, Any]:
         """Reads the STORED score. Deliberately does not lazily recompute.
 
@@ -635,6 +711,7 @@ TOOL_NAMES: tuple[str, ...] = (
     "get_account_facts",
     "get_money_flow",
     "get_ego_graph",
+    "get_ego_graph_summary",
     "get_network_risk",
     "find_similar_cases",
     "get_relationships",

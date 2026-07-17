@@ -522,9 +522,32 @@ Backend: `GET /alerts`, `PATCH /alerts/{alert_id}/assign`, `GET /alerts/workload
 
 **Note on scale**: this verify pass ran against the machine's existing local `data/tracex.db` (3,995 alerts, pre-dating Session 19's full-IBM-benchmark rebuild — `tracex.db` is gitignored/local-only per §17, so it doesn't travel with git history). Numbers above are internally consistent for that dataset; they are not the same as §18's 44,790-alert full-scale figures and shouldn't be compared to them.
 
+## 20. Recommendation Engine — live end-to-end verify (Phase 9 — Session 23)
+
+Branch `phase/9-recommendation-engine`. Model `anthropic/claude-sonnet-4.5` via OpenRouter. Live run against a real round-trip case (`CASE-20260714-0998E497`) in the local full-scale `data/tracex.db` (§18 rebuild).
+
+| Metric | Value |
+| --- | --- |
+| New backend tests | 33 (action catalog, rule grounding, ranking, agent loop, engine validation, + 6 HTTP route tests) |
+| Full suite after Phase 9 | 565 passed (+33 vs pre-phase), 28 deselected (ingest), ruff + mypy clean |
+| `/code-review low` | 4 findings, all fixed (dead code `is_prior_sar_present`; double rule fetch in `ground_case`; missing route tests; challenge length-limit mismatch route/engine) — no correctness bugs (the live verify had already shaken those out) |
+| Tool catalog size | 12 → **13** (added `get_ego_graph_summary`, Finding C from §17) |
+| Action catalog | 13 actions, each with FATF + RBI/PMLA anchor (prototype-level, flagged illustrative) |
+| `generate_recommendations` (live) | **3 accepted, 1 rejected**; 6 iterations; 13 tool calls; 282 facts; ~91s; ~$0.07–0.10/call (14.5k prompt tokens) |
+| Guardrail firing (the point) | rejected `INVESTIGATE_ROUND_TRIP` — model stated ungrounded number `1213521.85` not in any cited fact; challenge answer rejected for "over 3 million" (ungrounded approximation) |
+| PII egress gate | passed silently across all 13 tool dispatches on real customer data (0 `PIIEgressError`) |
+| Persistence | `ai_interactions` row: `agent=RECOMMENDATION`, `facts` (282 keys), `rule_anchors` (typology `round_trip`), `tools_called` (13) — all previously-null columns now populated |
+
+**Three real bugs found *only* because the verify used a live model, not mocked tests** (all fixed):
+1. **Fact-key prefix mismatch** — the loop fed the model raw tool JSON, so it cited bare keys (`node_count`) while the validator resolves call-prefixed keys (`get_ego_graph_summary(account_id=…).node_count`); every correct claim was rejected. Fixed by feeding the flattened `fact_key:value` view (`grounding.flatten_tool_result`).
+2. **Empty forced-submit from a shrunk tools list** — phase 2 declared only the submit tool, but the phase-1 history referenced the fact tools; a `tools` list omitting referenced tools makes the provider return empty tool args. Fixed by declaring the full tool set while forcing `tool_choice` to submit.
+3. **Answer-token truncation (the actual culprit)** — the forced submission ran out of the 1500-token budget mid-JSON (`finish_reason=length`), which normalises to an empty `{}` — read downstream as "0 recommendations", a silent lost answer. Fixed: submit phase gets `_SUBMIT_MAX_TOKENS=4000`, and an empty submission now **raises** (`AgentLoopError` → HTTP 502) instead of silently passing.
+
+**Cost note (Finding C carried forward):** even with the summarised ego-graph tool, a real recommendation prompt reached ~14.5k tokens / 282 facts (~$0.07–0.10). The summary tool helps but the model still gathers broadly; bundle-size trimming remains a tuning lever for Phase 10, not a Phase 9 blocker.
+
 ---
 
-## 20. Frontend Phase 15 — Investigation Workspace shell, code review + verify (Session 21)
+## 21. Frontend Phase 15 — Investigation Workspace shell, code review + verify (Session 21)
 
 Backend: `GET /cases` (role-scoped: Investigator → `assigned_to = me`; Admin/Compliance → `AWAITING_REVIEW`/`ESCALATED` review queue) — 9 new tests, **568/568 backend tests passing**, ruff/mypy clean. Frontend: `npm run build`/`npm run lint` clean, before and after code-review fixes.
 
@@ -543,7 +566,7 @@ Backend: `GET /cases` (role-scoped: Investigator → `assigned_to = me`; Admin/C
 
 ---
 
-## 21. Frontend Phase 16 — L1 Triage workspace, scope-conflict caught + code review + verify (Session 22)
+## 22. Frontend Phase 16 — L1 Triage workspace, scope-conflict caught + code review + verify (Session 22)
 
 Frontend-only phase (no backend changes — every endpoint was already built and tested in Backend Phase 5). `npm run build`/`npm run lint` clean, before and after code-review fixes. No backend test count change from this phase.
 
@@ -567,7 +590,7 @@ Frontend-only phase (no backend changes — every endpoint was already built and
 
 ---
 
-## 22. Frontend Phase 17 — L2 graph & data surfaces, code review + verify (Session 23)
+## 23. Frontend Phase 17 — L2 graph & data surfaces, code review + verify (Session 24)
 
 Frontend-only phase (no backend changes — every endpoint was already built and tested in Backend Phase 6). First real `cytoscape` consumer in this app (`cytoscape` + `react-cytoscapejs` added as new deps). `npm run build`/`npm run lint` clean, before and after code-review fixes. No backend test count change from this phase.
 

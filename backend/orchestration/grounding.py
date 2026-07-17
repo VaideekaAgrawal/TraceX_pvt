@@ -284,6 +284,24 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def flatten_tool_result(
+    tool_name: str, result: dict[str, Any], arguments: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """One tool call's output flattened to the SAME `{fact_key: value}` map the
+    `FactBundle` stores and the validator resolves against.
+
+    This is what a tool-calling loop should feed back to the model instead of the
+    raw nested JSON. The model cites the keys it is shown; if it is shown
+    `{"node_count": 3}` it will cite `node_count`, but the bundle keyed that fact
+    as `get_ego_graph_summary(account_id=A1).node_count` — so every grounded
+    claim would be rejected as citing an unknown key. Showing the flattened,
+    call-prefixed view closes that gap and makes *what the model saw* equal to
+    *what the validator checks*, which is the property the whole contract rests
+    on. Found live (docs/METRICS.md) — the loop's first real run rejected every
+    correct recommendation for exactly this reason."""
+    return dict(_flatten(result, prefix=call_key(tool_name, arguments)))
+
+
 def _flatten(value: Any, *, prefix: str) -> list[tuple[str, Any]]:
     """Depth-first flatten to `(dotted.key, JSON-safe scalar)` pairs. Lists are
     indexed (`sources[0].total_amount`) so a claim can cite one counterparty rather
