@@ -588,6 +588,27 @@ Frontend-only phase (no backend changes — every endpoint was already built and
 
 **Not done this session**: a real browser/Playwright pass (this verify was curl/API-level only, backed by a careful read of the client-side conditional-render logic for the role gating) — worth doing before the pitch demo, not a merge blocker. **Local `data/tracex.db` was mutated** by this verify pass (one real case reassigned to a throwaway user and transitioned through to `CLOSED_FP`) — local-only, gitignored, doesn't travel with git, but affects this machine's case-count numbers by one closed case going forward.
 
+## 22. Investigation Copilot — live end-to-end verify (Phase 10 — Session 23 cont.)
+
+Branch `phase/10-copilot`. Model `anthropic/claude-sonnet-4.5`. Live run as a real investigator (`investigator1`, 10 assigned cases) against the full-scale local `data/tracex.db`, rolled back.
+
+| Metric | Value |
+| --- | --- |
+| New backend tests | 25 (scoping, re-hydration, catalog RBAC/PII, engine, + 4 HTTP route tests) |
+| Full suite after Phase 10 | 598 passed (+33 vs pre-phase), 28 deselected (ingest), ruff + mypy clean (CI-parity `… demo_data tests`) |
+| Copilot tools | 8 (`list_my_cases`, `whats_changed`, 5 per-case fact tools delegating to Phase 9's catalog, `write_case_note`) |
+| Shared catalog change | added `source_count` / `beneficiary_count` to `get_money_flow` (used by Phase 9 + Copilot) |
+| Live Q1 (cross-case) | grounded: "You have 10 cases… highest-risk CASE-…DAD84AF2, risk 81.48, primary account 804BD00D0, ASSIGNED, L1, P2"; 2 iterations, tool `list_my_cases` |
+| Live Q2 (case drill-down) | grounded money-flow summary — "3 source accounts… largest 335545.06 = 78.19%… 2 beneficiary accounts"; 3 iterations, `list_my_cases`+`get_money_flow`; ~40s |
+| Guardrail firing (the point) | **before** the counts fix, Q2 was correctly REFUSED ("states ungrounded number 3.0 … Account received funds from 3 sources") — the model counted a list, which is ungrounded arithmetic; fixed by making the tool hand over the counts, never by relaxing the gate |
+| RBAC | scoping resolved exactly the investigator's 10 cases; an out-of-scope/unknown case id returns a non-disclosing `ToolError` |
+
+**Decision-9 proof (unit + live):** the reply shown to the investigator re-hydrates `customer_id → "Name (customer_id)"`, while the persisted `ai_interactions.response_text` and `facts` keep only `customer_id` — the name never reached the model and is not stored. `test_engine.py::test_grounded_answer_rehydrated_for_display_but_tokenised_at_rest` asserts both halves.
+
+**Decision-10 proof:** no note-reading tool exists (`test_catalog.py::test_there_is_no_note_reading_tool`); `notes.body` never enters a prompt. The Copilot can only *write* a note.
+
+**Bug found live, fixed at the right altitude:** the money-flow tool returned counterparty *lists* but no *counts*, so a natural "3 sources / 2 beneficiaries" summary was un-groundable. Added the counts as citable facts in the shared Phase-8 catalog handler (helps the Recommendation Engine too), following the codebase's own `inflow_pct_of_declared_income` precedent — "make the tool compute the figure," never relax the validator.
+
 ---
 
 ## How to keep this file current
