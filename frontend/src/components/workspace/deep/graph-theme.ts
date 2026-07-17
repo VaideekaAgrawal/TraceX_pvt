@@ -86,6 +86,14 @@ export function roleColor(theme: GraphTheme, role: string): string {
   }
 }
 
+/** Truncates a node/edge label for cytoscape display — shared by every
+ * `cytoscape` consumer in this app (`investigation-graph.tsx`,
+ * `relationship-explorer.tsx`, `graph-replay.tsx`) rather than each
+ * redefining an identical helper. */
+export function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 /** Plain-language label for a role, used in the legend and node-detail
  * panel — never rely on color alone to convey role (dataviz guidance,
  * ROADMAP Phase 17). */

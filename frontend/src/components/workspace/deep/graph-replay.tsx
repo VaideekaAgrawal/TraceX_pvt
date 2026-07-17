@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import "@/components/workspace/deep/graph-theme.css";
-import { readGraphTheme, type GraphTheme } from "@/components/workspace/deep/graph-theme";
+import { readGraphTheme, truncate, type GraphTheme } from "@/components/workspace/deep/graph-theme";
 import { formatDateTime } from "@/components/dashboard/format";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { TriageSection } from "@/components/workspace/triage/triage-section";
@@ -24,10 +24,6 @@ import type { TimelineEventItem, TimelineResponse } from "@/lib/api/types";
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
 const BASE_STEP_MS = 700;
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
 
 function buildElements(accountId: string, revealedEvents: TimelineEventItem[]): ElementDefinition[] {
   const counterparties = new Map<string, boolean>();

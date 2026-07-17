@@ -7,7 +7,7 @@ import CytoscapeComponent from "react-cytoscapejs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import "@/components/workspace/deep/graph-theme.css";
-import { readGraphTheme, type GraphTheme } from "@/components/workspace/deep/graph-theme";
+import { readGraphTheme, truncate, type GraphTheme } from "@/components/workspace/deep/graph-theme";
 import { formatDateTime } from "@/components/dashboard/format";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { TriageSection } from "@/components/workspace/triage/triage-section";
@@ -31,10 +31,6 @@ const SHARED_ATTRIBUTE_LABELS: Record<string, string> = {
 
 function sharedAttributeLabel(attribute: string): string {
   return SHARED_ATTRIBUTE_LABELS[attribute] ?? attribute;
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 function buildElements(

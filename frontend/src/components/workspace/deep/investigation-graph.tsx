@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import "@/components/workspace/deep/graph-theme.css";
-import { readGraphTheme, roleColor, roleLabel, type GraphTheme } from "@/components/workspace/deep/graph-theme";
+import { readGraphTheme, roleColor, roleLabel, truncate, type GraphTheme } from "@/components/workspace/deep/graph-theme";
 import { formatRiskScore } from "@/components/dashboard/format";
 import { CHANNEL_OPTIONS, GRAPH_ROLE_OPTIONS } from "@/lib/workspace/channel-options";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
@@ -88,10 +88,6 @@ function buildGraphUrl(caseId: string, accountId: string, filters: GraphFilterSt
   for (const r of filters.roles) qs.append("roles", r);
   if (filters.priorSarOnly) qs.set("prior_sar_only", "true");
   return `/api/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/graph?${qs.toString()}`;
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 function buildElements(
