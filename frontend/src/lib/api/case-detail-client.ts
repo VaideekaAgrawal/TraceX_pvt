@@ -24,6 +24,8 @@ import type {
   AlertSummaryItem,
   BehaviorAnalysisResponse,
   CaseListItem,
+  ChallengeRequest,
+  ChallengeResponse,
   CustomerProfileResponse,
   CustomerSnapshotResponse,
   DecisionRequest,
@@ -41,6 +43,7 @@ import type {
   NoteItem,
   PatternExplanationResponse,
   PreviousAlertsResponse,
+  RecommendationsResponse,
   RelationshipGraphResponse,
   SimilarCasesResponse,
   TimelineQueryParams,
@@ -397,5 +400,42 @@ export async function pinEvidence(caseId: string, evidenceId: string): Promise<E
   return patchJson<EvidenceItem>(
     `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(evidenceId)}/pin`,
     "Failed to pin evidence",
+  );
+}
+
+// ── AI Recommendations widget (`backend/api/routes/recommendations.py`,
+// ROADMAP Phase 19) ────────────────────────────────────────────────────
+//
+// Both routes are `require_case_access` (assignment-gated) server-side, NOT
+// the read-only dependency the rest of this module's GET functions use —
+// this genuinely IS a write (a real, billed LLM call that persists an
+// `ai_interactions` row), matching this module's own POST convention. Both
+// always throw on non-2xx (403 for a case not assigned to the caller, 503
+// if the LLM gateway is unconfigured, 502 if the model failed to produce
+// valid structured output) — never `null`, same as `postDecision`.
+
+/** `POST /cases/{case_id}/recommendations` — a real, billed LLM call, never
+ * auto-fired. `ai-widget/recommendations-panel.tsx` only calls this from an
+ * explicit "Generate" button click. */
+export async function generateRecommendations(caseId: string): Promise<RecommendationsResponse> {
+  return postJson<RecommendationsResponse>(
+    `/cases/${encodeURIComponent(caseId)}/recommendations`,
+    undefined,
+    "Failed to generate recommendations",
+  );
+}
+
+/** `POST /cases/{case_id}/recommendations/challenge` — cross-questions the
+ * most recent generated recommendation set for this case; the engine
+ * defends or concedes with grounded, cited facts appended to the same
+ * audited interaction thread. */
+export async function challengeRecommendation(
+  caseId: string,
+  body: ChallengeRequest,
+): Promise<ChallengeResponse> {
+  return postJson<ChallengeResponse>(
+    `/cases/${encodeURIComponent(caseId)}/recommendations/challenge`,
+    body,
+    "Failed to submit challenge",
   );
 }

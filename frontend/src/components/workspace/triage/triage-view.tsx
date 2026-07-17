@@ -1,26 +1,27 @@
 import { AiPanel } from "@/components/workspace/triage/ai-panel";
-import { AiRecommendationSlot } from "@/components/workspace/triage/ai-recommendation-slot";
 import { AlertSummarySection } from "@/components/workspace/triage/alert-summary";
 import { CustomerSnapshotSection } from "@/components/workspace/triage/customer-snapshot";
 import { MoneyFlowSection } from "@/components/workspace/triage/money-flow";
 import { NetworkRiskSection } from "@/components/workspace/triage/network-risk";
-import { NotesPanel } from "@/components/workspace/triage/notes-panel";
 import { PreviousAlertsSection } from "@/components/workspace/triage/previous-alerts";
 import { SimilarCasesSection } from "@/components/workspace/triage/similar-cases";
 import { TransactionSummarySection } from "@/components/workspace/triage/transaction-summary";
 
 /**
- * L1 Triage screen — 9 of the 10 sections from `FRONTEND_PLAN.md` §3.3,
- * each wired to its own real endpoint via its own independent fetch (so one
+ * L1 Triage screen — 7 of the sections from `FRONTEND_PLAN.md` §3.3, each
+ * wired to its own real endpoint via its own independent fetch (so one
  * section's failure never blocks the rest). Single scroll, clearly
  * sectioned via one `Card` per section. Mounted by `case-tab-content.tsx`
  * for the active/keep-alive tab — no fetching happens here itself, this
  * component is pure composition.
  *
- * `DecisionPanel` (the 10th section) is deliberately NOT mounted here —
- * it's lifted to `case-tab-content.tsx`'s always-visible zone so it stays
- * reachable from both Triage and Deep Investigation without remounting on
- * the L1/L2 toggle (see that file's docstring).
+ * `DecisionPanel` and `NotesPanel` are deliberately NOT mounted here —
+ * both are lifted to `case-tab-content.tsx`'s always-visible zone so they
+ * stay reachable from both Triage and Deep Investigation without
+ * remounting on the L1/L2 toggle (see that file's docstring). The old
+ * static "AI Recommendation" slot is gone too — superseded by the real,
+ * functional floating AI widget (`components/workspace/ai-widget/`),
+ * global across the whole workspace rather than one more per-tab section.
  */
 export function TriageView({ caseId, accountId }: { caseId: string; accountId: string }) {
   if (!accountId) {
@@ -42,8 +43,6 @@ export function TriageView({ caseId, accountId }: { caseId: string; accountId: s
       <PreviousAlertsSection caseId={caseId} accountId={accountId} />
       <NetworkRiskSection caseId={caseId} />
       <SimilarCasesSection caseId={caseId} />
-      <AiRecommendationSlot />
-      <NotesPanel caseId={caseId} />
     </div>
   );
 }

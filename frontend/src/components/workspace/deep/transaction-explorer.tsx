@@ -4,9 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -17,13 +15,12 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/components/dashboard/format";
 import { PaginationControls } from "@/components/dashboard/pagination-controls";
-import { CHANNEL_OPTIONS } from "@/lib/workspace/channel-options";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { FilterField, TriageSection } from "@/components/workspace/triage/triage-section";
 import type { TransactionSearchItem, TransactionSearchResponse } from "@/lib/api/types";
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
-const DEFAULT_PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const DEFAULT_PAGE_SIZE = 10;
 const ALL = "__all__";
 
 interface ExplorerFilterState {
@@ -31,7 +28,6 @@ interface ExplorerFilterState {
   maxAmount: string;
   start: string;
   end: string;
-  channels: string[];
   direction: "" | "in" | "out";
   txnType: string;
   sort: string;
@@ -42,7 +38,6 @@ const DEFAULT_FILTERS: ExplorerFilterState = {
   maxAmount: "",
   start: "",
   end: "",
-  channels: [],
   direction: "",
   txnType: "",
   sort: "timestamp_desc",
@@ -79,7 +74,6 @@ function buildSearchUrl(
   if (filters.maxAmount) qs.set("max_amount", filters.maxAmount);
   if (filters.start) qs.set("start", filters.start);
   if (filters.end) qs.set("end", endOfDayParam(filters.end));
-  for (const c of filters.channels) qs.append("channels", c);
   if (filters.direction) qs.set("direction", filters.direction);
   if (filters.txnType) qs.set("txn_type", filters.txnType);
   qs.set("sort", filters.sort);
@@ -154,14 +148,6 @@ export function TransactionExplorerSection({
 
   function updateFilter<K extends keyof ExplorerFilterState>(key: K, value: ExplorerFilterState[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }));
-    setPage(0);
-  }
-
-  function toggleChannel(value: string, checked: boolean) {
-    setFilters((prev) => ({
-      ...prev,
-      channels: checked ? [...prev.channels, value] : prev.channels.filter((v) => v !== value),
-    }));
     setPage(0);
   }
 
@@ -278,24 +264,6 @@ export function TransactionExplorerSection({
               Reset filters
             </Button>
           )}
-
-          <div className="flex w-full flex-col gap-1.5">
-            <Label className="text-muted-foreground text-xs font-normal">Channels</Label>
-            <div className="flex flex-wrap gap-3">
-              {CHANNEL_OPTIONS.map((opt) => (
-                <div key={opt.value} className="flex items-center gap-1.5">
-                  <Checkbox
-                    id={`txn-channel-${caseId}-${accountId}-${opt.value}`}
-                    checked={filters.channels.includes(opt.value)}
-                    onCheckedChange={(checked) => toggleChannel(opt.value, !!checked)}
-                  />
-                  <Label htmlFor={`txn-channel-${caseId}-${accountId}-${opt.value}`} className="text-sm font-normal">
-                    {opt.label}
-                  </Label>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         {scope === "case" && (

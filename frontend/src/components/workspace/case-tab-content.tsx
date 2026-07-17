@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/components/dashboard/format";
 import { DeepView } from "@/components/workspace/deep/deep-view";
 import { DecisionPanel } from "@/components/workspace/triage/decision-panel";
+import { NotesPanel } from "@/components/workspace/triage/notes-panel";
 import { TriageView } from "@/components/workspace/triage/triage-view";
 import { useAuth } from "@/lib/auth/auth-provider";
 import { getCaseStageLabel } from "@/lib/workspace/case-stage";
@@ -31,12 +32,16 @@ import type { CaseListItem } from "@/lib/api/types";
  * that has (though Deep Investigation's own collapsed `TriageSummaryCollapsible`
  * already covers most of that second case without switching away).
  *
- * `DecisionPanel` is mounted here, in this same always-visible zone (with
- * the `<dl>` summary block below), NOT inside `triage-view.tsx`'s
- * `activeView`-toggled scroll container — it must stay visible and
- * functional regardless of whether the tab is showing Triage or Deep
- * Investigation, so switching between them never hides the only place to
- * act on a case.
+ * `DecisionPanel` and `NotesPanel` are both mounted here, in this same
+ * always-visible zone (with the `<dl>` summary block below), NOT inside
+ * `triage-view.tsx`'s `activeView`-toggled scroll container — they must
+ * stay visible and functional regardless of whether the tab is showing
+ * Triage or Deep Investigation, so switching between them never hides the
+ * only place to act on a case or the one place notes are composed/reviewed.
+ * `NotesPanel` is mounted exactly once, here — it used to live inside
+ * `triage-view.tsx` only, which meant switching to Deep Investigation hid
+ * it; it is NOT also mounted anywhere else (a second live instance sharing
+ * the same Zustand `notesDraft` field would double-fire its autosave debounce).
  */
 export function CaseTabContent({ caseId }: { caseId: string }) {
   const tab = useCaseTabStore((state) => state.tabState[caseId]);
@@ -139,6 +144,7 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
       </dl>
 
       <DecisionPanel caseId={caseId} />
+      <NotesPanel caseId={caseId} />
 
       <div
         ref={scrollRef}

@@ -361,7 +361,7 @@ export interface GraphExplanationResponse {
   generated_at: string;
 }
 
-export type DecisionValue = "close_fp" | "request_info" | "escalate";
+export type DecisionValue = "close_fp" | "request_info" | "escalate" | "monitoring";
 
 export interface DecisionRequest {
   decision: DecisionValue;
@@ -680,4 +680,60 @@ export interface EvidenceItem {
   pinned: boolean;
   added_by: string;
   added_at: string;
+}
+
+// ── `backend/api/routes/recommendations.py` (ROADMAP Phase 9 backend /
+// Phase 19 frontend — the floating AI Recommendations widget) ────────────
+//
+// Same "backend enum -> plain `string`" convention as the rest of this
+// file. Both routes are on `require_case_access` (assignment-gated), NOT
+// the read-only dependency every other L1/L2 GET route above uses — see
+// `ai-widget/recommendations-panel.tsx`'s docstring for how the widget
+// anticipates the 403 that implies for a case not assigned to the current
+// Investigator.
+
+export interface RegulatoryAnchorModel {
+  fatf: string;
+  india: string;
+}
+
+export interface RecommendationModel {
+  action_id: string;
+  title: string;
+  description: string;
+  narrative: string;
+  confidence: number;
+  rank: number;
+  typologies: string[];
+  regulatory_anchor: RegulatoryAnchorModel;
+  rule_anchor: Record<string, unknown>[];
+  cited_fact_keys: string[];
+}
+
+export interface RejectedModel {
+  action_id: string;
+  reason: string;
+}
+
+export interface RecommendationsResponse {
+  case_id: string;
+  recommendations: RecommendationModel[];
+  rejected: RejectedModel[];
+  interaction_id: number | null;
+  iterations: number;
+  latency_ms: number;
+}
+
+export interface ChallengeRequest {
+  question: string;
+}
+
+export interface ChallengeResponse {
+  case_id: string;
+  answered: boolean;
+  narrative: string;
+  interaction_id: number | null;
+  rejected_reason: string | null;
+  iterations: number;
+  latency_ms: number;
 }
