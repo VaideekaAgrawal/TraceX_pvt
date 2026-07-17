@@ -23,7 +23,7 @@ import { formatRiskScore } from "@/components/dashboard/format";
 import { CHANNEL_OPTIONS, GRAPH_ROLE_OPTIONS } from "@/lib/workspace/channel-options";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { FilterField, TriageSection } from "@/components/workspace/triage/triage-section";
-import type { GraphNode, NHopGraphResponse } from "@/lib/api/types";
+import type { NHopGraphResponse } from "@/lib/api/types";
 
 const MAX_RADIUS = 4;
 const MIN_RADIUS = 1;
@@ -225,43 +225,53 @@ function buildStylesheet(theme: GraphTheme): StylesheetJsonBlock[] {
  * click highlights the matching edge here (and, the other direction,
  * clicking an edge here highlights its timeline row) — pure client-side
  * `txn_id` matching, per the designed data contract, no extra fetch.
+ * `selectedAccountId`/`onSelectAccount` (ROADMAP Phase 18) are lifted the
+ * same way, so the Evidence Management section can offer a "bookmark the
+ * account currently selected in the graph" quick action without this
+ * component needing to know anything about evidence.
  */
 export function InvestigationGraphSection({
   caseId,
   accountId,
   selectedTxnId,
   onSelectTxn,
+  selectedAccountId,
+  onSelectAccount,
 }: {
   caseId: string;
   accountId: string;
   selectedTxnId: string | null;
   onSelectTxn: (txnId: string | null) => void;
+  selectedAccountId: string | null;
+  onSelectAccount: (accountId: string | null) => void;
 }) {
   const [filters, setFilters] = useState<GraphFilterState>(DEFAULT_FILTERS);
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
   const url = useMemo(() => buildGraphUrl(caseId, accountId, filters), [caseId, accountId, filters]);
   const { data, loading, error } = useTriageFetch<NHopGraphResponse>(url);
 
   const theme = useMemo(() => readGraphTheme(), []);
-  const selectedNodeId = selectedNode?.account_id ?? null;
   const elements = useMemo(
-    () => (data ? buildElements(data, theme, selectedTxnId, selectedNodeId) : []),
-    [data, theme, selectedTxnId, selectedNodeId],
+    () => (data ? buildElements(data, theme, selectedTxnId, selectedAccountId) : []),
+    [data, theme, selectedTxnId, selectedAccountId],
   );
   const stylesheet = useMemo(() => buildStylesheet(theme), [theme]);
+  const selectedNode = useMemo(
+    () => data?.nodes.find((n) => n.account_id === selectedAccountId) ?? null,
+    [data, selectedAccountId],
+  );
 
   const cyInstanceRef = useRef<Core | null>(null);
   const onSelectTxnRef = useRef(onSelectTxn);
-  const nodesByIdRef = useRef<Map<string, GraphNode>>(new Map());
+  const onSelectAccountRef = useRef(onSelectAccount);
 
   useEffect(() => {
     onSelectTxnRef.current = onSelectTxn;
   }, [onSelectTxn]);
 
   useEffect(() => {
-    nodesByIdRef.current = new Map((data?.nodes ?? []).map((n) => [n.account_id, n]));
-  }, [data]);
+    onSelectAccountRef.current = onSelectAccount;
+  }, [onSelectAccount]);
 
   // Re-run the concentric layout only when a fresh graph arrives (new
   // `data`), not on every selection change — `cy={...}`'s callback fires on
@@ -271,15 +281,14 @@ export function InvestigationGraphSection({
     if (cyInstanceRef.current === cy) return;
     cyInstanceRef.current = cy;
     cy.on("tap", "node", (evt) => {
-      const id = evt.target.id();
-      setSelectedNode(nodesByIdRef.current.get(id) ?? null);
+      onSelectAccountRef.current(evt.target.id());
     });
     cy.on("tap", "edge", (evt) => {
       const txnId = evt.target.id();
       onSelectTxnRef.current(txnId);
     });
     cy.on("tap", (evt) => {
-      if (evt.target === cy) setSelectedNode(null);
+      if (evt.target === cy) onSelectAccountRef.current(null);
     });
   }, []);
 

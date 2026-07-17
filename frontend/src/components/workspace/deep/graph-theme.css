@@ -28,6 +28,23 @@
  * runtime theme toggle exists yet in this app — matching the existing
  * unwired `dark:` utility-class convention elsewhere (e.g.
  * `customer-snapshot.tsx`'s `FlagBadge`), not introducing a new toggle.
+ *
+ * `--l2-rel-*` (ROADMAP Phase 18, Relationship Explorer) are additive, not
+ * a reuse of `--l2-role-*`/`--l2-center-*` above — the Relationship
+ * Explorer graph never renders alongside the Investigation Graph, but its
+ * "in case scope" vs. "out of case scope" distinction is a genuinely
+ * different semantic axis (customer-level case membership, not
+ * account-level SOURCE/MULE/SINK role or "is this the account under
+ * investigation"), so it gets its own tokens rather than overloading
+ * existing ones whose meaning is documented above. `--l2-rel-out-of-scope`
+ * is deliberately NOT `--l2-status-flag`'s red or `--l2-role-sink`'s
+ * amber — a customer surfacing via a shared attribute is a *finding to
+ * look at*, not a laundering flag or a role classification, and reusing
+ * either color would visually conflate two unrelated meanings. Chosen as a
+ * blue/orange pair against `--l2-rel-in-scope` specifically (rather than
+ * blue/magenta) — the single most broadly CVD-safe two-hue pairing — on
+ * top of the node-shape distinction (ellipse vs. diamond) that's the real
+ * secondary channel `relationship-explorer.tsx` relies on.
  */
 :root {
   --l2-role-source: #2a78d6;
@@ -41,6 +58,9 @@
   --l2-status-flag: #dc2626;
   --l2-selection: #7c3aed;
   --l2-label: oklch(0.145 0 0);
+  --l2-rel-in-scope: #2a78d6;
+  --l2-rel-out-of-scope: #ea580c;
+  --l2-rel-edge: #9ca3af;
 }
 
 .dark {
@@ -55,4 +75,7 @@
   --l2-status-flag: #f87171;
   --l2-selection: #a78bfa;
   --l2-label: oklch(0.985 0 0);
+  --l2-rel-in-scope: #3987e5;
+  --l2-rel-out-of-scope: #fb923c;
+  --l2-rel-edge: #6b7280;
 }
