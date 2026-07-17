@@ -334,7 +334,7 @@ class ExplanationResponse(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    decision: Literal["close_fp", "request_info", "escalate"]
+    decision: Literal["close_fp", "request_info", "escalate", "monitoring"]
     reason: str
     note: str | None = None
 
@@ -740,7 +740,7 @@ def make_decision(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DecisionResponse:
-    """Close-as-FP | Request-info | Escalate, mapped onto the real
+    """Close-as-FP | Request-info | Escalate | Monitoring, mapped onto the real
     `investigation.fsm.VALID_TRANSITIONS` graph:
 
       - `escalate` -> `ESCALATED` (legal only from `IN_PROGRESS`), open to
@@ -757,6 +757,16 @@ def make_decision(
         rather than a blanket `Depends(require_role(...))` on the whole
         route, since `escalate`/`request_info` must stay open to
         Investigators on this same endpoint.
+      - `monitoring` -> `close_case(..., ENHANCED_MONITORING)`. Same
+        `ADMIN_COMPLIANCE`-only gate as `close_fp` ("approves ... monitoring"
+        is the same class of approval action as "approves SAR" per
+        `SYSTEM_DEVELOPMENT_PLAN.md` §5). FSM-legal only from
+        `AWAITING_REVIEW`/`ESCALATED` (`investigation.fsm.VALID_TRANSITIONS`)
+        -- NOT directly from `IN_PROGRESS` -- so an attempt from `IN_PROGRESS`
+        409s via the same `InvalidTransitionError` path every other
+        FSM-illegal attempt on this route already does; the frontend is
+        expected to only offer this action once a case has actually reached
+        `AWAITING_REVIEW`/`ESCALATED`, not gate it purely by role.
 
     `InvalidTransitionError` -> 409. If `note` is present, it's recorded as
     a `Note` after a successful transition. `escalate`/`request_info`
@@ -787,7 +797,7 @@ def make_decision(
                 actor_id=user.user_id,
                 reason=body.reason,
             )
-        else:  # "close_fp"
+        elif body.decision == "close_fp":
             if user.role != UserRole.ADMIN_COMPLIANCE:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "Only Admin/Compliance may close a case"
@@ -796,6 +806,19 @@ def make_decision(
                 db,
                 case.case_id,
                 CaseResolution.FALSE_POSITIVE,
+                actor_type=actor_type,
+                actor_id=user.user_id,
+                reason=body.reason,
+            )
+        else:  # "monitoring"
+            if user.role != UserRole.ADMIN_COMPLIANCE:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN, "Only Admin/Compliance may set a case to monitoring"
+                )
+            updated = close_case(
+                db,
+                case.case_id,
+                CaseResolution.ENHANCED_MONITORING,
                 actor_type=actor_type,
                 actor_id=user.user_id,
                 reason=body.reason,

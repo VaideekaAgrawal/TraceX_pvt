@@ -296,6 +296,64 @@ def test_close_fp_forbidden_for_investigator_allowed_for_admin(
         assert feedback[0].verdict == CaseResolution.FALSE_POSITIVE
 
 
+def test_monitoring_forbidden_for_investigator_allowed_for_admin_from_awaiting_review(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.AWAITING_REVIEW,
+    )
+
+    inv_token = _login(client, "inv1")
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "monitoring", "reason": "keep an eye on it"},
+        headers=_auth_headers(inv_token),
+    )
+    assert resp.status_code == 403
+
+    admin_token = _login(client, "admin1")
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "monitoring", "reason": "pattern plausible but inconclusive"},
+        headers=_auth_headers(admin_token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "MONITORING"
+    assert body["resolution"] == "ENHANCED_MONITORING"
+
+    with db_sessionmaker() as db:
+        case = CaseRepository(db).get("CASE1")
+        assert case is not None
+        assert case.status == CaseStatus.MONITORING
+        assert case.resolution == CaseResolution.ENHANCED_MONITORING
+
+
+def test_monitoring_from_illegal_status_returns_409(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to=None, status=CaseStatus.IN_PROGRESS,
+    )
+    token = _login(client, "admin1")
+
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "monitoring", "reason": "too early"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 409
+
+
 def test_escalate_from_illegal_status_returns_409(
     client: TestClient, db_sessionmaker: sessionmaker[Session]
 ) -> None:
