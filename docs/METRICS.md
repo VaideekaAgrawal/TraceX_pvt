@@ -610,6 +610,26 @@ Frontend-only phase (no backend changes — every endpoint was already built and
 
 ---
 
+## 24. Frontend Phase 18 — L2 relationships, evidence, similar cases, pattern explanation, replay (Session 25)
+
+Frontend-only phase (no backend changes — every endpoint was already built in Backend Phases 6/7/8). Second real `cytoscape` consumer set in this app (`relationship-explorer.tsx`, `graph-replay.tsx`, alongside Phase 17's `investigation-graph.tsx`). `npm run build`/`npm run lint` clean, before and after code-review fixes. No backend test count change from this phase.
+
+**Code review** (`low` effort, per the standing tiering directive): 1 finding — a `truncate()` label-cropping helper copy-pasted byte-for-byte into `relationship-explorer.tsx` and `graph-replay.tsx` (already existed in `investigation-graph.tsx`) — fixed by moving it into the shared `graph-theme.ts` module all three already import from. No correctness bugs found.
+
+**Live-verified directly against the real backend+frontend (curl + cookie jar, Node 20, throwaway users `verify18`/`verify18adm` — no browser/Playwright available this session, same caveat as Phases 16/17):**
+
+| Check | Result |
+|---|---|
+| Shared-attribute relationship surfaces an out-of-case customer (roadmap's own **Verify** line — the "no one else does this" feature, `SYSTEM_DEVELOPMENT_PLAN.md` §4.2) | Confirmed via the real seeded PAN cluster (`demo_data/relationships.py`): `GET .../relationships` returned `DEMO-CUST-0123/0136/0186` as `in_case_scope: false`, `confidence: 0.95`, `shared_attribute: "pan"`, against the case's own in-scope `DEMO-CUST-0048` — no direct transaction link |
+| Evidence pin durability (roadmap's own **Verify** line) | Pinned an evidence item, then re-fetched with a completely fresh login/cookie jar — pinned state persisted (DB-backed, not session-only) |
+| Similar Cases `top_k` expand | `top_k=3` vs `top_k=50` genuinely returns 3 vs. the backend's server-side-clamped 20 (`investigation/similar_cases.py::_MAX_TOP_K`) |
+| Pattern Explanation route | Reaches the real backend, returns the correct graceful "AI explanations not configured" shape in this environment (no LLM key set) — matches the existing `explain_account` contract |
+| Evidence create round-trip | `TRANSACTION`/`ACCOUNT`/`DOCUMENT` types all round-tripped with real `txn_id`s pulled from the real graph/timeline routes |
+
+**Data gap found during verify, not caused by this phase**: some historical demo cases have no `case_accounts` row (worked around for this session's verify by adding one via `CaseAccountRepository.add_account`, same category as prior sessions' direct `transition_case` calls) — silently makes case-scoped L2 features look empty for those cases even when the customer has real relationships. Flagged for whichever phase next touches demo-data generation or the historical-case pipeline, not fixed here (out of Phase 18 scope). **Not done this session**: a real browser/Playwright pass — worth doing before the pitch demo, not a merge blocker.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
