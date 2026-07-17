@@ -284,6 +284,46 @@ export function InvestigationGraphSection({
     [data, selectedAccountId],
   );
 
+  // `dagre`'s `rankDir: "LR"` stacks same-rank nodes along the Y axis, and
+  // `fit: true` (below) uniformly scales the ENTIRE computed layout — both
+  // axes — to fit whatever container box it's given. A fixed-height
+  // container was fine for the previous `concentric` layout (rings spread
+  // radially, using both axes), but under `rankDir: "LR"` a busy hub
+  // account with many same-hop siblings all lands in one rank, and `fit`
+  // silently compresses that rank's `nodeSep` spacing down to fit a fixed
+  // box — exactly the "nodes stacked/overlapping" report, not a dagre
+  // misconfiguration. Sizing the container's height to the graph's actual
+  // widest rank (approximated by the largest `hop_distance` bucket — not
+  // dagre's literal internal rank assignment, but a close enough proxy
+  // without re-deriving dagre's own ranking) keeps `fit`'s compression
+  // factor close to 1 for busy graphs instead of forcing every graph into
+  // the same 700px box regardless of how wide it actually is. The
+  // already-scrollable ancestor (`case-tab-content.tsx`'s `max-h-[75vh]
+  // overflow-y-auto`) absorbs any resulting height beyond the viewport —
+  // no separate inner scroll region needed.
+  const graphHeight = useMemo(() => {
+    if (!data || data.nodes.length === 0) return 700;
+    const countsByHop = new Map<number, number>();
+    for (const n of data.nodes) {
+      const hop = n.hop_distance ?? 0;
+      countsByHop.set(hop, (countsByHop.get(hop) ?? 0) + 1);
+    }
+    const maxPerRank = Math.max(1, ...countsByHop.values());
+    // ~130px/node: node diameter (up to 64px, `mapData(risk, 0, 100, 22,
+    // 64)`) + `nodeSep` (70) + label headroom, rounded up for breathing
+    // room. Live-measured against a real case: a hub account's radius-3
+    // ego-graph put 68 nodes in one rank — a real, not hypothetical, case
+    // this needs to handle. Deliberately NOT capped tightly: the ancestor
+    // (`case-tab-content.tsx`'s `max-h-[75vh] overflow-y-auto`) already
+    // scrolls, so a tall canvas is normal, expected scrolling, not broken
+    // layout — and re-compressing a busy rank back down would reintroduce
+    // the exact overlap this height calculation exists to prevent. The
+    // 6000px ceiling is a sanity bound against a truly degenerate rank
+    // (hundreds of nodes), not a routine limit; the existing zoom-out
+    // control is the deliberate way to get an overview beyond that.
+    return Math.min(6000, Math.max(700, maxPerRank * 130));
+  }, [data]);
+
   const cyInstanceRef = useRef<Core | null>(null);
   const onSelectTxnRef = useRef(onSelectTxn);
   const onSelectAccountRef = useRef(onSelectAccount);
@@ -569,11 +609,10 @@ export function InvestigationGraphSection({
             <CytoscapeComponent
               elements={elements}
               stylesheet={stylesheet}
-              // Bumped from 440px — a fixed small canvas crammed a busy
-              // ego-graph into an illegible clump regardless of how many
-              // nodes/edges were actually in view. Paired with the wider
-              // `minNodeSpacing` above.
-              style={{ width: "100%", height: "700px" }}
+              // `graphHeight` (see its own comment above) scales with the
+              // graph's busiest rank so `fit: true` below doesn't compress
+              // same-rank node spacing into overlap for a busy hub account.
+              style={{ width: "100%", height: `${graphHeight}px` }}
               cy={handleCyInit}
               wheelSensitivity={0.2}
             />
