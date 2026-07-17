@@ -27,6 +27,8 @@ import type {
   CustomerSnapshotResponse,
   DecisionRequest,
   DecisionResponse,
+  EvidenceCreateRequest,
+  EvidenceItem,
   ExplanationResponse,
   GeoRiskResponse,
   GraphQueryParams,
@@ -35,7 +37,9 @@ import type {
   NHopGraphResponse,
   NoteCreateRequest,
   NoteItem,
+  PatternExplanationResponse,
   PreviousAlertsResponse,
+  RelationshipGraphResponse,
   SimilarCasesResponse,
   TimelineQueryParams,
   TimelineResponse,
@@ -92,6 +96,25 @@ async function postJson<T>(path: string, body: unknown, fallback: string): Promi
       method: "POST",
       body: JSON.stringify(body ?? {}),
     });
+  } catch {
+    throw new BackendUnavailableError(UNAVAILABLE);
+  }
+  if (response === null) {
+    throw new BackendApiError("Not authenticated", 401);
+  }
+  if (!response.ok) {
+    const detail = await readErrorDetail(response, fallback);
+    throw new BackendApiError(detail, response.status);
+  }
+  return (await response.json()) as T;
+}
+
+/** Same contract as `postJson` above, for the one `PATCH` route this module
+ * calls (`.../evidence/{evidence_id}/pin`) — no request body. */
+async function patchJson<T>(path: string, fallback: string): Promise<T> {
+  let response: Response | null;
+  try {
+    response = await authedBackendFetch(path, { method: "PATCH" });
   } catch {
     throw new BackendUnavailableError(UNAVAILABLE);
   }
@@ -278,5 +301,54 @@ export async function getAccountBehavior(
 ): Promise<BehaviorAnalysisResponse | null> {
   return getJson<BehaviorAnalysisResponse>(
     `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/behavior`,
+  );
+}
+
+// ── L2 Deep Investigation, part 2 (`backend/api/routes/l2.py`, ROADMAP
+// Phase 18) — relationships, pattern explanation, evidence ────────────────
+
+export async function getCaseRelationships(
+  caseId: string,
+): Promise<RelationshipGraphResponse | null> {
+  return getJson<RelationshipGraphResponse>(`/cases/${encodeURIComponent(caseId)}/relationships`);
+}
+
+export async function getPatternExplanation(
+  caseId: string,
+  alertId: string,
+  force = false,
+): Promise<PatternExplanationResponse | null> {
+  const qs = toQueryString({ force });
+  return getJson<PatternExplanationResponse>(
+    `/cases/${encodeURIComponent(caseId)}/alerts/${encodeURIComponent(alertId)}/pattern-explanation${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function listEvidence(
+  caseId: string,
+  pinned?: boolean,
+): Promise<EvidenceItem[] | null> {
+  const qs = toQueryString({ pinned });
+  return getJson<EvidenceItem[]>(`/cases/${encodeURIComponent(caseId)}/evidence${qs ? `?${qs}` : ""}`);
+}
+
+export async function createEvidence(
+  caseId: string,
+  body: EvidenceCreateRequest,
+): Promise<EvidenceItem> {
+  return postJson<EvidenceItem>(
+    `/cases/${encodeURIComponent(caseId)}/evidence`,
+    body,
+    "Failed to save evidence",
+  );
+}
+
+/** One-directional (`pinned` always ends up `true`) — matches
+ * `EvidenceRepository.pin`'s own contract server-side; there is no
+ * "unpin" route, so no such function is exposed here either. */
+export async function pinEvidence(caseId: string, evidenceId: string): Promise<EvidenceItem> {
+  return patchJson<EvidenceItem>(
+    `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(evidenceId)}/pin`,
+    "Failed to pin evidence",
   );
 }

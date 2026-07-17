@@ -579,3 +579,88 @@ export interface BehaviorAnalysisResponse {
   // treatment (same honesty pattern, not a second UI convention).
   deferred: string[];
 }
+
+// ── `backend/api/routes/l2.py` (ROADMAP Phase 18 — Relationship Explorer,
+// Pattern Explanation, Evidence Management) ────────────────────────────
+//
+// Same "backend enum -> plain `string`" convention as the rest of this
+// file. `RelationshipEdge.confidence` is deliberately a raw number (0.95
+// for an exact PAN match down to 0.25 for a shared branch city, per
+// `investigation/relationship_discovery.py`'s documented confidence
+// scheme) — the ROADMAP explicitly calls out that this number must be
+// shown per-edge, not collapsed into a boolean "related" flag.
+
+export interface RelationshipNode {
+  customer_id: string;
+  name: string | null;
+  // The single most important visual distinction in this graph — a
+  // customer surfaced here with `in_case_scope: false` has NO direct
+  // transaction link to this case, only a shared attribute (PAN, name,
+  // income bracket, branch city). See `SYSTEM_DEVELOPMENT_PLAN.md` §4.2.
+  in_case_scope: boolean;
+}
+
+export interface RelationshipEdge {
+  id: number;
+  entity_a: string;
+  entity_b: string;
+  shared_attribute: string;
+  confidence: number;
+  method: string;
+  discovered_at: string;
+}
+
+export interface RelationshipGraphResponse {
+  case_id: string;
+  nodes: RelationshipNode[];
+  edges: RelationshipEdge[];
+}
+
+export interface PatternExplanationResponse {
+  alert_id: string;
+  explanation: string;
+  cached: boolean;
+  model: string;
+  generated_at: string;
+  rule_anchors: { detection_type?: string; rule_ids?: string[]; alert_id?: string } | null;
+  pattern_signature: string;
+}
+
+// `db/enums.py::EvidenceType` — mirrored as a literal union (unlike most
+// other backend enums in this file) because the create form below needs to
+// exhaustively switch on it to decide which fields to show; a plain
+// `string` would let a typo silently fall through to "no extra fields"
+// instead of a compile error.
+export const EVIDENCE_TYPES = [
+  "TRANSACTION",
+  "ACCOUNT",
+  "GRAPH_SNAPSHOT",
+  "DOCUMENT",
+  "PATTERN",
+  "NOTE_REF",
+] as const;
+export type EvidenceType = (typeof EVIDENCE_TYPES)[number];
+
+export interface EvidenceCreateRequest {
+  type: EvidenceType;
+  ref_id?: string | null;
+  label?: string | null;
+  payload?: Record<string, unknown> | null;
+  // Plain text reference/path string — explicitly NOT a file uploader, no
+  // upload backend exists anywhere in this codebase (ROADMAP Phase 18
+  // scope note).
+  file_path?: string | null;
+}
+
+export interface EvidenceItem {
+  evidence_id: string;
+  case_id: string;
+  type: string;
+  ref_id: string | null;
+  label: string | null;
+  payload: Record<string, unknown> | null;
+  file_path: string | null;
+  pinned: boolean;
+  added_by: string;
+  added_at: string;
+}

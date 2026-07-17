@@ -3,10 +3,9 @@
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDateTime } from "@/components/dashboard/format";
+import { AiGeneratedBanner } from "@/components/workspace/ai-generated-banner";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import type { ExplanationResponse } from "@/lib/api/types";
 
@@ -14,7 +13,10 @@ import type { ExplanationResponse } from "@/lib/api/types";
  * L1 Triage AI panel — account-level explanation only (`GET .../explanation`)
  * per `docs/FRONTEND_ROADMAP.md`'s Phase 16 checklist. Pattern-level
  * explanation (`GET .../alerts/{alert_id}/pattern-explanation`) is L2 scope
- * (Phase 17), not built here.
+ * (`deep/pattern-explanation-panel.tsx`, ROADMAP Phase 18), not built here.
+ * `AiGeneratedBanner` itself now lives in `components/workspace/
+ * ai-generated-banner.tsx`, shared with that Phase 18 panel rather than
+ * duplicated verbatim.
  */
 export function AiPanel({ caseId, accountId }: { caseId: string; accountId: string }) {
   return (
@@ -26,20 +28,6 @@ export function AiPanel({ caseId, accountId }: { caseId: string; accountId: stri
         <AccountExplanationTab caseId={caseId} accountId={accountId} />
       </CardContent>
     </Card>
-  );
-}
-
-function AiGeneratedBanner({ model, generatedAt, cached }: { model: string; generatedAt: string; cached: boolean }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-      <Badge variant="outline" className="border-primary/40 bg-primary/5 text-primary">
-        AI-Generated
-      </Badge>
-      <span>
-        {model} · {formatDateTime(generatedAt)}
-        {cached ? " · cached" : ""}
-      </span>
-    </div>
   );
 }
 

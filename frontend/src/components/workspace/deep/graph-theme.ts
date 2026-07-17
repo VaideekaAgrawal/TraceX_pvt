@@ -23,6 +23,12 @@ export interface GraphTheme {
   statusFlag: string;
   selection: string;
   label: string;
+  // ROADMAP Phase 18 — Relationship Explorer's own tokens, see
+  // `graph-theme.css`'s docstring for why these are additive, not a reuse
+  // of `role*`/`center*` above.
+  relInScope: string;
+  relOutOfScope: string;
+  relEdge: string;
 }
 
 const FALLBACK: GraphTheme = {
@@ -37,6 +43,9 @@ const FALLBACK: GraphTheme = {
   statusFlag: "#dc2626",
   selection: "#7c3aed",
   label: "oklch(0.145 0 0)",
+  relInScope: "#2a78d6",
+  relOutOfScope: "#ea580c",
+  relEdge: "#9ca3af",
 };
 
 export function readGraphTheme(): GraphTheme {
@@ -55,6 +64,9 @@ export function readGraphTheme(): GraphTheme {
     statusFlag: read("--l2-status-flag", FALLBACK.statusFlag),
     selection: read("--l2-selection", FALLBACK.selection),
     label: read("--l2-label", FALLBACK.label),
+    relInScope: read("--l2-rel-in-scope", FALLBACK.relInScope),
+    relOutOfScope: read("--l2-rel-out-of-scope", FALLBACK.relOutOfScope),
+    relEdge: read("--l2-rel-edge", FALLBACK.relEdge),
   };
 }
 
@@ -72,6 +84,14 @@ export function roleColor(theme: GraphTheme, role: string): string {
     default:
       return theme.roleUnknown;
   }
+}
+
+/** Truncates a node/edge label for cytoscape display — shared by every
+ * `cytoscape` consumer in this app (`investigation-graph.tsx`,
+ * `relationship-explorer.tsx`, `graph-replay.tsx`) rather than each
+ * redefining an identical helper. */
+export function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 /** Plain-language label for a role, used in the legend and node-detail

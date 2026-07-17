@@ -3,33 +3,55 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/components/dashboard/format";
+import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { TriageSection } from "@/components/workspace/triage/triage-section";
 import type { SimilarCasesResponse } from "@/lib/api/types";
 
+// Backend clamps `top_k` to 20 internally (`investigation/similar_cases.py`
+// `_MAX_TOP_K`) regardless of what's requested — this is comfortably above
+// that clamp so "expanded" genuinely means "the corpus's real top-k, no
+// artificial frontend cap," matching the ROADMAP's "no top_k cap" wording,
+// without needing to special-case an "omit the param" request shape.
+const EXPANDED_TOP_K = 50;
+const COMPACT_TOP_K = 3;
+
 /**
- * L1 Triage §8 — Similar Historical Cases, compact top-3 card only this
- * phase (per the task spec — no expanded L2 view until Phase 17). The
- * "View all" affordance below is deliberately non-functional (disabled,
- * not a dead link) rather than omitted, so the eventual L2 expansion has an
- * obvious anchor point.
+ * L1 Triage §8 — Similar Historical Cases. Compact top-3 card by default;
+ * expands in place to the corpus's full top-k (ROADMAP Phase 18) via the
+ * same component — the roadmap explicitly calls for expanding out of this
+ * existing card rather than building a second "full view" component.
+ * Expand/collapse state is `tabState[caseId].similarCasesExpanded`, a
+ * field Phase 15 already reserved on the tab store for exactly this.
  */
 export function SimilarCasesSection({ caseId }: { caseId: string }) {
+  const expanded = useCaseTabStore((state) => state.tabState[caseId]?.similarCasesExpanded ?? false);
+  const updateTabState = useCaseTabStore((state) => state.updateTabState);
+
+  const topK = expanded ? EXPANDED_TOP_K : COMPACT_TOP_K;
   const { data, loading, error } = useTriageFetch<SimilarCasesResponse>(
-    `/api/cases/${encodeURIComponent(caseId)}/similar-cases?top_k=3`,
+    `/api/cases/${encodeURIComponent(caseId)}/similar-cases?top_k=${topK}`,
   );
 
   return (
     <TriageSection
       title="Similar Historical Cases"
-      description="Top 3 most similar closed/monitored cases, by RL feature-vector similarity."
+      description={
+        expanded
+          ? "Full ranked list of the most similar closed/monitored cases, by RL feature-vector similarity."
+          : "Top 3 most similar closed/monitored cases, by RL feature-vector similarity."
+      }
       loading={loading}
       error={error}
       isEmpty={!!data && data.similar_cases.length === 0}
       emptyText="No similar historical cases found."
       action={
-        <Button variant="outline" size="sm" disabled title="Full view arrives with Deep Investigation (Phase 17)">
-          View all
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => updateTabState(caseId, { similarCasesExpanded: !expanded })}
+        >
+          {expanded ? "Show top 3" : "View all"}
         </Button>
       }
     >
