@@ -1,6 +1,6 @@
 "use client";
 
-import type { Core, ElementDefinition, NodeSingular, StylesheetJsonBlock } from "cytoscape";
+import type { Core, ElementDefinition, StylesheetJsonBlock } from "cytoscape";
 import { Pause, Play, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
@@ -17,13 +17,22 @@ import {
 import { Slider } from "@/components/ui/slider";
 import "@/components/workspace/deep/graph-theme.css";
 import { readGraphTheme, truncate, type GraphTheme } from "@/components/workspace/deep/graph-theme";
-import { formatDateTime } from "@/components/dashboard/format";
+import { formatDateTime, formatShortDateTime } from "@/components/dashboard/format";
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { TriageSection } from "@/components/workspace/triage/triage-section";
 import type { TimelineEventItem, TimelineResponse } from "@/lib/api/types";
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
 const BASE_STEP_MS = 700;
+
+// Preset-layout geometry for `computePositions` below — same left/right-
+// around-a-center spatial idea `triage/money-flow.tsx`'s SVG already
+// validates for the same one-hop-around-a-center data shape, just via
+// cytoscape's `preset` layout instead of hand-built SVG coordinates.
+const CENTER_X = 320;
+const SIDE_OFFSET_X = 220;
+const ROW_SPACING_Y = 64;
+const TOP_Y = 40;
 
 function buildElements(accountId: string, revealedEvents: TimelineEventItem[]): ElementDefinition[] {
   const counterparties = new Map<string, boolean>();
@@ -47,10 +56,63 @@ function buildElements(accountId: string, revealedEvents: TimelineEventItem[]): 
       target: event.direction === "out" ? event.counterparty_account_id : accountId,
       width: 1.5 + (Math.log10(event.amount + 1) / Math.log10(maxAmount + 1)) * 6,
       isLaundering: event.is_laundering,
+      // Per-edge visible timestamp (ROADMAP fix — previously the ONLY
+      // timestamp anywhere on this component was the single "Showing up to
+      // <timestamp>" line below the controls, not per-transaction). Short
+      // date + time, not bare `HH:mm` — this dataset's dormancy/
+      // reactivation patterns can span months between two revealed
+      // transactions, so a bare time alone would be ambiguous.
+      timestampLabel: formatShortDateTime(event.timestamp),
     },
   }));
 
   return [...nodes, ...edges];
+}
+
+/**
+ * Left/right-by-direction preset positions — replaces the previous
+ * `concentric` layout (2 rings: center, everyone else), which mixed inbound
+ * and outbound counterparties into the same outer ring and read as noise
+ * for fan-in/fan-out structure. Every event here is one-hop-around-
+ * `accountId` with a `direction: "in" | "out"` relative to it
+ * (`GET .../timeline`'s own contract) — `"in"` (money coming IN to the
+ * center) counterparties are sources, stacked on the LEFT; `"out"`
+ * counterparties are beneficiaries, stacked on the RIGHT. A counterparty
+ * keeps the direction it was FIRST revealed with even if a later revealed
+ * event between the same two accounts runs the other way — real but rare
+ * for this dataset, and re-bucketing a node mid-replay would jump it across
+ * the canvas, which is worse than a one-time simplification.
+ */
+function computePositions(
+  accountId: string,
+  revealedEvents: TimelineEventItem[],
+): Record<string, { x: number; y: number }> {
+  const firstDirection = new Map<string, "in" | "out">();
+  for (const event of revealedEvents) {
+    if (!firstDirection.has(event.counterparty_account_id)) {
+      firstDirection.set(event.counterparty_account_id, event.direction);
+    }
+  }
+
+  const leftIds: string[] = [];
+  const rightIds: string[] = [];
+  for (const [id, direction] of firstDirection) {
+    (direction === "in" ? leftIds : rightIds).push(id);
+  }
+
+  const maxRows = Math.max(leftIds.length, rightIds.length, 1);
+  const centerY = TOP_Y + ((maxRows - 1) * ROW_SPACING_Y) / 2;
+
+  const positions: Record<string, { x: number; y: number }> = {
+    [accountId]: { x: CENTER_X, y: centerY },
+  };
+  leftIds.forEach((id, i) => {
+    positions[id] = { x: CENTER_X - SIDE_OFFSET_X, y: TOP_Y + i * ROW_SPACING_Y };
+  });
+  rightIds.forEach((id, i) => {
+    positions[id] = { x: CENTER_X + SIDE_OFFSET_X, y: TOP_Y + i * ROW_SPACING_Y };
+  });
+  return positions;
 }
 
 function buildStylesheet(theme: GraphTheme): StylesheetJsonBlock[] {
@@ -97,6 +159,13 @@ function buildStylesheet(theme: GraphTheme): StylesheetJsonBlock[] {
         "arrow-scale": 0.7,
         "curve-style": "bezier",
         opacity: 0.85,
+        // Per-transaction timestamp, visible directly on the revealed edge
+        // — previously no timestamp appeared anywhere on the canvas itself.
+        label: "data(timestampLabel)",
+        "font-size": 6,
+        color: theme.label,
+        "text-rotation": "autorotate",
+        "text-margin-y": -6,
       },
     },
     {
@@ -193,19 +262,20 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
     cyInstanceRef.current = cy;
   }, []);
 
+  // Recomputed whenever `revealedEvents` changes — new counterparties can
+  // appear as the scrubber advances, each needing a left/right slot.
   useEffect(() => {
     const cy = cyInstanceRef.current;
     if (!cy) return;
     cy.layout({
-      name: "concentric",
-      concentric: (node: NodeSingular) => (node.data("isCenter") ? 2 : 1),
-      levelWidth: () => 1,
-      minNodeSpacing: 40,
+      name: "preset",
+      positions: computePositions(accountId, revealedEvents),
       animate: true,
       animationDuration: 250,
       fit: true,
+      padding: 30,
     }).run();
-  }, [elements]);
+  }, [accountId, revealedEvents]);
 
   function handlePlayPause() {
     if (!playing && revealedCount >= events.length && events.length > 0) {
@@ -290,6 +360,11 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
             cy={handleCyInit}
             wheelSensitivity={0.2}
           />
+
+          <p className="text-muted-foreground text-xs">
+            Sources (inbound) on the left, beneficiaries (outbound) on the right of the center account. Each
+            edge is labeled with when that transaction occurred.
+          </p>
         </div>
       )}
     </TriageSection>

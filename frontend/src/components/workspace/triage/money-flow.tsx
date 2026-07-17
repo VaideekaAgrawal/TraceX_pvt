@@ -9,7 +9,9 @@ import type { MoneyFlowNode, MoneyFlowResponse } from "@/lib/api/types";
 // to the top `MAX_NODES_PER_SIDE` by amount per side so the diagram stays
 // legible on a busy account; the rest are summarized as a text line below.
 const MAX_NODES_PER_SIDE = 6;
-const ROW_HEIGHT = 34;
+// Bumped from 34 to fit a 3rd text line (the real ₹ amount, previously
+// missing entirely — only pct/count were ever shown) without crowding.
+const ROW_HEIGHT = 46;
 const TOP_PADDING = 24;
 
 /**
@@ -159,16 +161,19 @@ function MoneyFlowEdge({
       />
       <rect
         x={x - 55}
-        y={y - 14}
+        y={y - 19}
         width={110}
-        height={28}
+        height={38}
         rx={5}
         className="fill-card stroke-border"
       />
-      <text textAnchor="middle" x={x} y={y - 2} className="fill-foreground text-[10px] font-medium">
+      <text textAnchor="middle" x={x} y={y - 7} className="fill-foreground text-[10px] font-medium">
         {truncateLabel(node.account_id, 14)}
       </text>
-      <text textAnchor="middle" x={x} y={y + 10} className="fill-muted-foreground text-[9px]">
+      <text textAnchor="middle" x={x} y={y + 5} className="fill-foreground text-[9px] font-medium">
+        ₹{node.total_amount.toLocaleString()}
+      </text>
+      <text textAnchor="middle" x={x} y={y + 16} className="fill-muted-foreground text-[9px]">
         {node.pct_of_total.toFixed(0)}% · {node.txn_count} txn
       </text>
     </g>

@@ -28,7 +28,22 @@ import type { CaseListItem, CaseListResponse } from "@/lib/api/types";
  * component's own rendering treat an empty/unmapped status as "Unknown"
  * rather than guessing a stage, so the placeholder doesn't assert anything
  * false. Later phases (16+, once case-detail routes exist) can replace this
- * with a real single-case fetch.
+ * with a real single-case fetch. (`GET /cases/{case_id}` now exists —
+ * `getCase`/`case-detail-client.ts` — and is used by `similar-cases.tsx`/
+ * `previous-alerts.tsx` to open an arbitrary case as a tab; this deep-link
+ * resolver is untouched here since it's out of this pass's scope and the
+ * placeholder-tab fallback still degrades gracefully either way.)
+ *
+ * Two-column layout: a left column holds the case queue plus a vertical
+ * tab rail (`CaseTabBar`, restacked top-to-bottom — see that file's
+ * docstring) beneath it; a right column holds the active tab's full
+ * `CaseTabContent`, taking the remaining width. Previously this was a
+ * single stacked column — queue card, then a horizontal tab strip, then all
+ * tab content below that — which pushed the open case's content far down
+ * the page and read as a horizontal browser-tab strip rather than a case
+ * list. The keep-alive rendering (`CaseTabContentWrapper`, CSS
+ * `hidden`/`block` toggle, every open tab always mounted) is unchanged —
+ * only the surrounding container layout moved.
  */
 export function WorkspaceShell({ initialQueue }: { initialQueue: CaseListResponse }) {
   const searchParams = useSearchParams();
@@ -68,20 +83,34 @@ export function WorkspaceShell({ initialQueue }: { initialQueue: CaseListRespons
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Cases</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <CaseQueue initialData={initialQueue} />
-        </CardContent>
-      </Card>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <div className="flex w-full shrink-0 flex-col gap-4 lg:w-80">
+          <Card>
+            <CardHeader>
+              <CardTitle>Your Cases</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CaseQueue initialData={initialQueue} />
+            </CardContent>
+          </Card>
 
-      <div className="rounded-xl border">
-        <CaseTabBar />
-        {openTabIds.map((caseId) => (
-          <CaseTabContentWrapper key={caseId} caseId={caseId} />
-        ))}
+          <div className="rounded-xl border">
+            <p className="text-muted-foreground border-b px-3 py-2 text-xs font-medium tracking-wide uppercase">
+              Open Cases
+            </p>
+            <CaseTabBar />
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 rounded-xl border">
+          {openTabIds.length === 0 ? (
+            <p className="text-muted-foreground p-6 text-sm">
+              Select a case from the queue or the open-cases rail to view it here.
+            </p>
+          ) : (
+            openTabIds.map((caseId) => <CaseTabContentWrapper key={caseId} caseId={caseId} />)
+          )}
+        </div>
       </div>
     </div>
   );

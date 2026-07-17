@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { useRole } from "@/lib/auth/auth-provider";
+import { useAuth, useRole } from "@/lib/auth/auth-provider";
 import { getCaseStageLabel, getDefaultActiveView } from "@/lib/workspace/case-stage";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
 import type { DecisionRequest, DecisionResponse, DecisionValue } from "@/lib/api/types";
@@ -14,8 +14,10 @@ import type { DecisionRequest, DecisionResponse, DecisionValue } from "@/lib/api
 const CLOSED_STATUSES = new Set(["CLOSED_FP", "CLOSED_TP"]);
 
 /**
- * L1 Triage Decision Panel — role-aware exactly per `FRONTEND_PLAN.md`
- * §3.3's correction table:
+ * L1/L2 Decision Panel — role-aware exactly per `FRONTEND_PLAN.md` §3.3's
+ * correction table, mounted once in `case-tab-content.tsx`'s always-visible
+ * zone (not inside `triage-view.tsx`) so it's reachable from both Triage
+ * and Deep Investigation:
  *
  *   - Investigator: Escalate / Request More Info (both call `/decision`
  *     directly) + "Recommend False Positive" — UI framing only, submits
@@ -29,12 +31,26 @@ const CLOSED_STATUSES = new Set(["CLOSED_FP", "CLOSED_TP"]);
  * RBAC is enforced server-side; which buttons render here is a UX courtesy
  * only (`FRONTEND_ROADMAP.md` decision 6) — a role/FSM disagreement always
  * surfaces the backend's real 403/409, never a swallowed generic error.
+ *
+ * Assignment-aware gating: every WRITE route this panel calls
+ * (`/decision`) stays assignment-gated server-side even though every GET
+ * route is now open to any authenticated user (see `case-detail-client.ts`'s
+ * `getCase` docstring) — an Investigator who opened this case read-only via
+ * Similar Cases/Previous History (not assigned to them) would otherwise hit
+ * a real 403 the moment they tried to act. Rather than let that happen,
+ * an Investigator viewing a case not assigned to them sees a short
+ * read-only message instead of any action controls. Admin/Compliance keeps
+ * full access regardless of `assigned_to` (matches the backend's own
+ * `require_case_access` bypass for that role).
  */
 export function DecisionPanel({ caseId }: { caseId: string }) {
   const role = useRole();
   const isAdmin = role === "ADMIN_COMPLIANCE";
+  const { user } = useAuth();
 
-  const status = useCaseTabStore((state) => state.tabState[caseId]?.summary.status ?? "");
+  const summary = useCaseTabStore((state) => state.tabState[caseId]?.summary);
+  const status = summary?.status ?? "";
+  const isReadOnly = !isAdmin && summary != null && summary.assigned_to !== (user?.user_id ?? null);
   const updateTabState = useCaseTabStore((state) => state.updateTabState);
 
   const [reason, setReason] = useState("");
@@ -129,6 +145,10 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
 
         {isClosed ? (
           <p className="text-muted-foreground text-sm">This case is closed — no further decision needed.</p>
+        ) : isReadOnly ? (
+          <p className="text-muted-foreground text-sm">
+            This case isn&apos;t assigned to you — you&apos;re viewing it read-only.
+          </p>
         ) : (
           <>
             <div className="flex flex-col gap-1.5">

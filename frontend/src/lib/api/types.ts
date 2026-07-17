@@ -293,6 +293,10 @@ export interface RiskTrendPoint {
   alert_id: string;
   created_at: string;
   risk_score: number;
+  // Nullable — some prior alerts never became a case (`investigation/
+  // previous_alerts.py`'s own documented behavior). `null` rows are not
+  // clickable in `previous-alerts.tsx`.
+  case_id: string | null;
 }
 
 export interface PreviousAlertsResponse {
@@ -337,6 +341,19 @@ export interface SimilarCasesResponse {
 }
 
 export interface ExplanationResponse {
+  account_id: string;
+  explanation: string;
+  cached: boolean;
+  model: string;
+  generated_at: string;
+}
+
+// `backend/api/routes/l2.py::GraphExplanationResponse` — AI narrative of the
+// Investigation Graph (source/mule/sink roles, cycles, flow concentration),
+// scoped to `account_id` like `ExplanationResponse` above (one explanation
+// per account per case), not per-alert like `PatternExplanationResponse`
+// below.
+export interface GraphExplanationResponse {
   account_id: string;
   explanation: string;
   cached: boolean;

@@ -23,6 +23,7 @@ import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type {
   AlertSummaryItem,
   BehaviorAnalysisResponse,
+  CaseListItem,
   CustomerProfileResponse,
   CustomerSnapshotResponse,
   DecisionRequest,
@@ -31,6 +32,7 @@ import type {
   EvidenceItem,
   ExplanationResponse,
   GeoRiskResponse,
+  GraphExplanationResponse,
   GraphQueryParams,
   MoneyFlowResponse,
   NetworkRiskResponse,
@@ -126,6 +128,20 @@ async function patchJson<T>(path: string, fallback: string): Promise<T> {
     throw new BackendApiError(detail, response.status);
   }
   return (await response.json()) as T;
+}
+
+/**
+ * Single-case lookup (`GET /cases/{case_id}`) — reachable for ANY case by
+ * ANY authenticated user (`require_case_read_access`, not the
+ * assignment-gated `require_case_access`), so this is safe to call for a
+ * case the current user doesn't own, e.g. opening a Similar Case / Previous
+ * Investigation History row as a real tab (`similar-cases.tsx`/
+ * `previous-alerts.tsx`) or `workspace-shell.tsx`'s `?case=` deep link.
+ * Returns the same `CaseListItem` shape `GET /cases` returns per row, so
+ * callers can feed the result straight into `useCaseTabStore`'s `openCase`.
+ */
+export async function getCase(caseId: string): Promise<CaseListItem | null> {
+  return getJson<CaseListItem>(`/cases/${encodeURIComponent(caseId)}`);
 }
 
 export async function getAlertSummary(caseId: string): Promise<AlertSummaryItem[] | null> {
@@ -241,6 +257,21 @@ export async function postDecision(
   );
 }
 
+/** `POST /cases/{case_id}/start` — the `ASSIGNED -> IN_PROGRESS` step, no
+ * request body. Assignment-gated (`require_case_access`) server-side, same
+ * as `postDecision` — always throws on non-2xx (including a 409 for an
+ * illegal transition, e.g. the case has already moved past `ASSIGNED`),
+ * never `null`. Callers that treat this as best-effort background UX
+ * polish (`case-tab-content.tsx`'s auto-start effect) catch that
+ * themselves rather than this function swallowing it. */
+export async function startInvestigation(caseId: string): Promise<CaseListItem> {
+  return postJson<CaseListItem>(
+    `/cases/${encodeURIComponent(caseId)}/start`,
+    undefined,
+    "Failed to start investigation",
+  );
+}
+
 // ── L2 Deep Investigation (`backend/api/routes/l2.py`, ROADMAP Phase 17) ──
 
 export async function getAccountGraph(
@@ -306,6 +337,22 @@ export async function getAccountBehavior(
 
 // ── L2 Deep Investigation, part 2 (`backend/api/routes/l2.py`, ROADMAP
 // Phase 18) — relationships, pattern explanation, evidence ────────────────
+
+/** `GET .../graph-explanation` — AI narrative of the Investigation Graph
+ * (`backend/api/routes/l2.py::get_graph_explanation`), identical shape/
+ * `force` convention to `getAccountExplanation` above (`.../explanation`).
+ * Scoped to `account_id` directly, one explanation per account per case —
+ * unlike `getPatternExplanation` below, which is per-alert. */
+export async function getGraphExplanation(
+  caseId: string,
+  accountId: string,
+  force = false,
+): Promise<GraphExplanationResponse | null> {
+  const qs = toQueryString({ force });
+  return getJson<GraphExplanationResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/graph-explanation${qs ? `?${qs}` : ""}`,
+  );
+}
 
 export async function getCaseRelationships(
   caseId: string,

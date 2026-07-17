@@ -295,11 +295,24 @@ export function InvestigationGraphSection({
       name: "concentric",
       concentric: (node: NodeSingular) => 1000 - (Number(node.data("hop")) || 0) * 100,
       levelWidth: () => 1,
-      minNodeSpacing: 45,
+      // Bumped from 45 — a busy multi-hop ego-graph crammed into a small
+      // spacing value reads as an illegible clump ("so consolidated and not
+      // visible at all"). Paired with the taller canvas below.
+      minNodeSpacing: 75,
       animate: false,
       fit: true,
     }).run();
   }, [data]);
+
+  function zoomBy(factor: number) {
+    const cy = cyInstanceRef.current;
+    if (!cy) return;
+    cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  }
+
+  function resetView() {
+    cyInstanceRef.current?.fit(undefined, 30);
+  }
 
   function updateFilter<K extends keyof GraphFilterState>(key: K, value: GraphFilterState[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -498,10 +511,26 @@ export function InvestigationGraphSection({
 
         {data && (
           <>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon-sm" onClick={() => zoomBy(1.2)} title="Zoom in">
+                +
+              </Button>
+              <Button variant="outline" size="icon-sm" onClick={() => zoomBy(1 / 1.2)} title="Zoom out">
+                −
+              </Button>
+              <Button variant="outline" size="sm" onClick={resetView}>
+                Reset view
+              </Button>
+            </div>
+
             <CytoscapeComponent
               elements={elements}
               stylesheet={stylesheet}
-              style={{ width: "100%", height: "440px" }}
+              // Bumped from 440px — a fixed small canvas crammed a busy
+              // ego-graph into an illegible clump regardless of how many
+              // nodes/edges were actually in view. Paired with the wider
+              // `minNodeSpacing` above.
+              style={{ width: "100%", height: "700px" }}
               cy={handleCyInit}
               wheelSensitivity={0.2}
             />

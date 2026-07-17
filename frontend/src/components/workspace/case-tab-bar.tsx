@@ -14,6 +14,14 @@ import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
  * implements). A plain button-per-tab bar with a "×" close control avoids
  * fighting that library's default behavior.
  *
+ * Vertical rail, not a horizontal strip — `workspace-shell.tsx` places this
+ * beside the queue in a left column, tabs reading top-to-bottom, so it
+ * reads as a case list rather than a browser-style tab strip. Same
+ * close-button/active-state/keyboard-nav logic as before, just restacked
+ * (`flex-col` instead of `flex-wrap`); no rounded-top/no-bottom-border
+ * "physically attached to the content below it" styling either, since that
+ * doesn't make sense once the content is beside it, not below it.
+ *
  * No "+" button: new tabs only ever come from clicking a queue row
  * (`case-queue.tsx`) or the Dashboard `?case=` deep link — there is no
  * "create a blank case" flow anywhere in this system, so a bare "+" has
@@ -29,14 +37,14 @@ export function CaseTabBar() {
 
   if (openTabIds.length === 0) {
     return (
-      <p className="text-muted-foreground border-b px-3 py-2 text-sm">
-        No cases open — select a case from the queue below to open it here.
+      <p className="text-muted-foreground px-3 py-2 text-sm">
+        No cases open — select a case from the queue to open it here.
       </p>
     );
   }
 
   return (
-    <div className="flex flex-wrap items-stretch gap-1 border-b px-2 pt-2">
+    <div className="flex flex-col gap-1 p-2">
       {openTabIds.map((caseId) => {
         const state = tabState[caseId];
         const active = activeTabId === caseId;
@@ -54,13 +62,13 @@ export function CaseTabBar() {
               }
             }}
             className={cn(
-              "flex cursor-pointer items-center gap-2 rounded-t-lg border border-b-0 px-3 py-1.5 text-sm",
+              "flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
               active
                 ? "bg-background font-medium"
                 : "bg-muted/40 text-muted-foreground hover:bg-muted/70",
             )}
           >
-            <span>{caseId}</span>
+            <span className="min-w-0 flex-1 truncate">{caseId}</span>
             {state && (
               <Badge variant="outline" className="text-[10px]">
                 {getCaseStageLabel(state.summary.status)}
@@ -69,7 +77,7 @@ export function CaseTabBar() {
             <button
               type="button"
               aria-label={`Close ${caseId} tab`}
-              className="hover:bg-muted rounded p-0.5"
+              className="hover:bg-muted shrink-0 rounded p-0.5"
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(caseId);
