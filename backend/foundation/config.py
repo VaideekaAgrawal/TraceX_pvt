@@ -21,7 +21,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # lifted the source CSVs into. Verified: a cwd-relative default raised
 # sqlite3.OperationalError when a DB connection was opened from backend/.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_SQLITE_PATH = _REPO_ROOT / "data" / "tracex.db"
+# Default to the crisp India-centric pilot DB (`tracex_demo.db`), which is the
+# only DB **committed to git** (~5MB) — so a fresh clone on any machine/account
+# sees the same demo dataset out of the box, no rebuild or secrets required for
+# browsing. The full-scale IBM benchmark DB (`tracex.db`, ~5GB, gitignored, local
+# only) is opt-in via an explicit `DATABASE_URL`, and is kept solely for the ML
+# "validated at scale" credential. Rebuild the demo DB with
+# `backend/scripts/build_demo_db.sh` (deterministic — same seed, same data).
+_DEFAULT_SQLITE_PATH = _REPO_ROOT / "data" / "tracex_demo.db"
 # Same reasoning applies to the ML/RL model artifact directory (ROADMAP
 # Phase 3): `train_and_persist()` serializes trained model objects here via
 # joblib, and `model_runs.artifact_path` points into it. Gitignored — these

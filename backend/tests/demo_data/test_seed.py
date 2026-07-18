@@ -76,12 +76,13 @@ def test_run_demo_data_studio_second_run_is_true_noop(session: Session) -> None:
     session.commit()
 
     assert second_summary.kyc_customers_created == 0
+    assert second_summary.planted_scenarios_created == 0
     assert second_summary.relationship_clusters_created == 0
     assert second_summary.relationships_discovered == 0
     assert second_summary.historical_cases_created == 0
     assert second_summary.golden_scenarios_created == 0
     assert set(second_summary.already_seeded) == {
-        "kyc_customers", "relationships", "relationship_discovery",
+        "kyc_customers", "pilot_transactions", "relationships", "relationship_discovery",
         "historical_cases", "golden_scenarios",
     }
 

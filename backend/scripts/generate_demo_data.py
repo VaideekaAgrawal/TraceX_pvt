@@ -37,6 +37,12 @@ def main(argv: list[str] | None = None) -> None:
         "real ingest path (db/ingest.py) -- every row this writes is DEMO-prefixed."
     )
     parser.add_argument("--actor-id", default="demo-data-studio-cli")
+    parser.add_argument(
+        "--skip-golden-scenarios",
+        action="store_true",
+        help="Skip the 7 dedicated-account golden scenarios (they have no rich KYC); "
+        "use for the crisp India-centric pilot demo where every case is KYC-linked.",
+    )
     args = parser.parse_args(argv)
 
     session = SessionLocal()
@@ -50,6 +56,7 @@ def main(argv: list[str] | None = None) -> None:
             # so a missing PII_HMAC_KEY fails this script loudly — which is the
             # intended behaviour, not an inconvenience to work around.
             hmac_key=get_settings().pii_hmac_key,
+            include_golden_scenarios=not args.skip_golden_scenarios,
         )
         session.commit()
     except ValueError as exc:

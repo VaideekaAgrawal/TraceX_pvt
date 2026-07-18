@@ -649,6 +649,37 @@ Frontend-only phase (no backend changes — every endpoint was already built in 
 
 **Data gap found during verify, not caused by this phase**: some historical demo cases have no `case_accounts` row (worked around for this session's verify by adding one via `CaseAccountRepository.add_account`, same category as prior sessions' direct `transition_case` calls) — silently makes case-scoped L2 features look empty for those cases even when the customer has real relationships. Flagged for whichever phase next touches demo-data generation or the historical-case pipeline, not fixed here (out of Phase 18 scope). **Not done this session**: a real browser/Playwright pass — worth doing before the pitch demo, not a merge blocker.
 
+## 25. Crisp India-centric demo dataset + two detection fixes (Session 27)
+
+Branch `demo-data-india-centric`. Motivated by owner review of the running system: 41,807 alerts was "too much", KYC was "garbage" (occupation/income ~0.1% populated, names like "Corporation #33520"), and network risk "looked wrong". Root-caused against the live DB, then fixed.
+
+**Diagnosis (full-scale IBM DB, before):**
+| Metric | Value |
+| --- | --- |
+| Alerts | 41,807 — **86% (35,988) profile_mismatch**, of which **0/200 sampled had any declared income** |
+| Customer KYC populated | occupation/income/PAN ≈ **213/166,420 (0.1%)** — the rest raw IBM benchmark, 99.8% BUSINESS entities |
+| Network risk computed | 2/70 cases, flat low values (3.0 / 25.0) |
+| ML (unchanged, IBM benchmark) | F1 0.206 / AUC-ROC 0.778 (§18) — kept as the "validated at scale" credential |
+
+**Two detection fixes (production code, not just demo):**
+1. **profile_mismatch spurious firing** — the 36k came from the `behavioural_shift` sub-detector, which is transaction-only and fired across the KYC-barren IBM account base. Gated it (and the typology) on the account having a declared profile (`declared_annual_income > 0`), matching `income_mismatch`'s existing gate: *a profile-mismatch alert requires a profile.* `detection/detectors/profile.py` + rule-engine dispatch; new regression test asserts an identical spike on a no-income account yields no alert.
+2. **Network-risk shown blank** — formula was sound but computed lazily (2/70). Now computed **eagerly in the pipeline** for every created case (`run_detection_pipeline.py`). Single-account cases correctly score low; multi-account cases (mule rings, chains, cycles) score meaningfully.
+
+**Also fixed in the pipeline:** **one case per flagged account** — an account tripping several alerts (overlapping layering sub-chains + a profile mismatch) previously spawned a separate case each (50 cases / 25 distinct accounts). Now dedup'd (55 cases / 55 distinct accounts).
+
+**The crisp demo dataset (`data/tracex_demo.db`, built by `scripts/build_demo_db.sh`, `--skip-golden-scenarios`):**
+| Metric | Value |
+| --- | --- |
+| Customers | ~200 India-centric, **100% full KYC** — real names, occupation, INR income, PAN/Aadhaar/phone, city, PEP/sanction; businesses carry a sector, not a personal occupation |
+| Transactions | ~2,700 — ~80% clean baseline (sized to income, must not flag) + ~57 planted typology scenarios |
+| Alerts | **105** (from 41,807), balanced: layering 31 · profile_mismatch 28 · structuring 19 · dormancy 16 · round_trip 11 |
+| Cases | **55 active** (all distinct accounts, 54/55 fully KYC-linked) + 50 historical; capped/deduped, ~27 per investigator |
+| Case mix | L1 (structuring/profile/dormancy, single-account) · L2 (layering/round-trip/mule, multi-account networks) · deliberate **false negatives** (2 sub-threshold deposits, `is_laundering=1`, not flagged) |
+| Network risk | computed for all 55, real spread (3–34) |
+| Verified live | e.g. case on "Myra Mahajan — Investment Banker, ₹1.5L income (mismatch), KYC EXPIRED, HIGH risk", 3 sources / 5 beneficiaries money-flow, network risk populated |
+
+**Two-tier framing (decision 11) now real:** ML trained/validated at scale on IBM's public benchmark (§18 numbers, unchanged); investigation UX demonstrated on the engineered India-centric dataset with planted ground truth. The demo DB's own model metrics are degenerate (tiny data) and deliberately not surfaced in the UI. `.env` `DATABASE_URL` repointed at `tracex_demo.db`; the IBM `tracex.db` preserved on disk.
+
 ---
 
 ## How to keep this file current

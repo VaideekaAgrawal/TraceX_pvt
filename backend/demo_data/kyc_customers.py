@@ -41,18 +41,28 @@ _FIRST_NAMES = [
     "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
     "Ishaan", "Rohan", "Ananya", "Diya", "Saanvi", "Aadhya", "Kavya", "Myra",
     "Anika", "Riya", "Priya", "Neha", "Sanya", "Meera", "Kabir", "Rahul",
+    "Rajesh", "Suresh", "Amit", "Vikram", "Sanjay", "Deepak", "Manoj", "Nikhil",
+    "Karan", "Varun", "Ajay", "Pankaj", "Harish", "Girish", "Naveen", "Prakash",
+    "Sunita", "Pooja", "Anjali", "Divya", "Shreya", "Nisha", "Rekha", "Swati",
+    "Lakshmi", "Radha", "Geeta", "Sneha", "Preeti", "Kiran", "Aishwarya", "Fatima",
 ]
 _LAST_NAMES = [
     "Sharma", "Verma", "Iyer", "Nair", "Reddy", "Gupta", "Malhotra", "Bose",
     "Chatterjee", "Patel", "Mehta", "Joshi", "Kapoor", "Rao", "Menon", "Pillai",
+    "Agarwal", "Bansal", "Chopra", "Desai", "Ghosh", "Khanna", "Krishnan", "Kumar",
+    "Mishra", "Nadar", "Pandey", "Sethi", "Shetty", "Sinha", "Trivedi", "Yadav",
+    "Bhat", "Chauhan", "Dubey", "Kulkarni", "Mahajan", "Naidu", "Saxena", "Varma",
 ]
 _BUSINESS_SUFFIXES = [
     "Traders Pvt Ltd", "Exports Pvt Ltd", "Enterprises", "Textiles Pvt Ltd",
     "Logistics Pvt Ltd", "Overseas Pvt Ltd", "Agro Industries", "Infra Ltd",
+    "Jewellers", "Trading Co", "Imports Pvt Ltd", "Constructions", "Motors",
+    "Steels Pvt Ltd", "Foods Pvt Ltd", "Pharma Ltd",
 ]
 _BUSINESS_STEMS = [
     "Sunrise", "Blue Ocean", "Golden Gate", "Silver Line", "Metro", "National",
-    "Continental", "Horizon", "Prime", "Apex",
+    "Continental", "Horizon", "Prime", "Apex", "Shree", "Sai", "Ganesh", "Krishna",
+    "Lakshmi", "Royal", "Star", "Unity", "Everest", "Ganga", "Deccan", "Konark",
 ]
 
 _BRANCH_CITIES = [
@@ -75,6 +85,12 @@ _HIGH_INCOME_OCCUPATIONS = [
 _NORMAL_OCCUPATIONS = [
     "Teacher", "Software Engineer", "Shop Owner", "Government Employee",
     "Bank Clerk", "Retired", "Homemaker", "Self-Employed Trader",
+]
+#: Sectors for BUSINESS entities — used in place of a personal occupation.
+_BUSINESS_SECTORS = [
+    "Wholesale Trading", "Textile Manufacturing", "Import/Export", "Jewellery & Bullion",
+    "Construction", "Logistics & Freight", "Food Processing", "Pharmaceuticals",
+    "Real Estate", "Automobile Dealership",
 ]
 
 #: Declared-income figure (INR/year) used for a "low occupation, high
@@ -158,9 +174,15 @@ def _synthetic_aadhaar(i: int) -> str:
 
 
 def _pick_name(rng: random.Random, entity_type: EntityType, i: int) -> str:
+    """A clean, realistic Indian name — no index suffix, so it reads like a real
+    customer record in the UI. Pools are large enough (56 first x 40 last =
+    2,240 individual combinations; 22 stems x 16 suffixes = 352 business
+    combinations) that collisions across ~200 customers are rare; an occasional
+    shared name is realistic and, if it happens, simply surfaces as a low-
+    confidence fuzzy-name link in the Relationship Explorer — not a bug."""
     if entity_type is EntityType.BUSINESS:
-        return f"{rng.choice(_BUSINESS_STEMS)} {rng.choice(_BUSINESS_SUFFIXES)} #{i:04d}"
-    return f"{rng.choice(_FIRST_NAMES)} {rng.choice(_LAST_NAMES)} #{i:04d}"
+        return f"{rng.choice(_BUSINESS_STEMS)} {rng.choice(_BUSINESS_SUFFIXES)}"
+    return f"{rng.choice(_FIRST_NAMES)} {rng.choice(_LAST_NAMES)}"
 
 
 def _pick_occupation_and_income(
@@ -240,7 +262,18 @@ def seed_kyc_customers(
         pep = i in pep_indices
         sanctioned = i in sanctioned_indices
         mismatch = i in mismatch_indices
-        occupation, income, bracket = _pick_occupation_and_income(rng, mismatch=mismatch)
+        if entity_type is EntityType.BUSINESS:
+            # A business carries a SECTOR, not a personal occupation, and a
+            # business-scale declared income — "Prime Enterprises, occupation:
+            # Farm Worker" reads as a data bug in the UI. Businesses aren't
+            # subject to the occupation/income mismatch tagging.
+            occupation = rng.choice(_BUSINESS_SECTORS)
+            bracket = rng.choice(["25L-50L", "50L+"])
+            income = {"25L-50L": 3_500_000.0, "50L+": rng.choice([15_000_000.0, 40_000_000.0])}[
+                bracket
+            ]
+        else:
+            occupation, income, bracket = _pick_occupation_and_income(rng, mismatch=mismatch)
         kyc_status = weighted_choice(rng, _KYC_STATUS_WEIGHTS)
         edd_status = EddStatus.REQUIRED if (pep or sanctioned) else EddStatus.NOT_REQUIRED
 
