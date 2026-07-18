@@ -42,11 +42,16 @@ existing one-cluster-one-attribute demo-data precedent):
 |------------------|-----------------------------------------------|-----------------|
 | pan              | exact, normalized (`strip().upper()`)          | 0.95            |
 | name             | `SequenceMatcher.ratio() >= 0.85`              | the ratio, 2dp  |
-| income_bracket   | exact, both non-null                           | 0.35            |
-| branch           | exact on `Account.branch_city`, >=1 shared city| 0.25            |
 
-`value_hash` is a **keyed HMAC-SHA256** of the normalized value (pan/
-income_bracket/branch), keyed on `Settings.pii_hmac_key`; for `name`, the HMAC
+**`income_bracket` and `branch` were removed** (owner review): a shared income
+bracket or branch city is a demographic commonality, not a coordination signal —
+in a real bank every customer trivially shares a bracket (~6 buckets) and a city
+with hundreds of others, which buried the genuine PAN/name links under thousands
+of meaningless edges (a single case surfaced 97 "related" customers, all noise).
+Only strong same-entity signals (shared PAN, near-identical name) remain.
+
+`value_hash` is a **keyed HMAC-SHA256** of the normalized PAN value, keyed on
+`Settings.pii_hmac_key`; for `name`, the HMAC
 of the normalized-and-sorted pair (`f"{min(a,b)}::{max(a,b)}"`) since there's no
 single shared literal value. `method = "shared_attribute_v1"` on every row.
 
@@ -67,7 +72,7 @@ from sqlalchemy.orm import Session
 from db.enums import ActorType
 from db.models.reference import Customer
 from db.repositories.orchestration import RelationshipRepository
-from db.repositories.reference import AccountRepository, CustomerRepository
+from db.repositories.reference import CustomerRepository
 
 #: Safety valve, not the primary mechanism -- see module docstring.
 MAX_CANDIDATE_POOL_SIZE = 5000
@@ -82,8 +87,6 @@ _NAME_MATCH_THRESHOLD = 0.85
 _METHOD = "shared_attribute_v1"
 
 _PAN_CONFIDENCE = 0.95
-_INCOME_BRACKET_CONFIDENCE = 0.35
-_BRANCH_CONFIDENCE = 0.25
 
 
 @dataclass
@@ -128,23 +131,8 @@ def _name_pair_hash(name_a: str, name_b: str, *, hmac_key: str) -> str:
     return _value_hash(f"{lo}::{hi}", hmac_key=hmac_key)
 
 
-def _branch_cities(session: Session, customer_ids: list[str]) -> dict[str, set[str]]:
-    """`customer_id -> {non-null Account.branch_city, ...}` for every
-    customer in the (bounded, safety-valved) candidate pool. One batched
-    `AccountRepository.list_by_customer_ids` query, not a per-customer loop
-    (code-review finding, Phase 7: this used to call `get_by_customer` once
-    per candidate-pool customer -- the same N+1 shape already fixed once
-    elsewhere in this codebase, `graph_filters.annotate_nodes`'s Phase 6
-    fix)."""
-    result: dict[str, set[str]] = {cid: set() for cid in customer_ids}
-    for account in AccountRepository(session).list_by_customer_ids(customer_ids):
-        if account.branch_city and account.customer_id is not None:
-            result.setdefault(account.customer_id, set()).add(account.branch_city)
-    return result
-
-
 def _matches_for_pair(
-    a: Customer, b: Customer, branch_cities: dict[str, set[str]], *, hmac_key: str
+    a: Customer, b: Customer, *, hmac_key: str
 ) -> list[tuple[str, str, float]]:
     """Every `(shared_attribute, value_hash, confidence)` this pair matches
     on -- zero, one, or several (a pair can match on more than one
@@ -163,31 +151,12 @@ def _matches_for_pair(
             ("name", _name_pair_hash(a.name, b.name, hmac_key=hmac_key), round(ratio, 2))
         )
 
-    if a.income_bracket and b.income_bracket and a.income_bracket == b.income_bracket:
-        matches.append(
-            (
-                "income_bracket",
-                _value_hash(a.income_bracket, hmac_key=hmac_key),
-                _INCOME_BRACKET_CONFIDENCE,
-            )
-        )
-
-    shared_cities = branch_cities.get(a.customer_id, set()) & branch_cities.get(
-        b.customer_id, set()
-    )
-    if shared_cities:
-        # Multiple shared cities are possible in principle but not expected
-        # at demo/current-data scale -- one row per attribute TYPE (not per
-        # matched value), hashing the lexicographically-first shared city
-        # so the result is deterministic regardless of set iteration order.
-        matches.append(
-            (
-                "branch",
-                _value_hash(sorted(shared_cities)[0], hmac_key=hmac_key),
-                _BRANCH_CONFIDENCE,
-            )
-        )
-
+    # NB: a shared income bracket or branch city is deliberately NOT a
+    # relationship. In a real bank every customer trivially shares a bracket
+    # (~6 buckets) and a city with hundreds of others, so those matches buried
+    # the genuine coordination signals under thousands of meaningless edges — a
+    # single case surfaced 97 "related" customers, all bracket/city noise. Only
+    # a shared PAN (same tax id) or a near-identical name creates a relationship.
     return matches
 
 
@@ -221,8 +190,6 @@ def discover_relationships(
             "unbounded; raising rather than silently truncating the pool."
         )
 
-    branch_cities = _branch_cities(session, [c.customer_id for c in pool])
-
     pairs_compared = 0
     relationships_created = 0
     relationships_skipped_existing = 0
@@ -236,7 +203,7 @@ def discover_relationships(
         # helper here, now centralized in the repository so it can't be
         # skipped by a future second writer).
         for shared_attribute, value_hash, confidence in _matches_for_pair(
-            a, b, branch_cities, hmac_key=hmac_key
+            a, b, hmac_key=hmac_key
         ):
             if (
                 relationship_repo.find_existing(a.customer_id, b.customer_id, shared_attribute)
