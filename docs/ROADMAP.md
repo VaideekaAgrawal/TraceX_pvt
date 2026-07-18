@@ -256,12 +256,12 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phase 6 (evidence), Phase 8 (AI substrate)
 **Branch:** phase/11-reporting-watchlist
 **Scope (checklist):**
-- [ ] Case-level auto-narrative (executive summary, findings, evidence, txns of interest, network analysis, notes, recommendation) — extend the fact-injection pattern to multi-account, editable before submit.
-- [ ] STR/SAR generation (port + extend the FIU-IND PDF+JSON+SHA-256 flow) fed by the narrative + evidence.
-- [ ] Watchlist management (`WatchlistScreener` from `IMPROVEMENTS_STRATEGY.md`) — mark entities; future alerts touching them auto-escalate priority.
+- [x] Case-level auto-narrative (`orchestration/report_narrative.py`) — extends the Phase 8/9 substrate (agent loop + tool catalog + grounding validator) to the whole case: multi-account grounded prose (background → detection → money movement → network → assessment), every figure cited to a tool fact, ungrounded sentences dropped. Returns a DRAFT the investigator edits; no names (customer_id only, decision 9).
+- [x] STR/SAR generation (`investigation/reporting.py` + `api/routes/reports.py`) — grounded narrative + structured case facts → **canonical JSON payload → SHA-256** (tamper-evident) → **PDF** (`reportlab`) → `Report` row, DRAFT→FINALIZED→SUBMITTED state machine (edit only while DRAFT, re-hashes on edit/finalize; submit records FIU reference + time). Flagged in-code as prototype layout pending FIU-IND schema review. + tests (hash tamper-check, real PDF magic bytes, lifecycle guards).
+- [x] Watchlist management (`investigation/watchlist.py::WatchlistScreener`) — `POST`/`GET`/`DELETE /watchlist` (compliance-gated mutations); the screener is built once per detection run and **auto-escalates to P1** any alert touching a watchlisted account or its owning customer (hooked into `generate_alerts_from_detection`). DEVICE/MERCHANT/COMPANY entity types are recorded but never match (no backing column yet) — honest, not silently dropped. Respects `expires_at`. + tests.
 **Explicitly out of scope:** regulatory e-filing integration (roadmap).
 **Reference:** §4.2 (narrative), §4.3, §4.2 (watchlist).
-**Status:** not started
+**Status:** implemented (Session 27 cont.) on `phase/11-reporting-watchlist` — all 3 slices built (watchlist + auto-narrative + STR/SAR PDF/JSON/SHA-256). ruff/mypy clean; watchlist (6) + reporting (5) tests pass. Pending: live-verify a real report generation end-to-end, `/code-review low`, PR.
 
 ### Phase 12 — Feedback loop, continuous learning & production hardening
 **Goal:** Close the lifecycle loop and make the maturity claims true.

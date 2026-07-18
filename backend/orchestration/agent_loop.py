@@ -145,6 +145,7 @@ def run_agent_loop(
     submit_tool_name: str,
     max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
+    submit_max_tokens: int = _SUBMIT_MAX_TOKENS,
 ) -> AgentResult:
     """Drive the model through fact-gathering tool calls to a forced structured
     submission. Returns the parsed submission plus the FactBundle it was grounded
@@ -208,7 +209,7 @@ def run_agent_loop(
     message = _create(
         client, settings, messages, tools=[*catalog.schemas(), submit_tool],
         tool_choice={"type": "function", "function": {"name": submit_tool_name}},
-        max_tokens=_SUBMIT_MAX_TOKENS,
+        max_tokens=submit_max_tokens,
     )
     submit_calls = [
         tc for tc in _function_tool_calls(message) if tc.function.name == submit_tool_name

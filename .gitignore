@@ -44,3 +44,4 @@ Thumbs.db
 
 # uv lockfile — nothing in CI uses uv; this is a local artifact.
 backend/uv.lock
+data/reports/
