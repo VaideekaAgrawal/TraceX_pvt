@@ -47,10 +47,12 @@ from demo_data.golden_scenarios import seed_golden_scenarios
 from demo_data.historical_cases import seed_historical_cases
 from demo_data.identifiers import demo_customer_id
 from demo_data.kyc_customers import seed_kyc_customers
+from demo_data.pilot_transactions import generate_pilot_transactions
 from demo_data.relationships import seed_relationship_networks
 from investigation.relationship_discovery import discover_relationships
 
 _KYC_MARKER = "demo-seed:kyc_customers:v1"
+_PILOT_TXNS_MARKER = "demo-seed:pilot_transactions:v1"
 _RELATIONSHIPS_MARKER = "demo-seed:relationships:v1"
 _RELATIONSHIP_DISCOVERY_MARKER = "demo-seed:relationship_discovery:v1"
 _HISTORICAL_CASES_MARKER = "demo-seed:historical_cases:v1"
@@ -63,6 +65,7 @@ class DemoSeedSummary:
     already-`success` marker (see `already_seeded`)."""
 
     kyc_customers_created: int = 0
+    planted_scenarios_created: int = 0
     relationship_clusters_created: int = 0
     relationships_discovered: int = 0
     historical_cases_created: int = 0
@@ -109,7 +112,12 @@ def _load_kyc_pool(session: Session, num_kyc_customers: int) -> list[Customer]:
 
 
 def run_demo_data_studio(
-    session: Session, *, actor_type: ActorType, actor_id: str | None, hmac_key: str
+    session: Session,
+    *,
+    actor_type: ActorType,
+    actor_id: str | None,
+    hmac_key: str,
+    include_golden_scenarios: bool = True,
 ) -> DemoSeedSummary:
     """Orchestrate all five sub-generators. Each of the four RANDOM
     generators gets its own independent `random.Random(DEMO_SEED + offset)`
@@ -141,6 +149,20 @@ def run_demo_data_studio(
         summary.kyc_customers_created = len(pool)
 
     kyc_pool = _load_kyc_pool(session, cfg.num_kyc_customers)
+
+    if _marker_done(log_repo, _PILOT_TXNS_MARKER):
+        summary.already_seeded.append("pilot_transactions")
+    else:
+        rng = random.Random(DEMO_SEED + 4)
+        scenarios = generate_pilot_transactions(
+            session, kyc_pool, cfg, rng, actor_type=actor_type, actor_id=actor_id
+        )
+        session.flush()
+        _mark_done(
+            log_repo, _PILOT_TXNS_MARKER, filename="demo_data_studio/pilot_transactions",
+            count=len(scenarios), actor_type=actor_type, actor_id=actor_id,
+        )
+        summary.planted_scenarios_created = len(scenarios)
 
     if _marker_done(log_repo, _RELATIONSHIPS_MARKER):
         summary.already_seeded.append("relationships")
@@ -184,7 +206,13 @@ def run_demo_data_studio(
         )
         summary.historical_cases_created = len(cases)
 
-    if _marker_done(log_repo, _GOLDEN_SCENARIOS_MARKER):
+    if not include_golden_scenarios:
+        # The crisp India-centric pilot dataset covers every typology on
+        # KYC-rich accounts already; the 7 golden scenarios use dedicated
+        # accounts with no rich KYC, so they surface as a couple of blank-
+        # Customer-Snapshot cases. Skip them for a uniformly KYC-linked demo.
+        summary.already_seeded.append("golden_scenarios (skipped)")
+    elif _marker_done(log_repo, _GOLDEN_SCENARIOS_MARKER):
         summary.already_seeded.append("golden_scenarios")
     else:
         rng = random.Random(DEMO_SEED + 3)

@@ -96,9 +96,38 @@ def test_behavioural_shift_spike_detected(make_store) -> None:
         "timestamp": ts("2026-01-02 05:00"), "channel": "UPI",
     })
     txns = pd.DataFrame(rows)
-    accounts = pd.DataFrame({"account_id": [account_id, "SINK"]})
+    # The account must have a declared profile — a profile-mismatch alert on an
+    # entity we have no profile for is meaningless (see _detect_behavioural_shift).
+    accounts = pd.DataFrame(
+        {"account_id": [account_id, "SINK"], "declared_annual_income": [500_000.0, 500_000.0]}
+    )
     store = make_store(txns, accounts)
     results = ProfileMismatchDetector().detect(store, txns, accounts)
 
     shift_hits = [r for r in results if r.details.get("sub_type") == "behavioural_shift"]
     assert any(r.account_ids == [account_id] for r in shift_hits)
+
+
+def test_behavioural_shift_is_gated_on_having_a_profile(make_store) -> None:
+    """The fix for the 36k-alert noise: an identical spike on an account with NO
+    declared income produces NO profile_mismatch alert — you cannot mismatch a
+    profile you do not have."""
+    account_id = "NOKYC1"
+    rows = [
+        {
+            "source_account": account_id, "dest_account": "SINK",
+            "amount": 1_000.0 + (i % 3) * 10,
+            "timestamp": ts("2026-01-01 08:00") + pd.Timedelta(hours=i), "channel": "UPI",
+        }
+        for i in range(20)
+    ]
+    rows.append({
+        "source_account": account_id, "dest_account": "SINK", "amount": 500_000.0,
+        "timestamp": ts("2026-01-02 05:00"), "channel": "UPI",
+    })
+    txns = pd.DataFrame(rows)
+    # No declared_annual_income → no profile → no alert.
+    accounts = pd.DataFrame({"account_id": [account_id, "SINK"], "declared_annual_income": [0.0, 0.0]})
+    store = make_store(txns, accounts)
+    results = ProfileMismatchDetector().detect(store, txns, accounts)
+    assert [r for r in results if r.details.get("sub_type") == "behavioural_shift"] == []

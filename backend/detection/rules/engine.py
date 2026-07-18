@@ -188,7 +188,11 @@ class PrimitiveRegistry:
             )
 
         if primitive == "behavioural_shift":
-            return ProfileMismatchDetector(params)._detect_behavioural_shift(transactions_df)
+            if accounts_df is None:
+                return []
+            return ProfileMismatchDetector(params)._detect_behavioural_shift(
+                transactions_df, accounts_df
+            )
 
         if primitive == "generic_group_aggregate":
             return _generic_group_aggregate(params, transactions_df)
