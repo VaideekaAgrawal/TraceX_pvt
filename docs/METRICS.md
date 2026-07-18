@@ -682,6 +682,21 @@ Branch `demo-data-india-centric`. Motivated by owner review of the running syste
 
 ---
 
+## Phase 11 — Reporting, narrative & watchlist (Session 28, 2026-07-19)
+
+**Test suite:** ~~610 passed~~ (Session 26/27) → **656 passed** (+46: watchlist screening/escalation, report lifecycle with SHA-256 tamper-check + `%PDF` magic-byte + DRAFT→FINALIZED→SUBMITTED guards, and HTTP route tests for `/watchlist` + `/reports` — auth, scoping, state-machine 409s, validation, all LLM-free). ruff + mypy clean at CI scope (210 source files); CI green (~22–24 min).
+
+**Live end-to-end report generation** (real OpenRouter call, `anthropic/claude-sonnet-4.5`, on a real 5-account layering/round_trip case, rolled back after):
+| Metric | Value |
+| --- | --- |
+| Narrative | grounded, **4016 chars**, multi-account; **5 ungrounded sentences dropped** by the validator (and logged) |
+| Tamper-evidence | canonical JSON → SHA-256 **matches** on re-hash |
+| PDF | **valid, 4986 bytes** (`%PDF` magic bytes) |
+| PII leakage | **none** — customer_id only, zero names in the narrative |
+| Submit token budget | `run_agent_loop(submit_max_tokens=...)` now a param; narrative needs **8000** (default 4000 truncated the forced submit to empty args — caught live, same class as Phase 9) |
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).

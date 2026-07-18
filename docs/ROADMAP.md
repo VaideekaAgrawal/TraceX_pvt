@@ -261,7 +261,7 @@ Legend: **Status** = not started | in progress | done.
 - [x] Watchlist management (`investigation/watchlist.py::WatchlistScreener`) — `POST`/`GET`/`DELETE /watchlist` (compliance-gated mutations); the screener is built once per detection run and **auto-escalates to P1** any alert touching a watchlisted account or its owning customer (hooked into `generate_alerts_from_detection`). DEVICE/MERCHANT/COMPANY entity types are recorded but never match (no backing column yet) — honest, not silently dropped. Respects `expires_at`. + tests.
 **Explicitly out of scope:** regulatory e-filing integration (roadmap).
 **Reference:** §4.2 (narrative), §4.3, §4.2 (watchlist).
-**Status:** implemented (Session 27 cont.) on `phase/11-reporting-watchlist` — all 3 slices built (watchlist + auto-narrative + STR/SAR PDF/JSON/SHA-256). ruff/mypy clean; watchlist (6) + reporting (5) tests pass. Pending: live-verify a real report generation end-to-end, `/code-review low`, PR.
+**Status:** **done** — merged to `main` via PR #22 (squash `a8cff7cf`, Session 28). All 3 slices shipped (watchlist + auto-narrative + STR/SAR PDF/JSON/SHA-256). Live-verified end-to-end on a real 5-account layering case: grounded 4016-char narrative (5 ungrounded sentences dropped + logged), matching SHA-256, valid 4986-byte PDF, zero PII leakage. `/code-review low` → 2 findings fixed (HTTP route tests for both surfaces; dropped-narrative logging). Full suite **656 passed**; ruff/mypy clean; CI green. **Backend core is now complete — only Phase 12 remains.**
 
 ### Phase 12 — Feedback loop, continuous learning & production hardening
 **Goal:** Close the lifecycle loop and make the maturity claims true.
