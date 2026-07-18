@@ -24,6 +24,7 @@ from api.routes.alerts import router as alerts_router
 from api.routes.audit import router as audit_router
 from api.routes.auth import router as auth_router
 from api.routes.cases import router as cases_router
+from api.routes.copilot import router as copilot_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.l2 import router as l2_router
 from api.routes.recommendations import router as recommendations_router
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(cases_router)
     app.include_router(l2_router)
     app.include_router(recommendations_router)
+    app.include_router(copilot_router)
     app.include_router(alerts_router)
     app.include_router(audit_router)
     app.include_router(dashboard_router)

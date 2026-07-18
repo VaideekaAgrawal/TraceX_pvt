@@ -505,7 +505,15 @@ class ToolCatalog:
         # `add_flow_percentages` is what puts `pct_of_total` on each counterparty
         # — so the model is handed the percentage rather than dividing two
         # numbers itself and citing a figure no tool ever produced.
-        return case_graph.add_flow_percentages(case_graph.shape_money_flow(ego, account_id))
+        flow = case_graph.add_flow_percentages(case_graph.shape_money_flow(ego, account_id))
+        # Counterparty COUNTS as citable facts. Same precedent as pct_of_total /
+        # inflow_pct_of_declared_income: a "3 sources, 2 beneficiaries" summary is
+        # the natural thing to say, but the model counting the lists itself is
+        # ungrounded arithmetic the validator (correctly) rejects — found live in
+        # the Phase 10 Copilot verify. Hand it the counts instead of the list length.
+        flow["source_count"] = len(flow.get("sources", []))
+        flow["beneficiary_count"] = len(flow.get("beneficiaries", []))
+        return flow
 
     def _ego_graph(
         self,
