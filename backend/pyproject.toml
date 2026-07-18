@@ -54,6 +54,10 @@ dependencies = [
     # HTTP-round-trip auth tests), and the `openai` SDK is built on it too.
     # Kept explicit rather than relied on transitively.
     "httpx>=0.27.0",
+    # Phase 11 STR/SAR PDF generation. Pure-Python, no system libs (unlike
+    # weasyprint), so it installs cleanly in CI. The JSON payload + SHA-256 is
+    # the tamper-evident record; this renders the human-readable artifact.
+    "reportlab>=4.0.0",
 ]
 
 [project.optional-dependencies]
