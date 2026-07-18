@@ -127,7 +127,9 @@ def test_behavioural_shift_is_gated_on_having_a_profile(make_store) -> None:
     })
     txns = pd.DataFrame(rows)
     # No declared_annual_income → no profile → no alert.
-    accounts = pd.DataFrame({"account_id": [account_id, "SINK"], "declared_annual_income": [0.0, 0.0]})
+    accounts = pd.DataFrame(
+        {"account_id": [account_id, "SINK"], "declared_annual_income": [0.0, 0.0]}
+    )
     store = make_store(txns, accounts)
     results = ProfileMismatchDetector().detect(store, txns, accounts)
     assert [r for r in results if r.details.get("sub_type") == "behavioural_shift"] == []
