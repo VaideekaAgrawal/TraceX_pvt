@@ -254,6 +254,85 @@ def test_close_fp_forbidden_for_investigator_allowed_for_admin(
         assert feedback[0].verdict == CaseResolution.FALSE_POSITIVE
 
 
+def test_close_tp_admin_from_awaiting_review(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """ROADMAP Phase 12: a TRUE_POSITIVE_SAR close is now reachable via the API
+    (previously only `close_fp` was), feeding the positive side of the loop."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    # TRUE_POSITIVE_SAR is only FSM-legal from AWAITING_REVIEW / ESCALATED.
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.AWAITING_REVIEW,
+    )
+
+    # An investigator still may not close.
+    inv = _auth_headers(_login(client, "inv1"))
+    forbidden = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "close_tp", "reason": "confirmed layering"}, headers=inv,
+    )
+    assert forbidden.status_code == 403
+
+    admin = _auth_headers(_login(client, "admin1"))
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "close_tp", "reason": "confirmed layering"}, headers=admin,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "CLOSED_TP"
+    assert body["resolution"] == "TRUE_POSITIVE_SAR"
+
+    with db_sessionmaker() as db:
+        feedback = DetectionFeedbackRepository(db).list_for_case("CASE1")
+        assert len(feedback) == 1
+        assert feedback[0].verdict == CaseResolution.TRUE_POSITIVE_SAR
+        assert feedback[0].reward > 0  # positive signal into the loop
+
+
+def test_close_tp_from_in_progress_is_fsm_conflict(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    # A fresh IN_PROGRESS case can't jump straight to a TP close.
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to=None, status=CaseStatus.IN_PROGRESS,
+    )
+    admin = _auth_headers(_login(client, "admin1"))
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "close_tp", "reason": "too early"}, headers=admin,
+    )
+    assert resp.status_code == 409
+
+
+def test_close_monitoring_admin(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    _seed_user(
+        db_sessionmaker, user_id="U_ADMIN", username="admin1", role=UserRole.ADMIN_COMPLIANCE
+    )
+    _seed_case(
+        db_sessionmaker, case_id="CASE1", primary_account_id="A1", account_ids=["A1"],
+        assigned_to=None, status=CaseStatus.AWAITING_REVIEW,
+    )
+    admin = _auth_headers(_login(client, "admin1"))
+    resp = client.post(
+        "/cases/CASE1/decision",
+        json={"decision": "close_monitoring", "reason": "watch for 90d"}, headers=admin,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "MONITORING"
+    assert resp.json()["resolution"] == "ENHANCED_MONITORING"
+
+
 def test_escalate_from_illegal_status_returns_409(
     client: TestClient, db_sessionmaker: sessionmaker[Session]
 ) -> None:

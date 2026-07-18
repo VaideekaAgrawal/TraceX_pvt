@@ -26,6 +26,7 @@ from api.routes.auth import router as auth_router
 from api.routes.cases import router as cases_router
 from api.routes.copilot import router as copilot_router
 from api.routes.dashboard import router as dashboard_router
+from api.routes.governance import router as governance_router
 from api.routes.l2 import router as l2_router
 from api.routes.recommendations import router as recommendations_router
 from api.routes.reports import router as reports_router
@@ -63,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(alerts_router)
     app.include_router(audit_router)
     app.include_router(dashboard_router)
+    app.include_router(governance_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

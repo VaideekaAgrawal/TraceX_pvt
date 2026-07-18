@@ -311,7 +311,9 @@ class ExplanationResponse(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    decision: Literal["close_fp", "request_info", "escalate"]
+    decision: Literal[
+        "close_fp", "close_tp", "close_monitoring", "request_info", "escalate"
+    ]
     reason: str
     note: str | None = None
 
@@ -320,6 +322,17 @@ class DecisionResponse(BaseModel):
     case_id: str
     status: str
     resolution: str | None
+
+
+#: The three closing decisions -> the `CaseResolution` each maps to. Kept as a
+#: dict (not inline branches) so the decision-value literal and its resolution
+#: stay in one place; `ESCALATED_COMPLIANCE` is deliberately absent — escalation
+#: is a mid-flow transition, not a close (see `close_case`).
+_CLOSE_RESOLUTIONS: dict[str, CaseResolution] = {
+    "close_fp": CaseResolution.FALSE_POSITIVE,
+    "close_tp": CaseResolution.TRUE_POSITIVE_SAR,
+    "close_monitoring": CaseResolution.ENHANCED_MONITORING,
+}
 
 
 # ── Data-assembly endpoints ──────────────────────────────────────────────
@@ -673,15 +686,18 @@ def make_decision(
       - `request_info` -> `AWAITING_REVIEW` (legal only from `IN_PROGRESS`),
         same access as escalate -- deliberately routes into the same status
         Admin/Compliance monitors to close from.
-      - `close_fp` -> `close_case(..., FALSE_POSITIVE)`. FSM-legal from
-        `IN_PROGRESS`/`AWAITING_REVIEW`/`ESCALATED`, but RBAC is a separate
-        layer on top: only `ADMIN_COMPLIANCE` may execute it
-        (`SYSTEM_DEVELOPMENT_PLAN.md` §5 -- "only Admin/Compliance closes
-        cases"), even though the FSM itself would permit an Investigator's
-        direct `IN_PROGRESS -> CLOSED_FP`. Checked here, per-decision-value,
-        rather than a blanket `Depends(require_role(...))` on the whole
-        route, since `escalate`/`request_info` must stay open to
-        Investigators on this same endpoint.
+      - `close_fp` / `close_tp` / `close_monitoring` -> `close_case(...,
+        FALSE_POSITIVE | TRUE_POSITIVE_SAR | ENHANCED_MONITORING)`. All three
+        are closing verdicts that feed the Phase 12 feedback loop (RL reward +
+        rule-confidence adjustment). RBAC is a separate layer on top: only
+        `ADMIN_COMPLIANCE` may execute any close (`SYSTEM_DEVELOPMENT_PLAN.md`
+        §5 -- "only Admin/Compliance closes cases"), even though the FSM itself
+        would permit an Investigator's direct close. Checked here,
+        per-decision-value, rather than a blanket `Depends(require_role(...))`
+        on the whole route, since `escalate`/`request_info` must stay open to
+        Investigators on this same endpoint. The FSM still governs legality:
+        e.g. `TRUE_POSITIVE_SAR` is only reachable from `AWAITING_REVIEW`/
+        `ESCALATED`, so closing a fresh `IN_PROGRESS` case as TP -> 409.
 
     `InvalidTransitionError` -> 409. If `note` is present, it's recorded as
     a `Note` after a successful transition. `escalate`/`request_info`
@@ -712,15 +728,16 @@ def make_decision(
                 actor_id=user.user_id,
                 reason=body.reason,
             )
-        else:  # "close_fp"
+        else:  # a closing verdict: close_fp | close_tp | close_monitoring
             if user.role != UserRole.ADMIN_COMPLIANCE:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "Only Admin/Compliance may close a case"
                 )
+            resolution = _CLOSE_RESOLUTIONS[body.decision]
             updated = close_case(
                 db,
                 case.case_id,
-                CaseResolution.FALSE_POSITIVE,
+                resolution,
                 actor_type=actor_type,
                 actor_id=user.user_id,
                 reason=body.reason,

@@ -651,3 +651,14 @@ class DetectionFeedbackRepository(BaseRepository[DetectionFeedback]):
     def list_for_alert(self, alert_id: str) -> list[DetectionFeedback]:
         stmt = select(DetectionFeedback).where(DetectionFeedback.alert_id == alert_id)
         return list(self.session.scalars(stmt))
+
+    def counts_by_verdict(self) -> dict[str, int]:
+        """Total resolved-case verdicts grouped by `CaseResolution`, e.g.
+        `{"TRUE_POSITIVE_SAR": 12, "FALSE_POSITIVE": 30, ...}`. The durable,
+        persisted basis for a real precision figure in the governance surface
+        (ROADMAP Phase 12) -- unlike the bandit's process-lifetime tp/fp
+        counters, these survive a restart."""
+        stmt = select(DetectionFeedback.verdict, func.count()).group_by(
+            DetectionFeedback.verdict
+        )
+        return {str(verdict): count for verdict, count in self.session.execute(stmt)}
