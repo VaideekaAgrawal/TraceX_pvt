@@ -87,8 +87,8 @@ def test_fuzzy_name_match_uses_ratio_as_confidence(session: Session) -> None:
     rels = {r.shared_attribute: r for r in RelationshipRepository(session).list_for_entity("C1")}
     assert "name" in rels
     assert 0.85 <= rels["name"].confidence <= 1.0
-    assert "income_bracket" in rels
-    assert rels["income_bracket"].confidence == 0.35
+    # A shared income bracket is NOT a relationship (demographic noise, removed).
+    assert "income_bracket" not in rels
 
 
 def test_dissimilar_names_do_not_match(session: Session) -> None:
@@ -104,21 +104,22 @@ def test_dissimilar_names_do_not_match(session: Session) -> None:
     assert stats.relationships_created == 0
 
 
-def test_shared_branch_city_creates_weak_confidence_relationship(session: Session) -> None:
-    _make_customer(session, "C1", name="Alpha One", income_bracket="<2L")
-    _make_customer(session, "C2", name="Beta Two", income_bracket="2L-5L")
+def test_shared_branch_city_alone_does_not_create_a_relationship(session: Session) -> None:
+    # Owner review: a shared branch city is demographic noise, not a
+    # coordination signal — two unrelated people in Mumbai are not "related".
+    _make_customer(session, "C1", name="Alpha One", income_bracket="<2L", pan="AAAAA0001A")
+    _make_customer(session, "C2", name="Beta Two", income_bracket="2L-5L", pan="BBBBB0002B")
     _make_account(session, "A1", "C1", branch_city="Mumbai")
     _make_account(session, "A2", "C2", branch_city="Mumbai")
     session.commit()
 
-    rd.discover_relationships(
+    stats = rd.discover_relationships(
         session, actor_type=ActorType.SYSTEM, actor_id=None, hmac_key=_TEST_HMAC_KEY
     )
     session.commit()
 
-    rels = {r.shared_attribute: r for r in RelationshipRepository(session).list_for_entity("C1")}
-    assert "branch" in rels
-    assert rels["branch"].confidence == 0.25
+    assert stats.relationships_created == 0
+    assert RelationshipRepository(session).list_for_entity("C1") == []
 
 
 def test_candidate_pool_excludes_customers_with_neither_pan_nor_income_bracket(

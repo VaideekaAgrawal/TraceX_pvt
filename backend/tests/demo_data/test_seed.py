@@ -96,11 +96,10 @@ def test_relationship_discovery_rediscovers_seeded_clusters(session: Session) ->
     uppercase letters + index + checksum letter, per `demo_data.
     kyc_customers._synthetic_pan`) -- so any discovered `shared_attribute
     ="pan"` relationship IS evidence a seeded cluster was genuinely
-    rediscovered, not a coincidental collision. `income_bracket`/`branch`
-    are locked-v1-scope attributes `seed_relationship_networks` also
-    rotates through, expected to surface too (`phone`/`email`/`address`/
-    `employer` clusters are intentionally NOT rediscoverable -- out of
-    Relationship Explorer v1's locked scope, `docs/DATA_SCHEMA.md`)."""
+    rediscovered, not a coincidental collision. Only `pan` and `name` are
+    rediscoverable: `income_bracket`/`branch` were removed as demographic noise
+    (owner review), and `phone`/`email`/`address`/`employer` were never in
+    Relationship Explorer v1's locked scope (`docs/DATA_SCHEMA.md`)."""
     run_demo_data_studio(
         session, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID, hmac_key=_TEST_HMAC_KEY
     )
@@ -110,10 +109,12 @@ def test_relationship_discovery_rediscovers_seeded_clusters(session: Session) ->
     for rel in session.scalars(select(Relationship)):
         by_attribute.setdefault(rel.shared_attribute, []).append(rel)
 
-    assert set(by_attribute) <= {"pan", "name", "income_bracket", "branch"}
+    # Only real coordination signals — a shared income bracket / branch city is
+    # not a relationship any more.
+    assert set(by_attribute) <= {"pan", "name"}
     assert len(by_attribute.get("pan", [])) > 0
-    assert len(by_attribute.get("income_bracket", [])) > 0
-    assert len(by_attribute.get("branch", [])) > 0
+    assert "income_bracket" not in by_attribute
+    assert "branch" not in by_attribute
     for rel in by_attribute["pan"]:
         assert rel.confidence == 0.95
         assert rel.method == "shared_attribute_v1"
