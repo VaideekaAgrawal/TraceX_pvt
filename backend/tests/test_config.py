@@ -14,8 +14,10 @@ def test_database_url_default_points_to_repo_root_not_cwd():
     # which resolved to a nonexistent backend/data/ when run from backend/ (the
     # working directory both CI and the documented dev workflow use) — verified
     # by reproducing sqlite3.OperationalError before this was fixed.
+    # The default now targets the committed crisp demo DB (tracex_demo.db) so a
+    # fresh clone works out of the box; still repo-root-anchored, not cwd-relative.
     settings = Settings()
-    assert settings.database_url.endswith("/data/tracex.db")
+    assert settings.database_url.endswith("/data/tracex_demo.db")
     assert "backend/data" not in settings.database_url
 
 
