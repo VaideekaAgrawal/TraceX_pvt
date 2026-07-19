@@ -697,6 +697,20 @@ Branch `demo-data-india-centric`. Motivated by owner review of the running syste
 
 ---
 
+## Phase 12 — Feedback loop, governance & hardening (Session 29, 2026-07-20)
+
+**Test suite:** ~~656~~ (Phase 11) → **688 passed** (+32: rule-confidence EWMA/clamp, close_case verdict integration, `close_tp`/`close_monitoring` routes, `/model-metrics` governance, review-queue propose/approve/reject + DSL validation, health endpoints, schema-inventory update). ruff + mypy clean.
+
+**Coverage gate introduced:** `pytest --cov-fail-under=90`. Measured **97.43%** (14,438 statements, 371 missed) — floor set well below so normal fluctuation doesn't false-fail.
+
+**Schema:** 21 → **22 tables** (`rule_proposals`, migration `0002`, verified up/down + applied to the demo DB).
+
+**Deployment (live-verified, not just built):** `backend/Dockerfile` image **builds**, and the container **boots and serves `/health/live` 200** (non-root uid 1000, read-only-rootfs-compatible). CI gains a `docker-build` job (~1 min).
+
+**CI runtime:** test job ~24 min (unchanged); + docker-build ~1 min.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
