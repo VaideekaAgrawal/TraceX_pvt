@@ -372,6 +372,31 @@ def rule_definition_to_dict(rule) -> dict[str, Any]:
     }
 
 
+def validate_rule_dsl(dsl: dict[str, Any]) -> None:
+    """Structural check that a proposed rule DSL is well-formed and references
+    only known primitives — gates approval in the Phase 12 admin review queue so
+    a malformed proposal can't be minted into a live `RuleDefinition` that would
+    then silently fail every detection run. Raises `ValueError` with a
+    human-readable reason. The valid-primitive set is `RuleEvaluator`'s own
+    schema registry (not a duplicated list), so it can't drift from the
+    evaluator's dispatch."""
+    if not isinstance(dsl, dict):
+        raise ValueError("rule DSL must be an object")
+    conditions = dsl.get("conditions")
+    if not isinstance(conditions, list) or not conditions:
+        raise ValueError("rule DSL must have a non-empty 'conditions' list")
+    valid = set(PrimitiveRegistry.list_primitives())
+    for i, cond in enumerate(conditions):
+        if not isinstance(cond, dict):
+            raise ValueError(f"condition {i} must be an object")
+        primitive = cond.get("primitive")
+        if primitive not in valid:
+            raise ValueError(
+                f"condition {i} has unknown primitive {primitive!r}; valid: "
+                f"{', '.join(sorted(valid))}"
+            )
+
+
 class RuleEngine:
     """Loads enabled rules from the DB and evaluates all of them — the
     single call the (Phase 4+) detection pipeline makes in place of a

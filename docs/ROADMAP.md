@@ -268,13 +268,13 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** all prior
 **Branch:** phase/12-feedback-hardening
 **Scope (checklist):**
-- [ ] Wire investigator verdicts → RL reward + rule-engine confidence + Admin review queue for new rules/edge cases (the full §3 loop).
-- [ ] Model governance surfacing (version/lineage/metrics via `/api/model-metrics`).
-- [ ] CI/CD tightened (drop `|| true`, coverage gate, image build/push per k8s manifest); data-retention policy documented.
-- [ ] Deployment wiring toward the existing k8s manifest (secrets, non-root, health/HPA).
+- [x] Wire investigator verdicts → RL reward (already wired in `close_case`) + **rule-engine confidence** (`detection/rules/feedback.py::adjust_rule_confidence`, bounded EWMA per fired rule, hooked into `close_case`) + **Admin review queue** for new rules (`rule_proposals` table + `RuleProposalRepository` + `api/routes/review_queue.py`: propose→approve/reject, approve mints an enabled `RuleDefinition`; DSL structurally validated via `engine.validate_rule_dsl`). Also: `close_tp`/`close_monitoring` closes now reachable via `/decision` (previously only `close_fp` — the live loop could only ever get negative signal).
+- [x] Model governance surfacing (version/lineage/metrics via `GET /model-metrics`, `api/routes/governance.py`) — active model runs, rules ranked by learned confidence, RL top features, durable verdict-based precision.
+- [x] CI/CD tightened — no `|| true` (already clean since Phase 0); **coverage gate** `--cov-fail-under=90` (suite sits at 97%); **docker-build job** validates the image every run, push gated to main + `vars.PUSH_IMAGE`; **data-retention policy** documented (`docs/DATA_RETENTION.md`, PMLA/RBI-anchored, prototype pending compliance sign-off).
+- [x] Deployment wiring — `backend/Dockerfile` (non-root uid 1000, read-only-rootfs-compatible, `create_app` factory) + `deploy/k8s/api-deployment.yaml` (secrets via `secretKeyRef` incl. JWT/OpenRouter/PII-HMAC — closes the hardcoded-secret landmine at deploy; `/health/live` + `/health/ready` probes; HPA 3–20; PDB) + `secrets.example.yaml` template. New `/health/live` + `/health/ready` (DB-ping) endpoints. **Image built + container smoke-tested live** (serves `/health/live` 200).
 **Explicitly out of scope:** Neo4j migration build (funded-prod, conceptual for now); workflow-pattern RL beyond reward wiring.
 **Reference:** §3 (feedback), §5 (ML governance, CI/CD, scalability), §6 (deployment).
-**Status:** not started
+**Status:** **all 4 checklist items implemented** (Session 28) on `phase/12-feedback-hardening` — the full feedback loop (RL reward + rule-confidence EWMA + admin review queue), model-governance surfacing (`/model-metrics`), CI/CD hardening (coverage gate + docker-build) + data-retention doc, and k8s deployment wiring (Dockerfile + manifest + health endpoints, image built & container smoke-tested). Migration `0002_rule_proposals_review_queue` (verified up/down, applied to demo DB). Pending: full-suite green with the coverage gate, `/code-review low`, PR/merge. **This is the last backend phase — Phases 0–12 complete on merge.**
 
 ---
 

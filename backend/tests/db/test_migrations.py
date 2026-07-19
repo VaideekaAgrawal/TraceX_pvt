@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "alerts",
     "model_runs",
     "rule_definitions",
+    "rule_proposals",
     "rl_arm_state",
     "detection_feedback",
     "cases",

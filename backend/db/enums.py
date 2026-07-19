@@ -117,6 +117,16 @@ class UserRole(StrEnum):
     ADMIN_COMPLIANCE = "ADMIN_COMPLIANCE"
 
 
+class ReviewStatus(StrEnum):
+    """Rule-proposal review state (Phase 12 admin review queue): a proposed
+    detection rule is PENDING until an Admin/Compliance user APPROVES it (minting
+    an enabled rule) or REJECTS it."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class KycStatus(StrEnum):
     VERIFIED = "VERIFIED"
     PENDING = "PENDING"

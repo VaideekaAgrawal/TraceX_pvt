@@ -103,9 +103,13 @@ _BUILTIN_RULES: list[dict[str, str]] = [
 ]
 
 #: Invented starting point, not derived from any spec -- Phase 12's feedback
-#: loop is where `rule_definitions.confidence` gets adjusted from real
-#: investigator verdicts (explicitly out of this phase's scope).
-_DEFAULT_CONFIDENCE = 0.75
+#: loop (`detection.rules.feedback`) adjusts `rule_definitions.confidence` from
+#: real investigator verdicts from here. Public because the Phase 12 admin review
+#: queue mints an approved proposal at the same starting confidence -- one source
+#: of truth for "a brand-new rule's confidence."
+DEFAULT_RULE_CONFIDENCE = 0.75
+#: Back-compat alias for the pre-Phase-12 private name used within this module.
+_DEFAULT_CONFIDENCE = DEFAULT_RULE_CONFIDENCE
 
 
 def seed_builtin_rules(

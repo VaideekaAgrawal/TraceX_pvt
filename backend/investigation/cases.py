@@ -32,6 +32,7 @@ from db.repositories.investigation import (
     CaseRepository,
 )
 from detection.rl.bandit import LinUCBAgent
+from detection.rules.feedback import adjust_rule_confidence
 from investigation.assignment import assign_case_to, auto_assign
 from investigation.fsm import transition_case
 from investigation.rl_features import CLOSING_REWARD, base_rl_feature_dict
@@ -261,10 +262,11 @@ def close_case(
     the case to be in AWAITING_REVIEW or ESCALATED first; raises
     `ValueError` if the case doesn't exist -- that check lives solely in
     `transition_case`, not duplicated here), write a
-    `DetectionFeedbackRepository` row, and feed the verdict to the
-    already-injected `LinUCBAgent` for the case's primary account/context.
-    Does NOT touch `RuleDefinition.confidence` -- that adjustment is
-    Phase 12's job (ROADMAP Phase 4 plan).
+    `DetectionFeedbackRepository` row, feed the verdict to the already-injected
+    `LinUCBAgent` for the case's primary account/context, and nudge the
+    confidence of every rule that fired for this case toward the verdict
+    outcome (`detection.rules.feedback.adjust_rule_confidence`, ROADMAP
+    Phase 12 -- the two halves of the feedback loop, RL + rules).
 
     Also marks every `Alert` linked to this case (`Alert.case_id ==
     case_id`) `status="closed"` (code-review finding, Phase 14: before this,
@@ -329,6 +331,16 @@ def close_case(
         created_by=actor_id or "system",
         actor_type=actor_type,
         actor_id=actor_id,
+    )
+
+    # The other half of the feedback loop (ROADMAP Phase 12, the adjustment this
+    # function's docstring long promised): nudge the confidence of every rule
+    # that fired for this case toward the verdict outcome. Same
+    # `is_true_positive = reward > 0` split fed to the bandit below, so the two
+    # halves never disagree about what the verdict meant.
+    adjust_rule_confidence(
+        session, rule_ids, is_true_positive=reward > 0,
+        actor_type=actor_type, actor_id=actor_id,
     )
 
     agent = LinUCBAgent(session, actor_type=actor_type, actor_id=actor_id)
