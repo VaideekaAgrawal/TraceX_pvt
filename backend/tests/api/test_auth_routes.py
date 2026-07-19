@@ -247,3 +247,16 @@ def test_login_uses_the_settings_injected_into_create_app_not_the_global_singlet
         cross_2 = client_b.get("/auth/me", headers={"Authorization": f"Bearer {token_a}"})
         assert cross_1.status_code == 401
         assert cross_2.status_code == 401
+
+
+def test_health_endpoints_are_unauthenticated_and_ok(client: TestClient) -> None:
+    # Liveness + legacy healthz never touch the DB and need no auth.
+    assert client.get("/healthz").json() == {"status": "ok"}
+    assert client.get("/health/live").json() == {"status": "alive"}
+
+
+def test_readiness_probe_checks_db(client: TestClient) -> None:
+    # Readiness pings the DB (SELECT 1) — 200 when reachable (Phase 12).
+    resp = client.get("/health/ready")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ready"}
