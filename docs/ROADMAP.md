@@ -268,13 +268,13 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** all prior
 **Branch:** phase/12-feedback-hardening
 **Scope (checklist):**
-- [ ] Wire investigator verdicts → RL reward + rule-engine confidence + Admin review queue for new rules/edge cases (the full §3 loop).
-- [ ] Model governance surfacing (version/lineage/metrics via `/api/model-metrics`).
+- [x] Wire investigator verdicts → RL reward (already wired in `close_case`) + **rule-engine confidence** (`detection/rules/feedback.py::adjust_rule_confidence`, bounded EWMA per fired rule, hooked into `close_case`) + **Admin review queue** for new rules (`rule_proposals` table + `RuleProposalRepository` + `api/routes/review_queue.py`: propose→approve/reject, approve mints an enabled `RuleDefinition`; DSL structurally validated via `engine.validate_rule_dsl`). Also: `close_tp`/`close_monitoring` closes now reachable via `/decision` (previously only `close_fp` — the live loop could only ever get negative signal).
+- [x] Model governance surfacing (version/lineage/metrics via `GET /model-metrics`, `api/routes/governance.py`) — active model runs, rules ranked by learned confidence, RL top features, durable verdict-based precision.
 - [ ] CI/CD tightened (drop `|| true`, coverage gate, image build/push per k8s manifest); data-retention policy documented.
 - [ ] Deployment wiring toward the existing k8s manifest (secrets, non-root, health/HPA).
 **Explicitly out of scope:** Neo4j migration build (funded-prod, conceptual for now); workflow-pattern RL beyond reward wiring.
 **Reference:** §3 (feedback), §5 (ML governance, CI/CD, scalability), §6 (deployment).
-**Status:** not started
+**Status:** in progress (Session 28) on `phase/12-feedback-hardening`. **Done:** the full feedback loop (verdicts → RL reward + rule-confidence EWMA + admin review queue for new rules) and model-governance surfacing (`/model-metrics`). Migration `0002_rule_proposals_review_queue` (verified up/down). **Remaining:** CI/CD hardening (coverage gate, image build) + data-retention doc; k8s deployment wiring (secrets, non-root, health/HPA) — these are infra/ops, will land as "wired + documented" (a real image push/cluster deploy can't be live-verified from here).
 
 ---
 

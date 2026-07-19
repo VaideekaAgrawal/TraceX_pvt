@@ -21,7 +21,14 @@ from typing import Any, ClassVar
 
 from sqlalchemy import func, select
 
-from db.enums import ActorType, CaseResolution, DetectionType, Priority, RiskLevel
+from db.enums import (
+    ActorType,
+    CaseResolution,
+    DetectionType,
+    Priority,
+    ReviewStatus,
+    RiskLevel,
+)
 from db.models.base import utcnow
 from db.models.detection import (
     Alert,
@@ -29,6 +36,7 @@ from db.models.detection import (
     ModelRun,
     RlArmState,
     RuleDefinition,
+    RuleProposal,
 )
 from db.models.investigation import Case
 from db.repositories.base import UNSET, BaseRepository, collect_changes
@@ -662,3 +670,66 @@ class DetectionFeedbackRepository(BaseRepository[DetectionFeedback]):
             DetectionFeedback.verdict
         )
         return {str(verdict): count for verdict, count in self.session.execute(stmt)}
+
+
+class RuleProposalRepository(BaseRepository[RuleProposal]):
+    model = RuleProposal
+    entity_type = "rule_proposal"
+    pk_attr = "proposal_id"
+
+    def create(
+        self,
+        *,
+        proposal_id: str,
+        name: str,
+        dsl: dict,
+        tier: int,
+        rationale: str,
+        proposed_by: str,
+        actor_type: ActorType,
+        actor_id: str | None,
+    ) -> RuleProposal:
+        proposal = RuleProposal(
+            proposal_id=proposal_id,
+            name=name,
+            dsl=dsl,
+            tier=tier,
+            rationale=rationale,
+            status=ReviewStatus.PENDING,
+            proposed_by=proposed_by,
+        )
+        return self._create(
+            proposal, actor_type=actor_type, actor_id=actor_id, action="rule_proposal_created"
+        )
+
+    def update(
+        self,
+        proposal_id: str,
+        *,
+        actor_type: ActorType,
+        actor_id: str | None,
+        status: ReviewStatus = UNSET,
+        reviewed_by: str | None = UNSET,
+        review_note: str | None = UNSET,
+        created_rule_id: str | None = UNSET,
+        reviewed_at: datetime | None = UNSET,
+    ) -> RuleProposal:
+        proposal = self.get(proposal_id)
+        if proposal is None:
+            raise ValueError(f"rule_proposal {proposal_id!r} does not exist")
+        changes = collect_changes(
+            status=status, reviewed_by=reviewed_by, review_note=review_note,
+            created_rule_id=created_rule_id, reviewed_at=reviewed_at,
+        )
+        return self._update(
+            proposal, changes, actor_type=actor_type, actor_id=actor_id,
+            action="rule_proposal_updated",
+        )
+
+    def list_by_status(self, status: ReviewStatus) -> list[RuleProposal]:
+        stmt = (
+            select(RuleProposal)
+            .where(RuleProposal.status == status)
+            .order_by(RuleProposal.created_at)
+        )
+        return list(self.session.scalars(stmt))

@@ -30,6 +30,7 @@ from db.models.detection import (
     ModelRun,
     RlArmState,
     RuleDefinition,
+    RuleProposal,
 )
 from db.models.investigation import (
     Case,
@@ -54,6 +55,7 @@ __all__ = [
     "Alert",
     "ModelRun",
     "RuleDefinition",
+    "RuleProposal",
     "RlArmState",
     "DetectionFeedback",
     # investigation spine

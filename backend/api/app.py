@@ -30,6 +30,7 @@ from api.routes.governance import router as governance_router
 from api.routes.l2 import router as l2_router
 from api.routes.recommendations import router as recommendations_router
 from api.routes.reports import router as reports_router
+from api.routes.review_queue import router as review_queue_router
 from api.routes.watchlist import router as watchlist_router
 from foundation.config import Settings, get_settings
 
@@ -65,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit_router)
     app.include_router(dashboard_router)
     app.include_router(governance_router)
+    app.include_router(review_queue_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
