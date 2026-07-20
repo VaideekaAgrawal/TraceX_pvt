@@ -3,9 +3,8 @@
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Sparkles, X } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CopilotPlaceholder } from "@/components/workspace/ai-widget/copilot-placeholder";
+import { CopilotPanel } from "@/components/workspace/ai-widget/copilot-panel";
 import { RecommendationsPanel } from "@/components/workspace/ai-widget/recommendations-panel";
 import { useAuth, useRole } from "@/lib/auth/auth-provider";
 import { isAssignedToUser } from "@/lib/workspace/case-assignment";
@@ -37,10 +36,12 @@ const CLICK_DRAG_THRESHOLD_PX = 5;
  *     track an arbitrary dragged FAB position risks it landing partway off
  *     -screen; a full-size panel losing exact positional continuity with a
  *     40px button on expand is a minor, forgivable discontinuity, not a
- *     confusing one). Contains two sections, "Recommendations" (real,
- *     wired to `backend/api/routes/recommendations.py`) and "Copilot"
- *     (an honest "coming soon" placeholder — Backend Phase 10 doesn't
- *     exist yet, see `copilot-placeholder.tsx`).
+ *     confusing one). Contains two sections, "Recommendations" (case-
+ *     scoped, wired to `backend/api/routes/recommendations.py`) and
+ *     "Copilot" (cross-case, wired to `backend/api/routes/copilot.py`,
+ *     see `copilot-panel.tsx` — real as of ROADMAP Phase 20, previously
+ *     an honest "coming soon" placeholder while Backend Phase 10 didn't
+ *     exist).
  *
  * Case scoping: reads `activeTabId`/`centerView`/`openTabIds`/`tabState`
  * directly off the shared Zustand tab store — the same store every case tab
@@ -163,12 +164,8 @@ export function AiWidget() {
           variant={tab === "copilot" ? "secondary" : "ghost"}
           size="sm"
           onClick={() => setTab("copilot")}
-          className="gap-1.5"
         >
           Copilot
-          <Badge variant="outline" className="text-[9px] font-normal">
-            Soon
-          </Badge>
         </Button>
       </div>
 
@@ -176,7 +173,7 @@ export function AiWidget() {
         {tab === "recommendations" ? (
           <RecommendationsPanel caseId={scopedCaseId} canAct={canAct} />
         ) : (
-          <CopilotPlaceholder />
+          <CopilotPanel />
         )}
       </div>
     </div>

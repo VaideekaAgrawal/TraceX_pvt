@@ -746,3 +746,31 @@ export interface ChallengeResponse {
   iterations: number;
   latency_ms: number;
 }
+
+// ── `backend/api/routes/copilot.py` (ROADMAP Phase 10 backend / Phase 20
+// frontend — the floating AI widget's "Copilot" tab) ──────────────────────
+//
+// Cross-case by design: unlike Recommendations, there is no `case_id` in
+// the URL — the engine scopes every internal tool call to *the calling
+// user's own cases* server-side (`orchestration/copilot/scoping.py`), and
+// `case_id` (when the question needs one) is a validated argument the model
+// supplies itself, not something the frontend passes. `answer` already has
+// any `customer_id` re-hydrated to a display name for this response only
+// (Phase 10 decision 9) — the frontend must render it and let it go, never
+// cache/persist it beyond the single render (matches `RecommendationsPanel`'s
+// existing session-local-only challenge history, not a Zustand/localStorage
+// store).
+
+export interface CopilotAskRequest {
+  question: string;
+}
+
+export interface CopilotAskResponse {
+  answered: boolean;
+  answer: string;
+  interaction_id: number | null;
+  tools_used: string[] | null;
+  rejected_reason: string | null;
+  iterations: number;
+  latency_ms: number;
+}
