@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent }
 import { Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AuditThreadPanel } from "@/components/workspace/ai-widget/audit-thread-panel";
 import { CopilotPanel } from "@/components/workspace/ai-widget/copilot-panel";
 import { RecommendationsPanel } from "@/components/workspace/ai-widget/recommendations-panel";
 import { useAuth, useRole } from "@/lib/auth/auth-provider";
@@ -36,12 +37,14 @@ const CLICK_DRAG_THRESHOLD_PX = 5;
  *     track an arbitrary dragged FAB position risks it landing partway off
  *     -screen; a full-size panel losing exact positional continuity with a
  *     40px button on expand is a minor, forgivable discontinuity, not a
- *     confusing one). Contains two sections, "Recommendations" (case-
- *     scoped, wired to `backend/api/routes/recommendations.py`) and
- *     "Copilot" (cross-case, wired to `backend/api/routes/copilot.py`,
- *     see `copilot-panel.tsx` — real as of ROADMAP Phase 20, previously
- *     an honest "coming soon" placeholder while Backend Phase 10 didn't
- *     exist).
+ *     confusing one). Contains three sections: "Recommendations" (case-
+ *     scoped, wired to `backend/api/routes/recommendations.py`), "Copilot"
+ *     (cross-case, wired to `backend/api/routes/copilot.py`, see
+ *     `copilot-panel.tsx` — real as of ROADMAP Phase 20, previously an
+ *     honest "coming soon" placeholder while Backend Phase 10 didn't
+ *     exist), and "Activity" (case-scoped, `audit-thread-panel.tsx` —
+ *     closes the Phase 19 Verify-line gap that nothing in the frontend
+ *     ever surfaced an `ai_interaction_created` audit row).
  *
  * Case scoping: reads `activeTabId`/`centerView`/`openTabIds`/`tabState`
  * directly off the shared Zustand tab store — the same store every case tab
@@ -53,7 +56,7 @@ const CLICK_DRAG_THRESHOLD_PX = 5;
  */
 export function AiWidget() {
   const [expanded, setExpanded] = useState(false);
-  const [tab, setTab] = useState<"recommendations" | "copilot">("recommendations");
+  const [tab, setTab] = useState<"recommendations" | "copilot" | "activity">("recommendations");
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   const dragRef = useRef<{
@@ -139,7 +142,9 @@ export function AiWidget() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">AI Assistant</p>
           <p className="text-muted-foreground truncate text-xs">
-            {scopedCaseId ? `Scoped to ${scopedCaseId}` : "No case open — open a case to see recommendations"}
+            {scopedCaseId
+              ? `Scoped to ${scopedCaseId}`
+              : "No case open — Copilot still works; Recommendations/Activity need a case"}
           </p>
         </div>
         <Button
@@ -167,14 +172,19 @@ export function AiWidget() {
         >
           Copilot
         </Button>
+        <Button
+          variant={tab === "activity" ? "secondary" : "ghost"}
+          size="sm"
+          onClick={() => setTab("activity")}
+        >
+          Activity
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {tab === "recommendations" ? (
-          <RecommendationsPanel caseId={scopedCaseId} canAct={canAct} />
-        ) : (
-          <CopilotPanel />
-        )}
+        {tab === "recommendations" && <RecommendationsPanel caseId={scopedCaseId} canAct={canAct} />}
+        {tab === "copilot" && <CopilotPanel />}
+        {tab === "activity" && <AuditThreadPanel caseId={scopedCaseId} />}
       </div>
     </div>
   );
