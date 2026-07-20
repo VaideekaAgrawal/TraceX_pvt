@@ -361,7 +361,16 @@ export interface GraphExplanationResponse {
   generated_at: string;
 }
 
-export type DecisionValue = "close_fp" | "request_info" | "escalate" | "monitoring";
+// Mirrors `backend/api/routes/cases.py::DecisionRequest.decision` exactly —
+// `close_tp` (Phase 12) has no dedicated UI button yet (no frontend phase
+// has built one), but the type stays in sync with the real backend contract
+// rather than omitting a value the API actually accepts.
+export type DecisionValue =
+  | "close_fp"
+  | "close_tp"
+  | "close_monitoring"
+  | "request_info"
+  | "escalate";
 
 export interface DecisionRequest {
   decision: DecisionValue;

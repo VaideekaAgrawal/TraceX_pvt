@@ -45,7 +45,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import openai
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
@@ -54,7 +54,7 @@ from sqlalchemy.orm import Session  # noqa: F401  (kept for symmetry / future us
 from foundation.config import Settings
 from orchestration.gateway import ExplanationUnavailableError
 from orchestration.grounding import FactBundle, flatten_tool_result
-from orchestration.tools.catalog import ToolCatalog, ToolError
+from orchestration.tools.catalog import ToolError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,17 @@ _DEFAULT_MAX_TOKENS = 1500
 # live (docs/METRICS.md). Gather turns keep the smaller budget: their output is
 # just tool-call arguments. Cost is only ever tokens actually generated.
 _SUBMIT_MAX_TOKENS = 4000
+
+
+class ToolDispatcher(Protocol):
+    """The catalog contract the loop actually needs — nothing more. Both Phase 9's
+    case-bound `ToolCatalog` and the Copilot's cross-case `CopilotCatalog` satisfy
+    it structurally, so the loop is reused across both without either a shared base
+    class or a `# type: ignore` at the call site."""
+
+    def schemas(self) -> list[dict[str, Any]]: ...
+
+    def dispatch(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]: ...
 
 
 class AgentLoopError(Exception):
@@ -127,13 +138,14 @@ def _parse_arguments(raw: str | None) -> dict[str, Any]:
 def run_agent_loop(
     *,
     settings: Settings,
-    catalog: ToolCatalog,
+    catalog: ToolDispatcher,
     system_prompt: str,
     user_prompt: str,
     submit_tool: dict[str, Any],
     submit_tool_name: str,
     max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
+    submit_max_tokens: int = _SUBMIT_MAX_TOKENS,
 ) -> AgentResult:
     """Drive the model through fact-gathering tool calls to a forced structured
     submission. Returns the parsed submission plus the FactBundle it was grounded
@@ -197,7 +209,7 @@ def run_agent_loop(
     message = _create(
         client, settings, messages, tools=[*catalog.schemas(), submit_tool],
         tool_choice={"type": "function", "function": {"name": submit_tool_name}},
-        max_tokens=_SUBMIT_MAX_TOKENS,
+        max_tokens=submit_max_tokens,
     )
     submit_calls = [
         tc for tc in _function_tool_calls(message) if tc.function.name == submit_tool_name
@@ -287,7 +299,7 @@ def _record_assistant_turn(
 def _dispatch_into(
     bundle: FactBundle,
     messages: list[dict[str, Any]],
-    catalog: ToolCatalog,
+    catalog: ToolDispatcher,
     tc: ChatCompletionMessageFunctionToolCall,
 ) -> None:
     """Dispatch one fact tool (PII-gated at the catalog), fold it into the bundle,

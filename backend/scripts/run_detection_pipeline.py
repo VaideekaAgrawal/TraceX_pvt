@@ -50,6 +50,7 @@ from detection.scoring.training import load_active_model
 from investigation.alerts import generate_alerts_from_detection
 from investigation.assignment import compute_workload
 from investigation.cases import create_case_from_alert
+from investigation.network_risk import compute_network_risk
 from investigation.prioritization import rank_alert_queue
 
 logger = logging.getLogger(__name__)
@@ -129,8 +130,19 @@ def main(argv: list[str] | None = None) -> None:
         # just-assigned investigator's count changed between iterations).
         workload = compute_workload(session)
 
+        # One case per flagged account. An account can trip several alerts (a
+        # layering chain and a profile mismatch, or overlapping sub-chains); making
+        # a separate case for each means an investigator sees the same entity five
+        # times over. Case the highest-ranked alert per account and stop there —
+        # the rest stay as open alerts on the dashboard, linkable later.
         created_cases: list[tuple[str, str | None, object]] = []
-        for alert in ranked[: args.top_n_to_case]:
+        cased_accounts: set[str] = set()
+        for alert in ranked:
+            if len(created_cases) >= args.top_n_to_case:
+                break
+            if alert.primary_account_id in cased_accounts:
+                continue
+            cased_accounts.add(alert.primary_account_id)
             alert_repo.mark_opened(alert.alert_id, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID)
             case = create_case_from_alert(
                 session, alert, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID,
@@ -139,6 +151,20 @@ def main(argv: list[str] | None = None) -> None:
             created_cases.append((case.case_id, case.assigned_to, case.sla_due_at))
         session.commit()
         print(f"created {len(created_cases)} case(s) from the top of the ranked queue")
+
+        # Compute the network-risk score for every created case up front, rather
+        # than lazily on first view. A case that opens with a blank network-risk
+        # panel reads as "the feature is broken" — and for a multi-account case
+        # (mule ring, layering chain, cycle) the score is one of the most telling
+        # signals an investigator has. Cheap: each case's linked-account set is
+        # small. Single-account cases correctly score low (no network to score).
+        for case_id, _assigned_to, _sla in created_cases:
+            compute_network_risk(
+                session, case_id, actor_type=ActorType.SYSTEM, actor_id=_ACTOR_ID
+            )
+        session.commit()
+        print(f"computed network-risk score for {len(created_cases)} case(s)")
+
         for case_id, assigned_to, sla_due_at in created_cases:
             print(f"  {case_id} -> assigned_to={assigned_to} sla_due_at={sla_due_at}")
     finally:

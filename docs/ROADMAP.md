@@ -242,39 +242,39 @@ Legend: **Status** = not started | in progress | done.
 **Depends on:** Phases 8, 9
 **Branch:** phase/10-copilot
 **Scope (checklist):**
-- [ ] Fixed tool catalog: find/filter *my* cases; "what changed since last login" digest (over the audit log); read/write case-specific notes; grounded Q&A over the current case ego-graph.
-- [ ] Hard RBAC scoping to the investigator's own cases (Phase 2 enforcement).
-- [ ] Guardrails from Phase 8 applied end-to-end; clearly-AI-labeled, facts independently viewable.
-- [ ] **PII pseudonymize / re-hydrate — inherited from Phase 8 (decision 9), built here.** This is the one place the zero-egress invariant legitimately has to bend: an investigator asking *"what else is Rajesh connected to?"* needs a name back. Deterministic per-request token map (`CUST_A1` ↔ `customer_id`), held in-request, re-hydrated on return, **never persisted**. Phase 8 designs it; Phase 10 is the first caller that actually needs it.
-- [ ] **`notes.body` free-text guardrail — inherited from Phase 8 (decision 10), built here.** `notes.body` is the project's only *live* attacker-influenced free-text surface (`narration`/`purpose` are 0-populated). The Copilot both reads and writes notes, so it needs its own explicit guardrail design — per `CLAUDE.md`, the existing per-account-explanation pattern **does not automatically transfer** to a feature that ingests free text.
-**Explicitly out of scope:** actions that mutate case decisions (Copilot assists; decisions stay with the investigator/Admin roles).
+- [x] Fixed tool catalog (`orchestration/copilot/catalog.py`): `list_my_cases`, `whats_changed` (audit-log digest over my cases), grounded per-case Q&A (`get_case_overview`/`get_account_facts`/`get_money_flow`/`get_ego_graph_summary`/`find_similar_cases`), and `write_case_note`. Per-case fact tools **delegate to Phase 9's case-bound `ToolCatalog`** (same computation, scope check, PII gate — nothing re-derived). `case_id` is a *validated argument*, not construction-bound (the whole point of a cross-case agent). Note *reading* is deliberately absent — see decision 10 below.
+- [x] Hard RBAC scoping (`copilot/scoping.py`): INVESTIGATOR → own assigned cases; ADMIN_COMPLIANCE → the `AWAITING_REVIEW`/`ESCALATED` review queue (Phase 15 model). Every case tool validates `case_id` against this set (out-of-scope and unknown are the same `ToolError`, non-disclosing).
+- [x] Guardrails from Phase 8 end-to-end: reuses `agent_loop` (now typed by a `ToolDispatcher` Protocol both catalogs satisfy), the grounding validator, and the PII egress gate; an ungrounded answer is not shown (`answered=false`).
+- [x] **PII re-hydrate (decision 9) — `copilot/rehydration.py`.** Chosen posture: the model reasons over `customer_id` (a durable non-identifying pseudonym) and is **never** given a name; `customer_id → name` is swapped in **only at the display boundary**, for the ids that appeared in the bundle, and **never persisted** — the stored `ai_interactions` row keeps `customer_id`. Provable: the name never crossed to the model (the gate would have raised). Live + unit verified (display shows the name; the persisted record has only the id).
+- [x] **`notes.body` free-text guardrail (decision 10).** Strictest posture: note text is **never fed into an LLM prompt**. The Copilot can *write* a note (`write_case_note`) and the investigator reads notes through the case UI; no note body ever reaches the model, so decision 10 holds literally and there is zero prompt-injection surface. (Test asserts no note-reading tool exists.)
+**Explicitly out of scope:** actions that mutate case decisions (Copilot assists; decisions stay with the investigator/Admin roles). — held: the tool set has no escalate/close/reassign.
 **Reference:** §4.2 (Copilot), §5 (guardrails), decision 3.
-**Status:** not started
+**Status:** implemented + live-verified (Session 23 cont.), branch `phase/10-copilot`. ruff/mypy clean (CI parity), 25 new tests + full suite pass. **Live verify (`docs/METRICS.md` §21):** cross-case Q&A over a real investigator's 10 cases — grounded, RBAC-scoped, cited money-flow summary; guardrail correctly refused an ungrounded count until the shared money-flow tool was given `source_count`/`beneficiary_count` (found live, fixed at the shared-tool altitude — benefits Phase 9 too). `/code-review low`: 3 findings addressed (full-table load in `list_my_cases`; `ToolDispatcher` Protocol removing a `type: ignore`; a documented note-write consideration). **Pending before merge: PR** (and CI green).
 
 ### Phase 11 — Reporting, narrative & watchlist
 **Goal:** Close the case with a defensible artifact; persistent risky-entity monitoring.
 **Depends on:** Phase 6 (evidence), Phase 8 (AI substrate)
 **Branch:** phase/11-reporting-watchlist
 **Scope (checklist):**
-- [ ] Case-level auto-narrative (executive summary, findings, evidence, txns of interest, network analysis, notes, recommendation) — extend the fact-injection pattern to multi-account, editable before submit.
-- [ ] STR/SAR generation (port + extend the FIU-IND PDF+JSON+SHA-256 flow) fed by the narrative + evidence.
-- [ ] Watchlist management (`WatchlistScreener` from `IMPROVEMENTS_STRATEGY.md`) — mark entities; future alerts touching them auto-escalate priority.
+- [x] Case-level auto-narrative (`orchestration/report_narrative.py`) — extends the Phase 8/9 substrate (agent loop + tool catalog + grounding validator) to the whole case: multi-account grounded prose (background → detection → money movement → network → assessment), every figure cited to a tool fact, ungrounded sentences dropped. Returns a DRAFT the investigator edits; no names (customer_id only, decision 9).
+- [x] STR/SAR generation (`investigation/reporting.py` + `api/routes/reports.py`) — grounded narrative + structured case facts → **canonical JSON payload → SHA-256** (tamper-evident) → **PDF** (`reportlab`) → `Report` row, DRAFT→FINALIZED→SUBMITTED state machine (edit only while DRAFT, re-hashes on edit/finalize; submit records FIU reference + time). Flagged in-code as prototype layout pending FIU-IND schema review. + tests (hash tamper-check, real PDF magic bytes, lifecycle guards).
+- [x] Watchlist management (`investigation/watchlist.py::WatchlistScreener`) — `POST`/`GET`/`DELETE /watchlist` (compliance-gated mutations); the screener is built once per detection run and **auto-escalates to P1** any alert touching a watchlisted account or its owning customer (hooked into `generate_alerts_from_detection`). DEVICE/MERCHANT/COMPANY entity types are recorded but never match (no backing column yet) — honest, not silently dropped. Respects `expires_at`. + tests.
 **Explicitly out of scope:** regulatory e-filing integration (roadmap).
 **Reference:** §4.2 (narrative), §4.3, §4.2 (watchlist).
-**Status:** not started
+**Status:** **done** — merged to `main` via PR #22 (squash `a8cff7cf`, Session 28). All 3 slices shipped (watchlist + auto-narrative + STR/SAR PDF/JSON/SHA-256). Live-verified end-to-end on a real 5-account layering case: grounded 4016-char narrative (5 ungrounded sentences dropped + logged), matching SHA-256, valid 4986-byte PDF, zero PII leakage. `/code-review low` → 2 findings fixed (HTTP route tests for both surfaces; dropped-narrative logging). Full suite **656 passed**; ruff/mypy clean; CI green. **Backend core is now complete — only Phase 12 remains.**
 
 ### Phase 12 — Feedback loop, continuous learning & production hardening
 **Goal:** Close the lifecycle loop and make the maturity claims true.
 **Depends on:** all prior
 **Branch:** phase/12-feedback-hardening
 **Scope (checklist):**
-- [ ] Wire investigator verdicts → RL reward + rule-engine confidence + Admin review queue for new rules/edge cases (the full §3 loop).
-- [ ] Model governance surfacing (version/lineage/metrics via `/api/model-metrics`).
-- [ ] CI/CD tightened (drop `|| true`, coverage gate, image build/push per k8s manifest); data-retention policy documented.
-- [ ] Deployment wiring toward the existing k8s manifest (secrets, non-root, health/HPA).
+- [x] Wire investigator verdicts → RL reward (already wired in `close_case`) + **rule-engine confidence** (`detection/rules/feedback.py::adjust_rule_confidence`, bounded EWMA per fired rule, hooked into `close_case`) + **Admin review queue** for new rules (`rule_proposals` table + `RuleProposalRepository` + `api/routes/review_queue.py`: propose→approve/reject, approve mints an enabled `RuleDefinition`; DSL structurally validated via `engine.validate_rule_dsl`). Also: `close_tp`/`close_monitoring` closes now reachable via `/decision` (previously only `close_fp` — the live loop could only ever get negative signal).
+- [x] Model governance surfacing (version/lineage/metrics via `GET /model-metrics`, `api/routes/governance.py`) — active model runs, rules ranked by learned confidence, RL top features, durable verdict-based precision.
+- [x] CI/CD tightened — no `|| true` (already clean since Phase 0); **coverage gate** `--cov-fail-under=90` (suite sits at 97%); **docker-build job** validates the image every run, push gated to main + `vars.PUSH_IMAGE`; **data-retention policy** documented (`docs/DATA_RETENTION.md`, PMLA/RBI-anchored, prototype pending compliance sign-off).
+- [x] Deployment wiring — `backend/Dockerfile` (non-root uid 1000, read-only-rootfs-compatible, `create_app` factory) + `deploy/k8s/api-deployment.yaml` (secrets via `secretKeyRef` incl. JWT/OpenRouter/PII-HMAC — closes the hardcoded-secret landmine at deploy; `/health/live` + `/health/ready` probes; HPA 3–20; PDB) + `secrets.example.yaml` template. New `/health/live` + `/health/ready` (DB-ping) endpoints. **Image built + container smoke-tested live** (serves `/health/live` 200).
 **Explicitly out of scope:** Neo4j migration build (funded-prod, conceptual for now); workflow-pattern RL beyond reward wiring.
 **Reference:** §3 (feedback), §5 (ML governance, CI/CD, scalability), §6 (deployment).
-**Status:** not started
+**Status:** **done** — merged to `main` via PR #23 (squash `b7a066b9`, Session 29). All 4 checklist items shipped: the full feedback loop (RL reward + rule-confidence EWMA + admin review queue), model-governance surfacing (`/model-metrics`), CI/CD hardening (coverage gate `--cov-fail-under=90` + docker-build) + data-retention doc, and k8s deployment wiring (Dockerfile + manifest + health endpoints — image built & container smoke-tested serving `/health/live` 200). Migration `0002_rule_proposals_review_queue` (verified up/down, applied to demo DB). 688 tests, 97.4% coverage, ruff/mypy clean, CI green (test + docker-build). `/code-review low` → no blocking findings. **🎉 THE BACKEND IS COMPLETE — Phases 0–12 all done.** Remaining project-wide: the one-time backend-completion `/code-review high` milestone (CLAUDE.md), and the frontend Recommendation/Copilot UIs (Phases 19–20, now unblocked).
 
 ---
 

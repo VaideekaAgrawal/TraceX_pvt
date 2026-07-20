@@ -50,6 +50,7 @@ from db.models.detection import Alert
 from db.repositories.detection import AlertRepository
 from detection.scoring.ensemble import EnsembleScorer
 from detection.types import DetectionResult
+from investigation.watchlist import WatchlistScreener, escalate_for_watchlist
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,13 @@ def generate_alerts_from_detection(
     account_flags = EnsembleScorer.build_flags(rule_results)
     effective_date = date_str or utcnow().strftime("%Y-%m-%d")
 
+    # Watchlist screener, built once over every account any detection touches
+    # (Phase 11): an alert touching a watchlisted entity is auto-escalated to P1.
+    all_account_ids = sorted(
+        {str(a) for results in rule_results.values() for r in results for a in r.account_ids}
+    )
+    screener = WatchlistScreener(session, all_account_ids)
+
     alerts: list[Alert] = []
     for detection_type_str, results in rule_results.items():
         try:
@@ -136,6 +144,8 @@ def generate_alerts_from_detection(
             priority = Priority(
                 scorer.compute_priority(risk_score, confidence, amount, len(account_ids))
             )
+            # Auto-escalate to P1 if this alert touches a watchlisted entity.
+            priority = escalate_for_watchlist(priority, screener.screen(account_ids))
             rule_id = result.details.get("rule_id") if isinstance(result.details, dict) else None
             rule_ids = [rule_id] if rule_id else None
 

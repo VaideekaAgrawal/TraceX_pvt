@@ -20,9 +20,12 @@ __pycache__/
 .coverage
 *.log
 
-# Local dev/pilot DB file — schema lives in docs/DATA_SCHEMA.md, the DB
-# itself is never committed. Source CSVs under data/ ARE tracked (they're
-# the real ingest input for Phase 1/1B), only the generated .db is not.
+# The full-scale IBM benchmark DB (~5GB) is generated (2h ingest) and never
+# committed — schema lives in docs/DATA_SCHEMA.md. Source CSVs under data/ ARE
+# tracked (the real ingest input for Phase 1/1B).
+# NOTE: data/tracex_demo.db (the crisp India-centric pilot DB, ~5MB) IS
+# committed on purpose — it's the shared pitch dataset so every machine/account
+# sees the same demo out of the box. Only tracex.db is excluded here.
 data/tracex.db
 data/uploads/
 
@@ -41,3 +44,4 @@ Thumbs.db
 
 # uv lockfile — nothing in CI uses uv; this is a local artifact.
 backend/uv.lock
+data/reports/

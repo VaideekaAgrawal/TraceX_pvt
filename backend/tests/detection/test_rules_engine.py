@@ -6,7 +6,12 @@ import pytest
 from db.enums import ActorType
 from db.repositories.detection import RuleDefinitionRepository
 from detection.graph.networkx_store import NetworkXGraphStore
-from detection.rules.engine import PrimitiveRegistry, RuleEngine, RuleEvaluator
+from detection.rules.engine import (
+    PrimitiveRegistry,
+    RuleEngine,
+    RuleEvaluator,
+    validate_rule_dsl,
+)
 
 
 def _ts(s: str) -> pd.Timestamp:
@@ -52,6 +57,29 @@ def _store(*dfs: pd.DataFrame) -> NetworkXGraphStore:
 
 
 # ── PrimitiveRegistry ────────────────────────────────────────────────────
+
+
+def test_validate_rule_dsl_accepts_a_known_primitive() -> None:
+    validate_rule_dsl({"conditions": [{"primitive": "chain", "params": {}}]})  # no raise
+
+
+def test_validate_rule_dsl_rejects_unknown_primitive() -> None:
+    with pytest.raises(ValueError, match="unknown primitive"):
+        validate_rule_dsl({"conditions": [{"primitive": "made_up"}]})
+
+
+def test_validate_rule_dsl_rejects_empty_or_missing_conditions() -> None:
+    with pytest.raises(ValueError, match="non-empty 'conditions'"):
+        validate_rule_dsl({"conditions": []})
+    with pytest.raises(ValueError, match="non-empty 'conditions'"):
+        validate_rule_dsl({})
+
+
+def test_validate_rule_dsl_stays_in_sync_with_registry() -> None:
+    # Every registered primitive validates — the validator can't drift from the
+    # evaluator's dispatch because it reads the same registry.
+    for primitive in PrimitiveRegistry.list_primitives():
+        validate_rule_dsl({"conditions": [{"primitive": primitive}]})
 
 
 def test_list_primitives_includes_all_11() -> None:

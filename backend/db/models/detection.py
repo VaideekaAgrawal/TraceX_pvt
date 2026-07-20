@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from db.enums import CaseResolution, DetectionType, Priority, RiskLevel
+from db.enums import CaseResolution, DetectionType, Priority, ReviewStatus, RiskLevel
 from db.models.base import Base, CreatedAtMixin, UpdatedAtMixin, sa_enum
 
 
@@ -85,6 +85,32 @@ class RuleDefinition(Base, CreatedAtMixin, UpdatedAtMixin):
     confidence: Mapped[float] = mapped_column(nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
+
+
+class RuleProposal(Base, CreatedAtMixin, UpdatedAtMixin):
+    """A proposed detection rule awaiting Admin/Compliance review — the
+    human-in-the-loop half of the Phase 12 feedback loop. An investigator (or
+    the system, from an unexplained edge case) proposes a rule DSL + rationale;
+    an admin reviews it and either APPROVES (minting an enabled
+    `RuleDefinition`, whose id is recorded in `created_rule_id`) or REJECTS it
+    with a note. The proposal row is the audit trail of that decision — it is
+    never deleted, only transitioned."""
+
+    __tablename__ = "rule_proposals"
+
+    proposal_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    dsl: Mapped[dict] = mapped_column(JSON, nullable=False)
+    tier: Mapped[int] = mapped_column(nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[ReviewStatus] = mapped_column(sa_enum(ReviewStatus), nullable=False)
+    proposed_by: Mapped[str] = mapped_column(ForeignKey("users.user_id"), nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_rule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("rule_definitions.rule_id"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RlArmState(Base):

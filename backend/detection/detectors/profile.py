@@ -58,7 +58,7 @@ class ProfileMismatchDetector:
         results = []
         results.extend(self._detect_income_mismatch(transactions_df, accounts_df))
         results.extend(self._detect_peer_deviation(transactions_df, accounts_df))
-        results.extend(self._detect_behavioural_shift(transactions_df))
+        results.extend(self._detect_behavioural_shift(transactions_df, accounts_df))
 
         results.sort(key=lambda r: r.score, reverse=True)
         logger.info("Profile mismatch: found %d alerts", len(results))
@@ -169,8 +169,21 @@ class ProfileMismatchDetector:
             ))
         return results
 
-    def _detect_behavioural_shift(self, txns: pd.DataFrame) -> list[DetectionResult]:
-        """Detect sudden amount spikes per account — vectorised via groupby + rolling."""
+    def _detect_behavioural_shift(
+        self, txns: pd.DataFrame, accounts: pd.DataFrame | None = None
+    ) -> list[DetectionResult]:
+        """Detect sudden amount spikes per account — vectorised via groupby + rolling.
+
+        **A profile-mismatch alert requires a profile.** This sub-detector is
+        transaction-only, so on a KYC-barren dataset it would flag any account
+        with enough activity and a spike — which is how the real IBM benchmark
+        produced ~36k `profile_mismatch` alerts (86% of all alerts) on accounts
+        that carry no occupation/income at all. A "profile mismatch" on an entity
+        we have no profile for is meaningless noise. So gate to accounts that
+        actually have a declared profile (`declared_annual_income > 0`), matching
+        the gate `_detect_income_mismatch` already applies. Accounts *are* passed
+        now; the old `accounts=None` path (no gate) is kept only for direct unit
+        callers and treats "no accounts frame" as "cannot verify a profile → skip"."""
         src = txns[["source_account", "timestamp", "amount"]].rename(
             columns={"source_account": "account_id"}
         )
@@ -179,6 +192,16 @@ class ProfileMismatchDetector:
         )
         acc_txns = pd.concat([src, dst], ignore_index=True)
         acc_txns = acc_txns.sort_values(["account_id", "timestamp"]).reset_index(drop=True)
+
+        # Keep only accounts with a declared profile to (potentially) mismatch.
+        if accounts is None or "declared_annual_income" not in accounts.columns:
+            return []
+        profiled = set(
+            accounts.loc[accounts["declared_annual_income"] > 0, "account_id"].astype(str)
+        )
+        if not profiled:
+            return []
+        acc_txns = acc_txns[acc_txns["account_id"].astype(str).isin(profiled)].copy()
 
         counts = acc_txns.groupby("account_id").size()
         valid = counts[counts >= self.cfg.behavioural_shift_min_txn_count].index

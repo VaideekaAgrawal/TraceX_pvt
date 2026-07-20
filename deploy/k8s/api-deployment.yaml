@@ -1,0 +1,120 @@
+# TraceX backend API — k8s deployment (ROADMAP Phase 12, deployment wiring).
+#
+# Rewritten for the three-layer FastAPI backend (api.app:create_app). Differences
+# from the archived manifest (archive/fund-flow-tracker/k8s/): no Neo4j env (the
+# current system is SQLite/config-driven, graph_backend=networkx); secrets come
+# from the `tracex-secrets` Secret via secretKeyRef, never inline (closes the
+# hardcoded-JWT-secret landmine at the deploy layer — the app also fails startup
+# via Settings.validate_secrets() if they're absent); health probes target the
+# real /health/live and /health/ready endpoints; the container runs non-root with
+# a read-only root filesystem, writing only to the mounted data volume and /tmp.
+#
+# Provide the Secret separately — see secrets.example.yaml (never commit real
+# secret values).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tracex-api
+  labels: {app: tracex, component: api}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: tracex, component: api}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    metadata:
+      labels: {app: tracex, component: api}
+    spec:
+      serviceAccountName: tracex-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: tracex/api:latest   # overridden per-release by CI (see backend-ci.yml)
+          imagePullPolicy: Always
+          ports:
+            - {name: http, containerPort: 8000}
+          env:
+            - {name: ENV, value: "prod"}
+            - {name: LOG_LEVEL, value: "INFO"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: tracex-secrets, key: database-url}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: tracex-secrets, key: jwt-secret}}
+            - name: OPENROUTER_API_KEY
+              valueFrom: {secretKeyRef: {name: tracex-secrets, key: openrouter-api-key}}
+            - name: PII_HMAC_KEY
+              valueFrom: {secretKeyRef: {name: tracex-secrets, key: pii-hmac-key}}
+          resources:
+            requests: {memory: "512Mi", cpu: "250m"}
+            limits: {memory: "2Gi", cpu: "1000m"}
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8000}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: data, mountPath: /app/data}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim: {claimName: tracex-data-pvc}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tracex-api
+  labels: {app: tracex, component: api}
+spec:
+  type: ClusterIP
+  ports:
+    - {name: http, port: 80, targetPort: 8000}
+  selector: {app: tracex, component: api}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tracex-api
+  labels: {app: tracex}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tracex-api-hpa
+  labels: {app: tracex, component: api}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: tracex-api}
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+    - type: Resource
+      resource: {name: memory, target: {type: Utilization, averageUtilization: 80}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tracex-api-pdb
+  labels: {app: tracex, component: api}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app: tracex, component: api}

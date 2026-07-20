@@ -94,8 +94,9 @@ def session() -> Iterator[Session]:
 
 
 def test_create_all_builds_every_table(session: Session) -> None:
-    # 21 tables across the five doc groupings — see db/models/__init__.py.
-    assert len(Base.metadata.tables) == 21
+    # 22 tables across the five doc groupings — see db/models/__init__.py.
+    # (21 original + rule_proposals, ROADMAP Phase 12 admin review queue.)
+    assert len(Base.metadata.tables) == 22
 
 
 def test_round_trip_every_table(session: Session) -> None:

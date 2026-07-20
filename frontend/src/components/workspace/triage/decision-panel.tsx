@@ -14,7 +14,12 @@ import type { DecisionRequest, DecisionResponse, DecisionValue } from "@/lib/api
 
 const CLOSED_STATUSES = new Set(["CLOSED_FP", "CLOSED_TP"]);
 
-type SubmitKey = "escalate" | "recommend_fp" | "recommend_monitoring" | "close_fp" | "monitoring";
+type SubmitKey =
+  | "escalate"
+  | "recommend_fp"
+  | "recommend_monitoring"
+  | "close_fp"
+  | "close_monitoring";
 
 /**
  * L1/L2 Decision Panel — role- AND status-aware, mounted once in
@@ -38,12 +43,12 @@ type SubmitKey = "escalate" | "recommend_fp" | "recommend_monitoring" | "close_f
  *     "Recommend Monitoring") that submit this same decision value with a
  *     distinguishing reason prefix, routing the case into Admin/
  *     Compliance's `AWAITING_REVIEW` queue for a real decision — an
- *     Investigator can never trigger real `close_fp`/`monitoring` directly,
- *     same reasoning for both.
+ *     Investigator can never trigger real `close_fp`/`close_monitoring`
+ *     directly, same reasoning for both.
  *   - `close_fp` -> `CLOSED_FP`. FSM-legal from `IN_PROGRESS`/
  *     `AWAITING_REVIEW`/`ESCALATED`, but Admin/Compliance-only — a separate
  *     RBAC layer on top of the FSM range.
- *   - `monitoring` -> `MONITORING` (`ENHANCED_MONITORING` resolution).
+ *   - `close_monitoring` -> `MONITORING` (`ENHANCED_MONITORING` resolution).
  *     FSM-legal only from `AWAITING_REVIEW`/`ESCALATED` — NOT directly from
  *     `IN_PROGRESS` — and Admin/Compliance-only, same RBAC gate as
  *     `close_fp`.
@@ -169,7 +174,7 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
       );
     } else if (kind === "recommend_monitoring") {
       // Same UI-framing pattern as `recommend_fp` — still `request_info`
-      // under the hood, never real `monitoring`, per this panel's
+      // under the hood, never real `close_monitoring`, per this panel's
       // docstring.
       void submit(
         "request_info",
@@ -177,8 +182,13 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
         "Recommended Monitoring — routed to Admin/Compliance for review.",
         "recommend_monitoring",
       );
-    } else if (kind === "monitoring") {
-      void submit("monitoring", trimmedReason, "Case set to Enhanced Monitoring.", "monitoring");
+    } else if (kind === "close_monitoring") {
+      void submit(
+        "close_monitoring",
+        trimmedReason,
+        "Case set to Enhanced Monitoring.",
+        "close_monitoring",
+      );
     } else {
       void submit("close_fp", trimmedReason, "Case closed as False Positive.", "close_fp");
     }
@@ -280,10 +290,10 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
               {adminShowMonitoring && (
                 <Button
                   variant="outline"
-                  onClick={() => handleSubmit("monitoring")}
+                  onClick={() => handleSubmit("close_monitoring")}
                   disabled={submitting !== null}
                 >
-                  {submitting === "monitoring" ? "Submitting…" : "Monitoring"}
+                  {submitting === "close_monitoring" ? "Submitting…" : "Monitoring"}
                 </Button>
               )}
               {adminShowCloseFp && (

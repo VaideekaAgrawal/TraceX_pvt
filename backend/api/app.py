@@ -18,15 +18,23 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from api.routes.alerts import router as alerts_router
 from api.routes.audit import router as audit_router
 from api.routes.auth import router as auth_router
 from api.routes.cases import router as cases_router
+from api.routes.copilot import router as copilot_router
 from api.routes.dashboard import router as dashboard_router
+from api.routes.governance import router as governance_router
 from api.routes.l2 import router as l2_router
 from api.routes.recommendations import router as recommendations_router
+from api.routes.reports import router as reports_router
+from api.routes.review_queue import router as review_queue_router
+from api.routes.watchlist import router as watchlist_router
+from db.session import get_db
 from foundation.config import Settings, get_settings
 
 
@@ -54,16 +62,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(cases_router)
     app.include_router(l2_router)
     app.include_router(recommendations_router)
+    app.include_router(copilot_router)
+    app.include_router(watchlist_router)
+    app.include_router(reports_router)
     app.include_router(alerts_router)
     app.include_router(audit_router)
     app.include_router(dashboard_router)
+    app.include_router(governance_router)
+    app.include_router(review_queue_router)
 
+    # Health probes are unauthenticated by design: standard exemption (k8s
+    # liveness/readiness checks can't carry a bearer token) — does not violate
+    # "auth on every route" (docs/ROADMAP.md invariant), which applies to
+    # business/data routes, not infra health checks.
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
-        # Unauthenticated by design: standard health-probe exemption
-        # (k8s liveness/readiness checks can't carry a bearer token) — does
-        # not violate "auth on every route" (docs/ROADMAP.md invariant),
-        # which applies to business/data routes, not infra health checks.
         return {"status": "ok"}
+
+    @app.get("/health/live")
+    def health_live() -> dict[str, str]:
+        # Liveness: is the process up and serving? No dependencies — a failing
+        # DB must NOT restart the pod (that's readiness's job), or a brief DB
+        # blip would cascade into a crash loop (ROADMAP Phase 12).
+        return {"status": "alive"}
+
+    @app.get("/health/ready")
+    def health_ready(db: Session = Depends(get_db)) -> dict[str, str]:
+        # Readiness: can this pod actually serve traffic (DB reachable)? A 503
+        # here pulls the pod out of the Service's endpoints without killing it.
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception as exc:  # pragma: no cover - exercised via the 503 path
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "database not reachable"
+            ) from exc
+        return {"status": "ready"}
 
     return app

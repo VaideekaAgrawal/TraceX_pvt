@@ -588,6 +588,27 @@ Frontend-only phase (no backend changes — every endpoint was already built and
 
 **Not done this session**: a real browser/Playwright pass (this verify was curl/API-level only, backed by a careful read of the client-side conditional-render logic for the role gating) — worth doing before the pitch demo, not a merge blocker. **Local `data/tracex.db` was mutated** by this verify pass (one real case reassigned to a throwaway user and transitioned through to `CLOSED_FP`) — local-only, gitignored, doesn't travel with git, but affects this machine's case-count numbers by one closed case going forward.
 
+## 22. Investigation Copilot — live end-to-end verify (Phase 10 — Session 23 cont.)
+
+Branch `phase/10-copilot`. Model `anthropic/claude-sonnet-4.5`. Live run as a real investigator (`investigator1`, 10 assigned cases) against the full-scale local `data/tracex.db`, rolled back.
+
+| Metric | Value |
+| --- | --- |
+| New backend tests | 25 (scoping, re-hydration, catalog RBAC/PII, engine, + 4 HTTP route tests) |
+| Full suite after Phase 10 | 598 passed (+33 vs pre-phase), 28 deselected (ingest), ruff + mypy clean (CI-parity `… demo_data tests`) |
+| Copilot tools | 8 (`list_my_cases`, `whats_changed`, 5 per-case fact tools delegating to Phase 9's catalog, `write_case_note`) |
+| Shared catalog change | added `source_count` / `beneficiary_count` to `get_money_flow` (used by Phase 9 + Copilot) |
+| Live Q1 (cross-case) | grounded: "You have 10 cases… highest-risk CASE-…DAD84AF2, risk 81.48, primary account 804BD00D0, ASSIGNED, L1, P2"; 2 iterations, tool `list_my_cases` |
+| Live Q2 (case drill-down) | grounded money-flow summary — "3 source accounts… largest 335545.06 = 78.19%… 2 beneficiary accounts"; 3 iterations, `list_my_cases`+`get_money_flow`; ~40s |
+| Guardrail firing (the point) | **before** the counts fix, Q2 was correctly REFUSED ("states ungrounded number 3.0 … Account received funds from 3 sources") — the model counted a list, which is ungrounded arithmetic; fixed by making the tool hand over the counts, never by relaxing the gate |
+| RBAC | scoping resolved exactly the investigator's 10 cases; an out-of-scope/unknown case id returns a non-disclosing `ToolError` |
+
+**Decision-9 proof (unit + live):** the reply shown to the investigator re-hydrates `customer_id → "Name (customer_id)"`, while the persisted `ai_interactions.response_text` and `facts` keep only `customer_id` — the name never reached the model and is not stored. `test_engine.py::test_grounded_answer_rehydrated_for_display_but_tokenised_at_rest` asserts both halves.
+
+**Decision-10 proof:** no note-reading tool exists (`test_catalog.py::test_there_is_no_note_reading_tool`); `notes.body` never enters a prompt. The Copilot can only *write* a note.
+
+**Bug found live, fixed at the right altitude:** the money-flow tool returned counterparty *lists* but no *counts*, so a natural "3 sources / 2 beneficiaries" summary was un-groundable. Added the counts as citable facts in the shared Phase-8 catalog handler (helps the Recommendation Engine too), following the codebase's own `inflow_pct_of_declared_income` precedent — "make the tool compute the figure," never relax the validator.
+
 ---
 
 ## 23. Frontend Phase 17 — L2 graph & data surfaces, code review + verify (Session 24)
@@ -628,15 +649,75 @@ Frontend-only phase (no backend changes — every endpoint was already built in 
 
 **Data gap found during verify, not caused by this phase**: some historical demo cases have no `case_accounts` row (worked around for this session's verify by adding one via `CaseAccountRepository.add_account`, same category as prior sessions' direct `transition_case` calls) — silently makes case-scoped L2 features look empty for those cases even when the customer has real relationships. Flagged for whichever phase next touches demo-data generation or the historical-case pipeline, not fixed here (out of Phase 18 scope). **Not done this session**: a real browser/Playwright pass — worth doing before the pitch demo, not a merge blocker.
 
+## 25. Crisp India-centric demo dataset + two detection fixes (Session 27)
+
+Branch `demo-data-india-centric`. Motivated by owner review of the running system: 41,807 alerts was "too much", KYC was "garbage" (occupation/income ~0.1% populated, names like "Corporation #33520"), and network risk "looked wrong". Root-caused against the live DB, then fixed.
+
+**Diagnosis (full-scale IBM DB, before):**
+| Metric | Value |
+| --- | --- |
+| Alerts | 41,807 — **86% (35,988) profile_mismatch**, of which **0/200 sampled had any declared income** |
+| Customer KYC populated | occupation/income/PAN ≈ **213/166,420 (0.1%)** — the rest raw IBM benchmark, 99.8% BUSINESS entities |
+| Network risk computed | 2/70 cases, flat low values (3.0 / 25.0) |
+| ML (unchanged, IBM benchmark) | F1 0.206 / AUC-ROC 0.778 (§18) — kept as the "validated at scale" credential |
+
+**Two detection fixes (production code, not just demo):**
+1. **profile_mismatch spurious firing** — the 36k came from the `behavioural_shift` sub-detector, which is transaction-only and fired across the KYC-barren IBM account base. Gated it (and the typology) on the account having a declared profile (`declared_annual_income > 0`), matching `income_mismatch`'s existing gate: *a profile-mismatch alert requires a profile.* `detection/detectors/profile.py` + rule-engine dispatch; new regression test asserts an identical spike on a no-income account yields no alert.
+2. **Network-risk shown blank** — formula was sound but computed lazily (2/70). Now computed **eagerly in the pipeline** for every created case (`run_detection_pipeline.py`). Single-account cases correctly score low; multi-account cases (mule rings, chains, cycles) score meaningfully.
+
+**Also fixed in the pipeline:** **one case per flagged account** — an account tripping several alerts (overlapping layering sub-chains + a profile mismatch) previously spawned a separate case each (50 cases / 25 distinct accounts). Now dedup'd (55 cases / 55 distinct accounts).
+
+**The crisp demo dataset (`data/tracex_demo.db`, built by `scripts/build_demo_db.sh`, `--skip-golden-scenarios`):**
+| Metric | Value |
+| --- | --- |
+| Customers | ~200 India-centric, **100% full KYC** — real names, occupation, INR income, PAN/Aadhaar/phone, city, PEP/sanction; businesses carry a sector, not a personal occupation |
+| Transactions | ~2,700 — ~80% clean baseline (sized to income, must not flag) + ~57 planted typology scenarios |
+| Alerts | **105** (from 41,807), balanced: layering 31 · profile_mismatch 28 · structuring 19 · dormancy 16 · round_trip 11 |
+| Cases | **55 active** (all distinct accounts, 54/55 fully KYC-linked) + 50 historical; capped/deduped, ~27 per investigator |
+| Case mix | L1 (structuring/profile/dormancy, single-account) · L2 (layering/round-trip/mule, multi-account networks) · deliberate **false negatives** (2 sub-threshold deposits, `is_laundering=1`, not flagged) |
+| Network risk | computed for all 55, real spread (3–34) |
+| Verified live | e.g. case on "Myra Mahajan — Investment Banker, ₹1.5L income (mismatch), KYC EXPIRED, HIGH risk", 3 sources / 5 beneficiaries money-flow, network risk populated |
+
+**Two-tier framing (decision 11) now real:** ML trained/validated at scale on IBM's public benchmark (§18 numbers, unchanged); investigation UX demonstrated on the engineered India-centric dataset with planted ground truth. The demo DB's own model metrics are degenerate (tiny data) and deliberately not surfaced in the UI. `.env` `DATABASE_URL` repointed at `tracex_demo.db`; the IBM `tracex.db` preserved on disk.
+
 ---
 
-## 25. L1/L2 usability & bugfix pass — `fix/l1-l2-usability-and-bugs` (Session 26)
+## Phase 11 — Reporting, narrative & watchlist (Session 28, 2026-07-19)
 
-Not a roadmap phase branch — an ad-hoc usability/bugfix pass across L1/L2 (backend + frontend) built in an earlier, unlogged session; this session's job was to test, code-review, and log it retroactively before push (see `docs/SESSION_LOG.md` Session 26 for the full account). Backend: 624/624 tests passing (up from 565 at Session 25/23 — this branch adds `test_graph_explanation.py` plus extensions to `test_cases_routes.py`/`test_l2_routes.py`), ruff clean, mypy clean (125 files). Frontend: `npm run lint`/`npm run build` clean, before and after code-review fixes.
+**Test suite:** ~~610 passed~~ (Session 26/27) → **656 passed** (+46: watchlist screening/escalation, report lifecycle with SHA-256 tamper-check + `%PDF` magic-byte + DRAFT→FINALIZED→SUBMITTED guards, and HTTP route tests for `/watchlist` + `/reports` — auth, scoping, state-machine 409s, validation, all LLM-free). ruff + mypy clean at CI scope (210 source files); CI green (~22–24 min).
+
+**Live end-to-end report generation** (real OpenRouter call, `anthropic/claude-sonnet-4.5`, on a real 5-account layering/round_trip case, rolled back after):
+| Metric | Value |
+| --- | --- |
+| Narrative | grounded, **4016 chars**, multi-account; **5 ungrounded sentences dropped** by the validator (and logged) |
+| Tamper-evidence | canonical JSON → SHA-256 **matches** on re-hash |
+| PDF | **valid, 4986 bytes** (`%PDF` magic bytes) |
+| PII leakage | **none** — customer_id only, zero names in the narrative |
+| Submit token budget | `run_agent_loop(submit_max_tokens=...)` now a param; narrative needs **8000** (default 4000 truncated the forced submit to empty args — caught live, same class as Phase 9) |
+
+---
+
+## Phase 12 — Feedback loop, governance & hardening (Session 29, 2026-07-20)
+
+**Test suite:** ~~656~~ (Phase 11) → **688 passed** (+32: rule-confidence EWMA/clamp, close_case verdict integration, `close_tp`/`close_monitoring` routes, `/model-metrics` governance, review-queue propose/approve/reject + DSL validation, health endpoints, schema-inventory update). ruff + mypy clean.
+
+**Coverage gate introduced:** `pytest --cov-fail-under=90`. Measured **97.43%** (14,438 statements, 371 missed) — floor set well below so normal fluctuation doesn't false-fail.
+
+**Schema:** 21 → **22 tables** (`rule_proposals`, migration `0002`, verified up/down + applied to the demo DB).
+
+**Deployment (live-verified, not just built):** `backend/Dockerfile` image **builds**, and the container **boots and serves `/health/live` 200** (non-root uid 1000, read-only-rootfs-compatible). CI gains a `docker-build` job (~1 min).
+
+**CI runtime:** test job ~24 min (unchanged); + docker-build ~1 min.
+
+---
+
+## 26. L1/L2 usability & bugfix pass — `fix/l1-l2-usability-and-bugs` (Session 30)
+
+Not a roadmap phase branch — an ad-hoc usability/bugfix pass across L1/L2 (backend + frontend) built in an earlier, unlogged session; this session's job was to test, code-review, and log it retroactively before push (see `docs/SESSION_LOG.md` Session 30 for the full account, including why it's numbered 30 and this section 26 rather than the 26/25 this branch's own commits reference — a numbering collision with the concurrent backend track, resolved the same way as the earlier Session 21/23/24 collision). Backend: 624/624 tests passing pre-merge (up from 565 at Session 25/23 — this branch adds `test_graph_explanation.py` plus extensions to `test_cases_routes.py`/`test_l2_routes.py`), ruff clean, mypy clean (125 files). Frontend: `npm run lint`/`npm run build` clean, before and after code-review fixes. Post-merge (this branch merged with `origin/main`'s now-complete backend, Phases 0–12): see `docs/SESSION_LOG.md` Session 30 for the reconciliation (the `monitoring` decision value was renamed to `close_monitoring` to match Session 29's independently-built, more complete `close_fp`/`close_tp`/`close_monitoring` design) and the post-merge test count.
 
 **Code review** (`low` effort, inline, no subagents): 4 findings — 2 judgment calls put to the user (kept as-is: the Transaction Explorer's Channel filter removal, and the RBAC read-access loosening — see the session log for the user's decisions and reasoning), 2 confirmed duplication findings fixed (a `handleOpen`-open-case-as-tab flow duplicated verbatim across `previous-alerts.tsx`/`similar-cases.tsx`, extracted to `lib/workspace/use-open-case-tab.ts`; an "is this case assigned to me" check independently reimplemented in `decision-panel.tsx`/`ai-widget.tsx`, extracted to `lib/workspace/case-assignment.ts::isAssignedToUser`). No crash-causing correctness bugs found across the full diff.
 
-**Live-verified directly against the real backend+frontend** (curl + cookie jar, Node 20, 3 throwaway users `verify26inv`/`verify26inv2`/`verify26adm` — no browser/Playwright available this session, same caveat as every frontend session since Phase 16):
+**Live-verified directly against the real backend+frontend, pre-merge** (curl + cookie jar, Node 20, 3 throwaway users `verify26inv`/`verify26inv2`/`verify26adm` — no browser/Playwright available this session, same caveat as every frontend session since Phase 16; decision value shown here as `monitoring`, the pre-merge/pre-rename name — see above, it's `close_monitoring` post-merge, same behavior):
 
 | Check | Result |
 |---|---|
@@ -649,7 +730,7 @@ Not a roadmap phase branch — an ad-hoc usability/bugfix pass across L1/L2 (bac
 | AI recommendations widget | `POST .../recommendations` with no LLM key → clean `503` with the same "not configured" message, not a raw error |
 | Previous Alerts `case_id` nullability / open-as-tab | `GET .../previous-alerts` returned real non-null `case_id`s for prior alerts; `GET /cases/{that_case_id}` (as a different investigator) → `200`, confirming the open-any-case-read-only flow end-to-end |
 
-**Not done this session**: a real browser/Playwright pass (curl/API-level only, same as every frontend session since Phase 16) — the dagre graph layout, collapsible queue, vertical tab rail, and floating AI widget's drag/expand behavior were reviewed in code but not visually confirmed. Also not exercised: a real LLM-backed recommendation+challenge round-trip (no API key configured in this environment). **Local `data/tracex.db` was mutated** by this verify pass (3 new users; 2 alerts assigned into new cases; one walked `ASSIGNED -> IN_PROGRESS -> ESCALATED -> MONITORING`, another to `IN_PROGRESS` only) — local-only, gitignored, adds to the existing cross-machine local-DB-divergence note (Sessions 20/22/23/24/25).
+**Not done this session**: a real browser/Playwright pass (curl/API-level only, same as every frontend session since Phase 16) — the dagre graph layout, collapsible queue, vertical tab rail, and floating AI widget's drag/expand behavior were reviewed in code but not visually confirmed. Also not exercised: a real LLM-backed recommendation+challenge round-trip (no API key configured in this environment); a second live-verify pass after the `close_monitoring` rename (covered by the updated test suite instead, per the session log). **Local `data/tracex.db` was mutated** by the pre-merge verify pass (3 new users; 2 alerts assigned into new cases; one walked `ASSIGNED -> IN_PROGRESS -> ESCALATED -> MONITORING`, another to `IN_PROGRESS` only) — local-only, gitignored, adds to the existing cross-machine local-DB-divergence note (Sessions 20/22/23/24/25).
 
 ---
 

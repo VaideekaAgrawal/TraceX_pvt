@@ -17,6 +17,7 @@ from db.repositories.detection import (
     AlertRepository,
     DetectionFeedbackRepository,
     RlArmStateRepository,
+    RuleDefinitionRepository,
 )
 from db.repositories.investigation import (
     CaseAccountRepository,
@@ -303,6 +304,72 @@ def test_close_case_enhanced_monitoring_does_not_set_closed_at(session: Session)
     # Still being watched, not finished -- closed_at must stay unset
     # (code-review finding, Phase 4).
     assert closed.closed_at is None
+
+
+def _seed_rule(session: Session, rule_id: str, confidence: float) -> None:
+    RuleDefinitionRepository(session).create(
+        rule_id=rule_id, name=rule_id, dsl={"primitive": "chain"}, tier=1,
+        confidence=confidence, actor_type=ActorType.SYSTEM, actor_id=None,
+    )
+
+
+def _rule_confidence(session: Session, rule_id: str) -> float:
+    rule = RuleDefinitionRepository(session).get(rule_id)
+    assert rule is not None
+    return rule.confidence
+
+
+def test_close_case_true_positive_raises_fired_rule_confidence(session: Session) -> None:
+    """ROADMAP Phase 12: the second half of the feedback loop -- a TP verdict
+    nudges up the confidence of every rule that fired for the case."""
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    _seed_rule(session, "RULE-X", 0.50)
+    alert = _seed_alert(session)
+    AlertRepository(session).update(
+        alert.alert_id, rule_ids=["RULE-X"], actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    _walk_to_awaiting_review(session, case.case_id)
+    session.commit()
+
+    close_case(
+        session, case.case_id, CaseResolution.TRUE_POSITIVE_SAR,
+        actor_type=ActorType.ADMIN, actor_id="U1",
+    )
+    session.commit()
+
+    assert _rule_confidence(session, "RULE-X") == 0.55
+
+
+def test_close_case_false_positive_lowers_fired_rule_confidence(session: Session) -> None:
+    _seed_accounts(session, "A", "B")
+    _seed_investigator(session)
+    _seed_rule(session, "RULE-X", 0.50)
+    alert = _seed_alert(session)
+    AlertRepository(session).update(
+        alert.alert_id, rule_ids=["RULE-X"], actor_type=ActorType.SYSTEM, actor_id=None
+    )
+    session.commit()
+
+    case = create_case_from_alert(session, alert, actor_type=ActorType.SYSTEM, actor_id=None)
+    session.commit()
+    transition_case(
+        session, case.case_id, CaseStatus.IN_PROGRESS,
+        actor_type=ActorType.INVESTIGATOR, actor_id="U1",
+    )
+    session.commit()
+
+    close_case(
+        session, case.case_id, CaseResolution.FALSE_POSITIVE,
+        actor_type=ActorType.ADMIN, actor_id="U1",
+    )
+    session.commit()
+
+    assert _rule_confidence(session, "RULE-X") == pytest.approx(0.45)
 
 
 def test_close_case_writes_exactly_one_decision_changed_audit_row(session: Session) -> None:
