@@ -774,3 +774,99 @@ export interface CopilotAskResponse {
   iterations: number;
   latency_ms: number;
 }
+
+// ── `backend/api/routes/reports.py` (ROADMAP Phase 11 backend / Phase 21
+// frontend — STR/SAR generation) ───────────────────────────────────────
+//
+// Generation is gated server-side to `case.status === "CLOSED_TP"` (409
+// otherwise) for BOTH roles, including Admin/Compliance (who otherwise
+// bypasses case-assignment checks) — see `str-report-panel.tsx`'s
+// docstring for how the frontend mirrors that gate rather than relying on
+// the 409 as the primary UX. Finalize/submit are further restricted to
+// Admin/Compliance only (403 for an Investigator) — those two controls
+// must not even render for a non-admin.
+//
+// `db/enums.py::ReportType` mirrored as a literal union (unlike most other
+// backend enums in this file) because the generate form needs to
+// exhaustively offer both values via a `<Select>`, matching this file's
+// own `EVIDENCE_TYPES` precedent for the same reason.
+export const REPORT_TYPES = ["STR", "SAR"] as const;
+export type ReportTypeValue = (typeof REPORT_TYPES)[number];
+
+export interface ReportModel {
+  report_id: string;
+  case_id: string;
+  // `status`/`type` stay plain `string` (not literal unions) — same
+  // "backend enum -> plain string on a response model" convention as the
+  // rest of this file. `status` is one of `"DRAFT" | "FINALIZED" |
+  // "SUBMITTED"`; `type` mirrors `ReportTypeValue`'s values.
+  type: string;
+  status: string;
+  narrative: string | null;
+  json_hash: string | null;
+  fiu_reference: string | null;
+  has_pdf: boolean;
+}
+
+export interface GenerateReportRequest {
+  type?: ReportTypeValue;
+}
+
+export interface EditNarrativeRequest {
+  narrative: string;
+}
+
+export interface SubmitReportRequest {
+  fiu_reference: string;
+}
+
+// ── `backend/api/routes/watchlist.py` (ROADMAP Phase 11 backend / Phase 21
+// frontend — My Center → Monitoring) ───────────────────────────────────
+//
+// Listing is open to any authenticated user; add/remove are Admin/
+// Compliance only (403 otherwise) — `monitoring-section.tsx` hides those
+// controls for a non-admin rather than relying on the 403 as the primary
+// UX, same posture as the reports gating above.
+export const WATCH_ENTITY_TYPES = ["CUSTOMER", "ACCOUNT", "DEVICE", "MERCHANT", "COMPANY"] as const;
+export type WatchEntityTypeValue = (typeof WATCH_ENTITY_TYPES)[number];
+
+// One alert raised at/after a watchlist entry's `created_at`, newest
+// first (`investigation/watchlist.py::_alerts_since`) — what makes an
+// entry's alert history clickable through to its case. `case_id` is
+// nullable: an alert with no case yet renders as non-clickable text.
+export interface WatchlistAlertRef {
+  alert_id: string;
+  case_id: string | null;
+  created_at: string;
+  risk_score: number;
+  detection_type: string;
+}
+
+export interface WatchlistEntryModel {
+  entry_id: string;
+  // Plain `string` here (not `WatchEntityTypeValue`) — this is a response
+  // field, matching the rest of this file's "backend enum -> plain string
+  // on read models" convention; the literal union below is only for the
+  // create-form's exhaustive `<Select>`.
+  entity_type: string;
+  entity_value: string;
+  reason: string | null;
+  added_by: string;
+  active: boolean;
+  created_at: string;
+  // `null` for DEVICE/MERCHANT/COMPANY (no backing column to resolve
+  // against) — render as "—", never guessed at.
+  display_name: string | null;
+  // `Account.current_risk_score` for an ACCOUNT entry; ALWAYS `null` for
+  // CUSTOMER (no per-customer numeric score exists — correct backend
+  // behavior, not a loading/error state) and for DEVICE/MERCHANT/COMPANY.
+  current_risk: number | null;
+  latest_activity: string | null;
+  alerts: WatchlistAlertRef[];
+}
+
+export interface AddWatchlistRequest {
+  entity_type: WatchEntityTypeValue;
+  entity_value: string;
+  reason?: string;
+}

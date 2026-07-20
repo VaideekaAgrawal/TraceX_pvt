@@ -19,7 +19,8 @@ type SubmitKey =
   | "recommend_fp"
   | "recommend_monitoring"
   | "close_fp"
-  | "close_monitoring";
+  | "close_monitoring"
+  | "close_tp";
 
 /**
  * L1/L2 Decision Panel — role- AND status-aware, mounted once in
@@ -52,6 +53,13 @@ type SubmitKey =
  *     FSM-legal only from `AWAITING_REVIEW`/`ESCALATED` — NOT directly from
  *     `IN_PROGRESS` — and Admin/Compliance-only, same RBAC gate as
  *     `close_fp`.
+ *   - `close_tp` -> `CLOSED_TP` (confirmed true positive). Same FSM-legal
+ *     window as `close_monitoring` (`AWAITING_REVIEW`/`ESCALATED` only, NOT
+ *     directly from `IN_PROGRESS`) and same Admin/Compliance-only RBAC gate
+ *     — mirrors `adminShowMonitoring` exactly (ROADMAP Phase 21). This is
+ *     the gate STR/SAR generation (`str-report-panel.tsx`, mounted right
+ *     after this panel) depends on: a report can only be generated once a
+ *     case has reached this exact status.
  *
  * Rendering rules, derived from the above:
  *   - Investigator: "Escalate" / "Recommend False Positive" / "Recommend
@@ -189,6 +197,13 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
         "Case set to Enhanced Monitoring.",
         "close_monitoring",
       );
+    } else if (kind === "close_tp") {
+      void submit(
+        "close_tp",
+        trimmedReason,
+        "Case closed as confirmed True Positive — STR/SAR generation is now available.",
+        "close_tp",
+      );
     } else {
       void submit("close_fp", trimmedReason, "Case closed as False Positive.", "close_fp");
     }
@@ -199,11 +214,14 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
   const adminShowEscalate = canAct && isAdmin && status === "IN_PROGRESS";
   const adminShowMonitoring =
     canAct && isAdmin && (status === "AWAITING_REVIEW" || status === "ESCALATED");
+  const adminShowCloseTp =
+    canAct && isAdmin && (status === "AWAITING_REVIEW" || status === "ESCALATED");
   const adminShowCloseFp =
     canAct &&
     isAdmin &&
     (status === "IN_PROGRESS" || status === "AWAITING_REVIEW" || status === "ESCALATED");
-  const adminHasAnyAction = adminShowEscalate || adminShowMonitoring || adminShowCloseFp;
+  const adminHasAnyAction =
+    adminShowEscalate || adminShowMonitoring || adminShowCloseTp || adminShowCloseFp;
   const noActionAvailable = canAct && (isAdmin ? !adminHasAnyAction : !investigatorCanAct);
 
   return (
@@ -294,6 +312,15 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
                   disabled={submitting !== null}
                 >
                   {submitting === "close_monitoring" ? "Submitting…" : "Monitoring"}
+                </Button>
+              )}
+              {adminShowCloseTp && (
+                <Button
+                  variant="destructive"
+                  onClick={() => handleSubmit("close_tp")}
+                  disabled={submitting !== null}
+                >
+                  {submitting === "close_tp" ? "Closing…" : "Close — True Positive (SAR)"}
                 </Button>
               )}
               {adminShowCloseFp && (

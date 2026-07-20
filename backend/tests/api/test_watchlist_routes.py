@@ -17,9 +17,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.app import create_app
-from db.enums import ActorType, UserRole
+from db.enums import ActorType, EntityType, RiskLevel, UserRole
 from db.models import Base
 from db.repositories.platform import UserRepository
+from db.repositories.reference import AccountRepository, CustomerRepository
 from db.session import build_engine, get_db
 from foundation.config import Settings
 from foundation.security import hash_password
@@ -134,3 +135,70 @@ def test_add_rejects_empty_value(client: TestClient, seeded: sessionmaker[Sessio
         json={"entity_type": "ACCOUNT", "entity_value": ""},
     )
     assert r.status_code == 422
+
+
+# ── enrichment fields (created_at + display/risk/activity/alerts) ────────
+
+
+def test_created_at_present_and_enrichment_defaults_when_unresolvable(
+    client: TestClient, seeded: sessionmaker[Session]
+) -> None:
+    admin = _headers(client, "admin")
+    created = client.post(
+        "/watchlist", headers=admin,
+        json={"entity_type": "ACCOUNT", "entity_value": "DEMO-ACC-0001"},
+    )
+    assert created.status_code == 201, created.text
+    assert "created_at" in created.json()
+
+    listed = client.get("/watchlist", headers=admin).json()
+    assert len(listed) == 1
+    entry = listed[0]
+    assert "created_at" in entry
+    # No backing Account row for DEMO-ACC-0001 in this seed -- resolved
+    # fields come back honestly empty rather than erroring.
+    assert entry["display_name"] is None
+    assert entry["current_risk"] is None
+    assert entry["latest_activity"] is None
+    assert entry["alerts"] == []
+
+
+def test_list_enriches_account_entry_from_owning_customer(
+    client: TestClient, seeded: sessionmaker[Session]
+) -> None:
+    with seeded() as db:
+        CustomerRepository(db).create(
+            customer_id="CUST-WL1", name="Priya Nair", entity_type=EntityType.INDIVIDUAL,
+            risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        AccountRepository(db).create(
+            account_id="ACC-WL1", customer_id="CUST-WL1", current_risk_score=64.0,
+            actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        db.commit()
+    admin = _headers(client, "admin")
+    client.post(
+        "/watchlist", headers=admin, json={"entity_type": "ACCOUNT", "entity_value": "ACC-WL1"}
+    )
+    entry = client.get("/watchlist", headers=admin).json()[0]
+    assert entry["display_name"] == "Priya Nair"
+    assert entry["current_risk"] == 64.0
+
+
+def test_list_enriches_customer_entry_display_name_directly(
+    client: TestClient, seeded: sessionmaker[Session]
+) -> None:
+    with seeded() as db:
+        CustomerRepository(db).create(
+            customer_id="CUST-WL2", name="Rahul Verma", entity_type=EntityType.INDIVIDUAL,
+            risk_rating=RiskLevel.LOW, actor_type=ActorType.SYSTEM, actor_id=None,
+        )
+        db.commit()
+    admin = _headers(client, "admin")
+    client.post(
+        "/watchlist", headers=admin, json={"entity_type": "CUSTOMER", "entity_value": "CUST-WL2"}
+    )
+    entry = client.get("/watchlist", headers=admin).json()[0]
+    assert entry["display_name"] == "Rahul Verma"
+    # No per-customer numeric risk score column exists.
+    assert entry["current_risk"] is None

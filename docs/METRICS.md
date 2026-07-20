@@ -758,6 +758,48 @@ Retroactively logged (see `docs/SESSION_LOG.md` Session 31) — implementation h
 
 ---
 
+## 28. Phase 21 — STR/SAR closed-TP gating, watchlist enrichment, Monitoring tab (Session 32)
+
+Owner-directed backend + frontend slice unblocking Frontend Phase 21: STR/SAR generation restricted to closed-true-positive cases (never false-positive), Admin/Compliance-only finalize/submit, and real watchlist enrichment (name/risk/activity/alert history) for the My Center Monitoring tab.
+
+**Backend (`backend/api/routes/reports.py`, `backend/api/routes/watchlist.py`, `backend/investigation/watchlist.py`):**
+
+| Metric | Result |
+|---|---|
+| Test count | 726 passing, full suite (up from 710 at Session 30, the last backend-touching session — Session 31 was doc-only) |
+| ruff | clean |
+| mypy (CI-parity scope: `foundation detection investigation orchestration api db demo_data tests`) | clean, 218 source files |
+| Coverage | 97.73% (≥90% gate) |
+
+New tests by file: `tests/api/test_reports_routes.py` 12→18 (+6: 409 gating, 403 role checks), `tests/investigation/test_watchlist.py` 7→13 (+6: `enrich_entry` resolution/edge cases), `tests/api/test_watchlist_routes.py` 6→9 (+3: HTTP-level enrichment). +15 itemized vs. a +16 net suite delta (710→726) — the 1-test gap wasn't separately itemized by the implementing session; not investigated further here, flagging in case it matters to a future count reconciliation.
+
+**Frontend (`frontend/src/components/workspace/triage/str-report-panel.tsx`, `.../decision-panel.tsx`, `frontend/src/components/my-center/monitoring-section.tsx`, 7 new BFF routes):**
+
+`npm run lint` clean; `npm run build` (Node 20.20.2) clean, all 47 routes compiled (18 pages + 29 API routes, including the 6 new report/watchlist ones).
+
+**Live-verified (curl + cookie jar, real backend + frontend, no browser/Playwright this pass):**
+
+| Check | Result |
+|---|---|
+| `close_tp` decision transition | `AWAITING_REVIEW`/`ESCALATED` → `CLOSED_TP`, resolution `TRUE_POSITIVE_SAR` |
+| Report generation before `CLOSED_TP` | `409`, documented message |
+| Report generation after `CLOSED_TP` | Passes the gate, reaches the real LLM boundary (`503` — no OpenRouter key in this environment, same known/deferred gap as Phases 19/20) |
+| Non-admin `finalize`/`submit` | Real `403` (role check fires before report-existence check) |
+| Admin `finalize`/`submit` on a nonexistent report | `404` — confirms the two checks are genuinely distinct code paths |
+| PDF route error path | Real JSON `404` (not a broken binary response) |
+| Watchlist add/remove, non-admin | `403` |
+| Watchlist add, admin | `201` |
+| `GET /watchlist` | Enriched `display_name`/`latest_activity` correctly populated for a real ACCOUNT entry |
+| Watchlist remove, admin | `204`, entry absent from a follow-up list |
+| Validation (400) | Missing `entity_value`, missing `narrative`, missing `fiu_reference` |
+| Unauthenticated | `307` → `/login`, matching every existing BFF route |
+
+**Not verified this session** (explicitly deferred, same category as every prior AI-feature phase): a real browser/Playwright pass; a real LLM-generated narrative (no OpenRouter key configured in any current dev environment).
+
+**Side effect flagged, not reverted:** live-verification drove one real case (`CASE-20260718-D6AADE51`) to `CLOSED_TP` and added/removed a throwaway watchlist entry on the local `tracex_demo.db` — consistent with the standing committed-live-SQLite-DB churn pattern (Session 27), not cleanly reversible via a full FSM/audit-log rewind.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
