@@ -8,6 +8,7 @@ import { formatDateTime } from "@/components/dashboard/format";
 import { DeepView } from "@/components/workspace/deep/deep-view";
 import { DecisionPanel } from "@/components/workspace/triage/decision-panel";
 import { NotesPanel } from "@/components/workspace/triage/notes-panel";
+import { StrReportPanel } from "@/components/workspace/triage/str-report-panel";
 import { TriageView } from "@/components/workspace/triage/triage-view";
 import { useAuth } from "@/lib/auth/auth-provider";
 import { getCaseStageLabel } from "@/lib/workspace/case-stage";
@@ -32,12 +33,13 @@ import type { CaseListItem } from "@/lib/api/types";
  * that has (though Deep Investigation's own collapsed `TriageSummaryCollapsible`
  * already covers most of that second case without switching away).
  *
- * `DecisionPanel` and `NotesPanel` are both mounted here, in this same
- * always-visible zone (with the `<dl>` summary block below), NOT inside
- * `triage-view.tsx`'s `activeView`-toggled scroll container — they must
- * stay visible and functional regardless of whether the tab is showing
- * Triage or Deep Investigation, so switching between them never hides the
- * only place to act on a case or the one place notes are composed/reviewed.
+ * `DecisionPanel`, `StrReportPanel`, and `NotesPanel` are all mounted here,
+ * in this same always-visible zone (with the `<dl>` summary block below),
+ * NOT inside `triage-view.tsx`'s `activeView`-toggled scroll container —
+ * they must stay visible and functional regardless of whether the tab is
+ * showing Triage or Deep Investigation, so switching between them never
+ * hides the only place to act on a case, generate/manage its STR/SAR
+ * (ROADMAP Phase 21), or the one place notes are composed/reviewed.
  * `NotesPanel` is mounted exactly once, here — it used to live inside
  * `triage-view.tsx` only, which meant switching to Deep Investigation hid
  * it; it is NOT also mounted anywhere else (a second live instance sharing
@@ -144,6 +146,12 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
       </dl>
 
       <DecisionPanel caseId={caseId} />
+      {/* ROADMAP Phase 21 deviation, documented in `str-report-panel.tsx`'s
+          own docstring: the original scope put a narrative panel BEFORE
+          `DecisionPanel`, but STR/SAR generation is gated on the case
+          already being `CLOSED_TP` — i.e. strictly after a decision, not
+          before — so this mounts after `DecisionPanel` instead. */}
+      <StrReportPanel caseId={caseId} />
       <NotesPanel caseId={caseId} />
 
       <div
