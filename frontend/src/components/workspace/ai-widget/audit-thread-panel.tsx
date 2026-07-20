@@ -65,19 +65,25 @@ export function AuditThreadPanel({ caseId }: { caseId: string | null }) {
         <p className="text-muted-foreground text-sm">No AI activity recorded for this case yet.</p>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        {items.map((item) => (
-          <div key={item.id} className="flex items-center justify-between gap-2 rounded-lg border p-2 text-xs">
-            <div className="min-w-0">
-              <p className="font-medium">AI interaction</p>
-              <p className="text-muted-foreground">{new Date(item.created_at).toLocaleString()}</p>
+      {/* Gated on `!error` (matches `customer-snapshot.tsx`'s `useTriageFetch`
+          convention) — the hook never clears `data` on a failed fetch, so
+          without this guard a case-switch that errors would render the
+          *previous* case's stale items alongside the new error message. */}
+      {!error && (
+        <div className="flex flex-col gap-1.5">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center justify-between gap-2 rounded-lg border p-2 text-xs">
+              <div className="min-w-0">
+                <p className="font-medium">AI interaction</p>
+                <p className="text-muted-foreground">{new Date(item.created_at).toLocaleString()}</p>
+              </div>
+              <Badge variant="outline" className="shrink-0 font-normal">
+                #{item.entity_id ?? "?"}
+              </Badge>
             </div>
-            <Badge variant="outline" className="shrink-0 font-normal">
-              #{item.entity_id ?? "?"}
-            </Badge>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
