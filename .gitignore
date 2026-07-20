@@ -9,6 +9,7 @@ backend/.venv313/
 .env
 *.env
 !.env.example
+docs/LOCAL_DEV_CREDENTIALS.md
 
 # Python cache
 __pycache__/
