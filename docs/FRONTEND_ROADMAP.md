@@ -169,7 +169,7 @@ Legend: **Status** = not started | in progress | done. All phases below start `n
 
 ### Phase 21 — Reporting, narrative, watchlist & final decision completion
 **Goal:** Close the loop: case narrative, STR generation, the Final Decision Panel's non-FP outcomes, and My Center → Monitoring wired to real Watchlist data.
-**Depends on:** Backend Phase 11 (Reporting, narrative & watchlist — **not started**). Same hard-block rule as Phases 19–20.
+**Depends on:** Backend Phase 11 (Reporting, narrative & watchlist — **done**, merged via PR #22, Session 28). Same hard-block rule as Phases 19–20 — now unblocked.
 **Branch:** `phase/21-reporting-watchlist`
 **Scope (checklist):**
 - [ ] Investigation Narrative panel: generated case-level narrative, editable before submission, positioned right before the Final Decision Panel per `FRONTEND_PLAN.md` §3.6.

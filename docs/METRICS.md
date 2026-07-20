@@ -734,6 +734,30 @@ Not a roadmap phase branch — an ad-hoc usability/bugfix pass across L1/L2 (bac
 
 ---
 
+## 27. Frontend Phases 19/20 — Recommendation audit-thread visibility + Copilot chat UI (Session 31)
+
+Retroactively logged (see `docs/SESSION_LOG.md` Session 31) — implementation happened in an earlier, unlogged session (4 commits, PR #24, merged pre-Session-31); `docs/FRONTEND_ROADMAP.md` was already updated in-branch, so this section documents the metrics that were never promoted here.
+
+**Scope closed:** Phase 19's remaining gap (AI-interaction audit-thread visibility — nothing in the frontend previously surfaced an `ai_interaction_created` row) and all of Phase 20 (Copilot chat UI in the floating AI widget). Both phases moved from `in progress`/partial to `done`.
+
+**Live-verified (curl + cookie jar, real backend+frontend, no browser/Playwright this pass):**
+
+| Check | Result |
+|---|---|
+| Audit-thread panel, real actor | Direct-signed JWT for the actual actor of the one real historical `ai_interaction` (`CASE-20260718-8154805A`, `entity_id=1`) → BFF route returns it correctly |
+| Audit-thread panel, RBAC | A different investigator on the same case → empty list (`actor_id`-pinning holds) |
+| `POST /api/copilot/ask`, no cases assigned | Zero LLM calls, `iterations=0` short-circuit |
+| `POST /api/copilot/ask`, malformed body | `400` |
+| `POST /api/copilot/ask`, empty/whitespace question | `400` |
+| `POST /api/copilot/ask`, unauthenticated | `307` → `/login` |
+| Copilot + Recommendations, RBAC-with-a-real-case | Temporarily reassigned `CASE-20260718-13F5F994` to a known-credential user → both routes cleared RBAC scoping and reached the real LLM-gateway boundary (honest `503 openrouter_api_key`, not the "no cases assigned" short-circuit); reassignment reverted after |
+
+**Code review** (`low`, inline): 1 finding, fixed — `audit-thread-panel.tsx` rendered stale items from a previous case during a transient error (`useTriageFetch` doesn't clear `data` on fetch failure); gated the list on `!error` to match `customer-snapshot.tsx`'s existing convention.
+
+**Known, deliberately-deferred gaps (owner decision 2026-07-20, not blockers on either phase's status):** a real live-LLM grounded-answer round-trip for both Recommendations and Copilot (no OpenRouter key configured in any current dev environment); a real browser/Playwright pass for chat scroll behavior and tab-switch persistence (same category of gap every frontend AI surface has carried since Phase 16). Audit-thread panel shows occurrence metadata only (when, `ai_interactions.id` reference) — not response text inline, since `audit_log.details` is null for this action and rendering full content would need a new backend GET-by-id-list route, flagged not built.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
