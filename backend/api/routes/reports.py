@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from db.enums import ReportType, UserRole
+from db.enums import CaseStatus, ReportType, UserRole
 from db.models.investigation import Case
 from db.models.platform import User
 from db.repositories.investigation import CaseRepository, ReportRepository
@@ -27,6 +27,7 @@ from foundation.auth import (
     get_app_settings,
     get_current_user,
     require_case_access,
+    require_role,
 )
 from foundation.config import Settings
 from investigation import reporting
@@ -96,7 +97,22 @@ def generate_report(
     db: Session = Depends(get_db),
 ) -> ReportModel:
     """Generate a DRAFT STR/SAR (grounded narrative + JSON+SHA-256 + PDF). 503 if
-    the LLM is unconfigured/unreachable; 502 if it could not produce a narrative."""
+    the LLM is unconfigured/unreachable; 502 if it could not produce a narrative.
+
+    Gated on case state, not on who's asking: a report may only be generated
+    once the case has been closed as a confirmed true positive
+    (`CaseStatus.CLOSED_TP`) — never for a false-positive closure or a case
+    that's still open. This applies to both roles, including an Admin/
+    Compliance user who bypasses `require_case_access`'s assignment check —
+    that dependency only answers "can this user see this case," not "is this
+    case ready to be reported on."
+    """
+    if case.status != CaseStatus.CLOSED_TP:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "reports can only be generated once a case is closed as a confirmed "
+            "true positive (CLOSED_TP)",
+        )
     try:
         report, _rejected = reporting.generate_report(
             db, case.case_id, body.type, settings=settings,
@@ -166,9 +182,15 @@ def edit_report_narrative(
 @router.post("/reports/{report_id}/finalize", response_model=ReportModel)
 def finalize_report(
     report_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(UserRole.ADMIN_COMPLIANCE)),
     db: Session = Depends(get_db),
 ) -> ReportModel:
+    """Lock a DRAFT report's content (DRAFT -> FINALIZED). Admin/Compliance only
+    (`require_role`) — this is the first of the two actual regulatory-filing
+    actions, on top of the `_load_report_scoped` case-access check below (mirrors
+    `api.routes.cases.make_decision`'s "only Admin/Compliance closes a case"
+    split: generating/editing a DRAFT stays open to the assigned investigator,
+    only committing it to FINALIZED/SUBMITTED is compliance-gated)."""
     _load_report_scoped(report_id, user, db)
     try:
         report = reporting.finalize_report(
@@ -184,11 +206,13 @@ def finalize_report(
 def submit_report(
     report_id: str,
     body: SubmitRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(UserRole.ADMIN_COMPLIANCE)),
     db: Session = Depends(get_db),
 ) -> ReportModel:
-    """Record a FINALIZED report as filed with FIU-IND. An investigator on their
-    own case (or a compliance user) may record the filing."""
+    """Record a FINALIZED report as filed with FIU-IND. Admin/Compliance only
+    (`require_role`) — see `finalize_report`'s docstring for why this and
+    `finalize` are the two report actions restricted beyond the general
+    assignment/admin-bypass rule `_load_report_scoped` already enforces."""
     _load_report_scoped(report_id, user, db)
     try:
         report = reporting.submit_report(

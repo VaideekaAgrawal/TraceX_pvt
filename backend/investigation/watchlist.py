@@ -15,6 +15,12 @@ against `ACCOUNT` entries and those accounts' owning customers against `CUSTOMER
 entries; the other `WatchEntityType`s (DEVICE/MERCHANT/COMPANY) have no
 corresponding column on `accounts`/`customers` yet, so they are recorded but
 never match — recorded honestly rather than silently dropped.
+
+`enrich_entry` (below) is the read-time counterpart for `GET /watchlist`: given
+one entry, resolve its display name / current risk / latest activity / alert
+history for the UI, rather than the frontend faking these client-side. Same
+DEVICE/MERCHANT/COMPANY honesty convention applies — those three resolve to
+`None`/`[]`, never a guess.
 """
 from __future__ import annotations
 
@@ -26,8 +32,10 @@ from sqlalchemy.orm import Session
 from db.enums import Priority, WatchEntityType
 from db.models.base import utcnow
 from db.models.platform import Watchlist
+from db.models.reference import Account
+from db.repositories.detection import AlertRepository
 from db.repositories.platform import WatchlistRepository
-from db.repositories.reference import AccountRepository
+from db.repositories.reference import AccountRepository, CustomerRepository, TransactionRepository
 
 #: A watchlist hit forces the highest priority — the whole point of the feature.
 _ESCALATED_PRIORITY = Priority.P1
@@ -99,3 +107,142 @@ def escalate_for_watchlist(priority: Priority, hit: WatchlistHit | None) -> Prio
     """The escalated priority for an alert, given its screening result. A hit
     forces `P1`; no hit leaves the computed priority untouched."""
     return _ESCALATED_PRIORITY if hit is not None else priority
+
+
+# ── entry enrichment (GET /watchlist display fields) ─────────────────────
+#
+# The frontend needs each watchlist entry to show more than the raw record:
+# who/what it resolves to, its current risk, its most recent activity, and
+# every alert raised since it was added (so an entry is actionable, not just
+# a name on a list). This is display-time enrichment, not a new persisted
+# state -- computed fresh per `GET /watchlist` call.
+
+
+@dataclass(frozen=True)
+class WatchlistAlertRef:
+    """One alert raised at/after this watchlist entry's `created_at`, for the
+    entry's clickable alert-history list. `case_id` is nullable -- an alert
+    with no case yet isn't openable, but that's the frontend's concern, not
+    this layer's; the field is always present either way."""
+
+    alert_id: str
+    case_id: str | None
+    created_at: datetime
+    risk_score: float
+    detection_type: str
+
+
+@dataclass(frozen=True)
+class WatchlistEnrichment:
+    """Display/risk/activity/alert-history enrichment for one watchlist
+    entry. `display_name`/`current_risk`/`latest_activity` are `None` (and
+    `alerts` is `[]`) for DEVICE/MERCHANT/COMPANY entries -- there is no
+    backing column to resolve those three types against, the same
+    "recorded, never matched" honesty convention `WatchlistScreener`'s own
+    docstring already establishes for screening, extended here to display."""
+
+    display_name: str | None
+    current_risk: float | None
+    latest_activity: datetime | None
+    alerts: list[WatchlistAlertRef]
+
+
+_EMPTY_ENRICHMENT = WatchlistEnrichment(
+    display_name=None, current_risk=None, latest_activity=None, alerts=[]
+)
+
+
+def _customer_name_for_account(session: Session, account: Account) -> str | None:
+    """The owning customer's name for an ACCOUNT watchlist entry, or `None`
+    if the account has no linked customer."""
+    if account.customer_id is None:
+        return None
+    customer = CustomerRepository(session).get(account.customer_id)
+    return customer.name if customer is not None else None
+
+
+def _latest_activity(session: Session, account_ids: list[str]) -> datetime | None:
+    """Most recent `Transaction.timestamp` touching any of `account_ids`
+    (as source or dest). Reuses `TransactionRepository.search_for_accounts`
+    (already batches over an account-id set and already supports
+    `sort="timestamp_desc"`) rather than a new query -- only the newest row
+    is needed, so `limit=1`."""
+    if not account_ids:
+        return None
+    txns = TransactionRepository(session).search_for_accounts(
+        account_ids, sort="timestamp_desc", limit=1
+    )
+    return txns[0].timestamp if txns else None
+
+
+def _alerts_since(
+    session: Session, account_ids: list[str], since: datetime
+) -> list[WatchlistAlertRef]:
+    """Alerts whose *primary* account is any of `account_ids`, raised at/
+    after `since` (the watchlist entry's own `created_at`), newest first.
+    Reuses `AlertRepository.list_for_primary_account(s)` (already ordered
+    descending by `created_at`) and filters the date floor in Python --
+    those repository methods have no date-floor parameter, and this
+    codebase's own precedent (see `list_for_primary_accounts`'s docstring)
+    is not to add one for a single small-scale caller. `_as_aware`
+    normalizes both sides the same way `WatchlistScreener` already does for
+    `expires_at`, so a naive-from-SQLite timestamp compares correctly
+    against an aware one."""
+    if not account_ids:
+        return []
+    since_aware = _as_aware(since)
+    alerts = (
+        AlertRepository(session).list_for_primary_account(account_ids[0])
+        if len(account_ids) == 1
+        else AlertRepository(session).list_for_primary_accounts(account_ids)
+    )
+    return [
+        WatchlistAlertRef(
+            alert_id=a.alert_id, case_id=a.case_id, created_at=a.created_at,
+            risk_score=a.risk_score, detection_type=str(a.detection_type),
+        )
+        for a in alerts
+        if _as_aware(a.created_at) >= since_aware
+    ]
+
+
+def enrich_entry(session: Session, entry: Watchlist) -> WatchlistEnrichment:
+    """Resolve one watchlist entry's display name, current risk, latest
+    activity, and post-entry alert history for `GET /watchlist`. Computed
+    fresh per call, not stored -- the active watchlist is small (tens of
+    entries, not thousands), so a straightforward per-entry query set is
+    fine; this function itself fetches each of an entry's account/customer
+    rows at most once and passes the resolved account-id set on to its two
+    helpers rather than re-resolving it."""
+    if entry.entity_type == WatchEntityType.ACCOUNT:
+        account = AccountRepository(session).get(entry.entity_value)
+        if account is None:
+            return _EMPTY_ENRICHMENT
+        display_name = _customer_name_for_account(session, account)
+        current_risk = account.current_risk_score
+        account_ids = [account.account_id]
+    elif entry.entity_type == WatchEntityType.CUSTOMER:
+        customer = CustomerRepository(session).get(entry.entity_value)
+        if customer is None:
+            return _EMPTY_ENRICHMENT
+        display_name = customer.name
+        # No per-customer numeric risk score column exists (only the coarse
+        # `risk_rating` enum) -- `None` is the honest answer here, not a
+        # derived "max across accounts" proxy (judgment call, see this
+        # module's task brief: prefer the honest `None` over inventing a
+        # derived figure `docs/DATA_SCHEMA.md` doesn't define).
+        current_risk = None
+        account_ids = [
+            a.account_id
+            for a in AccountRepository(session).list_by_customer_ids([customer.customer_id])
+        ]
+    else:
+        # DEVICE / MERCHANT / COMPANY: no backing column to resolve against.
+        return _EMPTY_ENRICHMENT
+
+    return WatchlistEnrichment(
+        display_name=display_name,
+        current_risk=current_risk,
+        latest_activity=_latest_activity(session, account_ids),
+        alerts=_alerts_since(session, account_ids, entry.created_at),
+    )
