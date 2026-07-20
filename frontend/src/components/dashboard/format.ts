@@ -65,6 +65,22 @@ export function formatDateTime(iso: string): string {
   });
 }
 
+// Compact "short date + time" — used for per-edge labels on cytoscape
+// canvases (`deep/graph-replay.tsx`) where `formatDateTime`'s full
+// year/month/day/time is too wide to render legibly next to an edge, but a
+// bare `HH:mm` alone would be ambiguous across a dataset whose dormancy/
+// reactivation patterns can span months between two revealed transactions.
+export function formatShortDateTime(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function formatDate(isoDate: string): string {
   const parsed = new Date(`${isoDate}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return isoDate;

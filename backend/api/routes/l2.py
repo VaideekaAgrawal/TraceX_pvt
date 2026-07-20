@@ -43,14 +43,15 @@ from foundation.auth import (
     get_app_settings,
     get_current_user,
     require_case_access,
-    require_case_scoped_account,
-    require_case_scoped_account_with_ids,
+    require_case_read_access,
+    require_case_scoped_account_read,
+    require_case_scoped_account_with_ids_read,
 )
 from foundation.config import Settings
 from investigation import behavior_analysis, customer_profile, timeline, transaction_search
 from investigation.graph_filters import MAX_RADIUS, GraphFilters, get_filtered_ego_graph
 from investigation.relationship_graph import build_case_relationship_graph
-from orchestration import pattern_explanation
+from orchestration import graph_explanation, pattern_explanation
 
 router = APIRouter(prefix="/cases", tags=["l2"])
 
@@ -245,6 +246,14 @@ class PatternExplanationResponse(BaseModel):
     pattern_signature: str
 
 
+class GraphExplanationResponse(BaseModel):
+    account_id: str
+    explanation: str
+    cached: bool
+    model: str
+    generated_at: datetime
+
+
 class EvidenceCreateRequest(BaseModel):
     type: EvidenceType
     ref_id: str | None = None
@@ -295,8 +304,10 @@ def get_account_graph(
     direction: Literal["in", "out"] | None = Query(default=None),
     roles: list[str] | None = Query(default=None),
     prior_sar_only: bool = Query(default=False),
-    case: Case = Depends(require_case_access),
-    account_and_ids: tuple[Account, list[str]] = Depends(require_case_scoped_account_with_ids),
+    case: Case = Depends(require_case_read_access),
+    account_and_ids: tuple[Account, list[str]] = Depends(
+        require_case_scoped_account_with_ids_read
+    ),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NHopGraphResponse:
@@ -346,7 +357,7 @@ def get_account_graph(
 
 @router.get("/{case_id}/relationships", response_model=RelationshipGraphResponse)
 def get_case_relationships(
-    case: Case = Depends(require_case_access), db: Session = Depends(get_db)
+    case: Case = Depends(require_case_read_access), db: Session = Depends(get_db)
 ) -> RelationshipGraphResponse:
     """The Relationship Explorer full version this phase's ROADMAP entry
     ties to this file (Phase 6 explicitly stubbed this route out --
@@ -368,8 +379,8 @@ def get_case_relationships(
 
 @router.get("/{case_id}/accounts/{account_id}/profile", response_model=CustomerProfileResponse)
 def get_customer_profile(
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> CustomerProfileResponse:
     profile = customer_profile.build_customer_profile(db, case.case_id, account.account_id)
@@ -410,7 +421,7 @@ def _parse_channels(channels: list[str] | None) -> list[Channel] | None:
 @router.get("/{case_id}/transactions/search", response_model=TransactionSearchResponse)
 def search_case_transactions(
     params: _TransactionSearchParams = Depends(),
-    case: Case = Depends(require_case_access),
+    case: Case = Depends(require_case_read_access),
     db: Session = Depends(get_db),
 ) -> TransactionSearchResponse:
     result = transaction_search.search(
@@ -436,8 +447,10 @@ def search_case_transactions(
 )
 def search_account_transactions(
     params: _TransactionSearchParams = Depends(),
-    case: Case = Depends(require_case_access),
-    account_and_ids: tuple[Account, list[str]] = Depends(require_case_scoped_account_with_ids),
+    case: Case = Depends(require_case_read_access),
+    account_and_ids: tuple[Account, list[str]] = Depends(
+        require_case_scoped_account_with_ids_read
+    ),
     db: Session = Depends(get_db),
 ) -> TransactionSearchResponse:
     # Reuses the scoped account-id set `require_case_scoped_account_with_ids`
@@ -468,8 +481,8 @@ def search_account_transactions(
 
 @router.get("/{case_id}/accounts/{account_id}/behavior", response_model=BehaviorAnalysisResponse)
 def get_account_behavior(
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> BehaviorAnalysisResponse:
     result = behavior_analysis.analyze(db, case.case_id, account.account_id)
@@ -483,8 +496,8 @@ def get_account_behavior(
 def get_account_timeline(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> TimelineResponse:
     result = timeline.build_timeline(db, case.case_id, account.account_id, start=start, end=end)
@@ -500,7 +513,7 @@ def get_account_timeline(
 def get_pattern_explanation(
     alert_id: str,
     force: bool = Query(default=False),
-    case: Case = Depends(require_case_access),
+    case: Case = Depends(require_case_read_access),
     user: User = Depends(get_current_user),
     settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
@@ -524,6 +537,45 @@ def get_pattern_explanation(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     db.commit()
     return PatternExplanationResponse(**result)
+
+
+# ── AI Investigation Graph explanation ─────────────────────────────────────
+
+
+@router.get(
+    "/{case_id}/accounts/{account_id}/graph-explanation", response_model=GraphExplanationResponse
+)
+def get_graph_explanation(
+    force: bool = Query(default=False),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
+    user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_app_settings),
+    db: Session = Depends(get_db),
+) -> GraphExplanationResponse:
+    """Plain-language narrative of what's structurally happening in the
+    Investigation Graph (`GET .../accounts/{account_id}/graph`) around
+    `account_id`: likely source/mule/sink accounts, whether there's a
+    transaction cycle, where money is concentrating. Mirrors `api.routes.
+    cases.get_account_explanation`'s route shape exactly (`force` query
+    param, `require_case_scoped_account_read` to validate the account is in
+    the case, `require_case_read_access` since this is a GET -- see
+    `foundation.auth.require_case_read_access`'s docstring for why read
+    access here is intentionally broader than write access)."""
+    try:
+        result = graph_explanation.explain_graph(
+            db,
+            case.case_id,
+            account.account_id,
+            settings=settings,
+            actor_type=actor_type_for_role(user.role),
+            actor_id=user.user_id,
+            force=force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    db.commit()
+    return GraphExplanationResponse(**result)
 
 
 # ── Evidence management ────────────────────────────────────────────────────
@@ -609,7 +661,7 @@ def pin_evidence(
 @router.get("/{case_id}/evidence", response_model=list[EvidenceItem])
 def list_evidence(
     pinned: bool | None = Query(default=None),
-    case: Case = Depends(require_case_access),
+    case: Case = Depends(require_case_read_access),
     db: Session = Depends(get_db),
 ) -> list[EvidenceItem]:
     repo = EvidenceRepository(db)
@@ -648,7 +700,7 @@ def create_note(
 
 @router.get("/{case_id}/notes", response_model=list[NoteItem])
 def list_notes(
-    case: Case = Depends(require_case_access), db: Session = Depends(get_db)
+    case: Case = Depends(require_case_read_access), db: Session = Depends(get_db)
 ) -> list[NoteItem]:
     notes = NoteRepository(db).list_for_case(case.case_id)
     return [_note_item(n) for n in notes]

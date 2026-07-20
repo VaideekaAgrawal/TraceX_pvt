@@ -5,6 +5,7 @@ import { useState } from "react";
 import { BehaviorAnalysisSection } from "@/components/workspace/deep/behavior-analysis";
 import { CustomerProfileSection } from "@/components/workspace/deep/customer-profile";
 import { EvidencePanel } from "@/components/workspace/deep/evidence-panel";
+import { GraphExplanationSection } from "@/components/workspace/deep/graph-explanation-panel";
 import { GraphReplaySection } from "@/components/workspace/deep/graph-replay";
 import { InvestigationGraphSection } from "@/components/workspace/deep/investigation-graph";
 import { InvestigationTimelineSection } from "@/components/workspace/deep/investigation-timeline";
@@ -51,6 +52,7 @@ export function DeepView({ caseId, accountId }: { caseId: string; accountId: str
         selectedAccountId={selectedAccountId}
         onSelectAccount={setSelectedAccountId}
       />
+      <GraphExplanationSection caseId={caseId} accountId={accountId} />
       <InvestigationTimelineSection
         caseId={caseId}
         accountId={accountId}

@@ -41,7 +41,8 @@ from foundation.auth import (
     get_app_settings,
     get_current_user,
     require_case_access,
-    require_case_scoped_account,
+    require_case_read_access,
+    require_case_scoped_account_read,
 )
 from foundation.config import Settings
 from investigation import account_facts, case_graph, previous_alerts
@@ -168,6 +169,23 @@ def list_cases(
     )
 
 
+@router.get("/{case_id}", response_model=CaseListItem)
+def get_case(case: Case = Depends(require_case_read_access)) -> CaseListItem:
+    """Single-case lookup -- the gap `workspace-shell.tsx`'s `?case=`
+    deep-link handler and the Similar Historical Cases / Previous
+    Investigation History "open this case" flow both need: neither the
+    current investigator's own tab cache nor `GET /cases` (role-scoped to
+    "my queue"/admin review queue) can resolve an arbitrary `case_id` a
+    panel merely references. Returns the same `CaseListItem` shape `GET
+    /cases` already returns per row, so the frontend's Zustand tab store's
+    `openCase(item: CaseListItem)` can consume this directly.
+
+    `require_case_read_access`, not `require_case_access` -- this is a GET,
+    and any authenticated user may open any case's detail once they know its
+    `case_id` (see that dependency's docstring)."""
+    return _case_list_item(case)
+
+
 # ── Response models ──────────────────────────────────────────────────────
 
 
@@ -253,6 +271,11 @@ class RiskTrendPoint(BaseModel):
     alert_id: str
     created_at: datetime
     risk_score: float
+    #: Nullable -- some alerts have no case yet (`investigation.previous_
+    #: alerts.summarize`'s `risk_trend.append(...)`, `alert.case_id`). Lets
+    #: the frontend make a prior-alert row clickable through to its case,
+    #: the same mechanism Similar Historical Cases already uses.
+    case_id: str | None
 
 
 class PreviousAlertsResponse(BaseModel):
@@ -340,7 +363,7 @@ _CLOSE_RESOLUTIONS: dict[str, CaseResolution] = {
 
 @router.get("/{case_id}/summary/alerts", response_model=list[AlertSummaryItem])
 def get_alert_summary(
-    case: Case = Depends(require_case_access), db: Session = Depends(get_db)
+    case: Case = Depends(require_case_read_access), db: Session = Depends(get_db)
 ) -> list[AlertSummaryItem]:
     alerts = AlertRepository(db).list_for_case(case.case_id)
     return [
@@ -367,7 +390,7 @@ def get_alert_summary(
     "/{case_id}/accounts/{account_id}/customer-snapshot", response_model=CustomerSnapshotResponse
 )
 def get_customer_snapshot(
-    account: Account = Depends(require_case_scoped_account), db: Session = Depends(get_db)
+    account: Account = Depends(require_case_scoped_account_read), db: Session = Depends(get_db)
 ) -> CustomerSnapshotResponse:
     customer = (
         CustomerRepository(db).get(account.customer_id)
@@ -414,7 +437,7 @@ def get_customer_snapshot(
 
 @router.get("/{case_id}/accounts/{account_id}/geo-risk", response_model=GeoRiskResponse)
 def get_geo_risk(
-    account: Account = Depends(require_case_scoped_account), db: Session = Depends(get_db)
+    account: Account = Depends(require_case_scoped_account_read), db: Session = Depends(get_db)
 ) -> GeoRiskResponse:
     # `limit=CASE_SCOPE_TRANSACTION_LIMIT`, not the repository's own
     # oldest-first-capped-at-500 default -- see `investigation.case_graph.
@@ -458,7 +481,7 @@ def get_geo_risk(
 def get_transaction_summary(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
-    account: Account = Depends(require_case_scoped_account),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> TransactionSummaryResponse:
     # `limit=CASE_SCOPE_TRANSACTION_LIMIT` -- see that constant's docstring
@@ -476,7 +499,7 @@ def get_transaction_summary(
     response_model=TransactionPurposeResponse,
 )
 def get_transaction_purpose(
-    account: Account = Depends(require_case_scoped_account), db: Session = Depends(get_db)
+    account: Account = Depends(require_case_scoped_account_read), db: Session = Depends(get_db)
 ) -> TransactionPurposeResponse:
     """Raw per-transaction purpose/narration/amount/channel + a purpose
     distribution -- data assembly only, per the ROADMAP plan: no invented
@@ -515,8 +538,8 @@ def get_transaction_purpose(
     "/{case_id}/accounts/{account_id}/previous-alerts", response_model=PreviousAlertsResponse
 )
 def get_previous_alerts(
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> PreviousAlertsResponse:
     summary = previous_alerts.summarize(db, account.account_id, exclude_case_id=case.case_id)
@@ -525,8 +548,8 @@ def get_previous_alerts(
 
 @router.get("/{case_id}/accounts/{account_id}/money-flow", response_model=MoneyFlowResponse)
 def get_money_flow(
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     db: Session = Depends(get_db),
 ) -> MoneyFlowResponse:
     account_ids = CaseAccountRepository(db).list_account_ids_for_case(case.case_id)
@@ -577,7 +600,7 @@ def _compute_and_respond(db: Session, case: Case, user: User) -> NetworkRiskResp
 
 @router.get("/{case_id}/network-risk", response_model=NetworkRiskResponse)
 def get_network_risk(
-    case: Case = Depends(require_case_access),
+    case: Case = Depends(require_case_read_access),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NetworkRiskResponse:
@@ -609,7 +632,7 @@ def recompute_network_risk(
 @router.get("/{case_id}/similar-cases", response_model=SimilarCasesResponse)
 def get_similar_cases(
     top_k: int = Query(default=5),
-    case: Case = Depends(require_case_access),
+    case: Case = Depends(require_case_read_access),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SimilarCasesResponse:
@@ -649,8 +672,8 @@ def get_similar_cases(
 )
 def get_account_explanation(
     force: bool = Query(default=False),
-    case: Case = Depends(require_case_access),
-    account: Account = Depends(require_case_scoped_account),
+    case: Case = Depends(require_case_read_access),
+    account: Account = Depends(require_case_scoped_account_read),
     user: User = Depends(get_current_user),
     settings: Settings = Depends(get_app_settings),
     db: Session = Depends(get_db),
@@ -668,6 +691,58 @@ def get_account_explanation(
     return ExplanationResponse(**result)
 
 
+# ── Start investigation (ASSIGNED -> IN_PROGRESS) ─────────────────────────
+
+
+@router.post("/{case_id}/start", response_model=CaseListItem)
+def start_investigation(
+    case: Case = Depends(require_case_access),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CaseListItem:
+    """The missing `ASSIGNED -> IN_PROGRESS` step. Before this route existed,
+    no route anywhere exposed it, so a freshly-assigned case could never
+    legally reach `ESCALATED`/`AWAITING_REVIEW`/`CLOSED_FP` at all through
+    the API -- `investigation.fsm.VALID_TRANSITIONS` itself was always
+    correct (`ASSIGNED -> ESCALATED` directly is correctly rejected), the
+    gap was purely a missing route (flagged but not fixed in `docs/
+    SESSION_LOG.md` Sessions 22 and 24, both of which had to call
+    `investigation.fsm.transition_case` directly as a manual verify-setup
+    workaround).
+
+    Deliberately a separate, dedicated route rather than folded into
+    `/decision`'s `DecisionRequest` -- `/decision` conflates "decisions"
+    (terminal-ish actions requiring a typed `reason`) with this being a
+    mundane "I've started working on this" state event that needs no
+    reason, matching this codebase's own precedent of `PATCH /alerts/
+    {alert_id}/assign` being its own dedicated action route rather than
+    jammed into `/decision`.
+
+    Stays on `require_case_access` (assignment-gated), NOT `require_case_
+    read_access` -- this is a real state mutation and must remain
+    restricted to the assigned Investigator or Admin/Compliance, same as
+    every other write route.
+
+    `InvalidTransitionError` -> 409 (matches `make_decision`'s existing
+    pattern) -- e.g. calling this on a case that's already past `ASSIGNED`
+    409s cleanly rather than raising unhandled. No `reason`/`note` -- this
+    isn't a decision, just a status event; the `case_status_history` row
+    `transition_case` writes is the audit trail."""
+    try:
+        updated = transition_case(
+            db,
+            case.case_id,
+            CaseStatus.IN_PROGRESS,
+            actor_type=actor_type_for_role(user.role),
+            actor_id=user.user_id,
+        )
+    except InvalidTransitionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    db.commit()
+    return _case_list_item(updated)
+
+
 # ── L1 decision endpoint ──────────────────────────────────────────────────
 
 
@@ -678,8 +753,8 @@ def make_decision(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DecisionResponse:
-    """Close-as-FP | Request-info | Escalate, mapped onto the real
-    `investigation.fsm.VALID_TRANSITIONS` graph:
+    """Close-as-FP | Close-as-TP | Close-as-Monitoring | Request-info | Escalate,
+    mapped onto the real `investigation.fsm.VALID_TRANSITIONS` graph:
 
       - `escalate` -> `ESCALATED` (legal only from `IN_PROGRESS`), open to
         any investigator with case access.
@@ -696,8 +771,9 @@ def make_decision(
         per-decision-value, rather than a blanket `Depends(require_role(...))`
         on the whole route, since `escalate`/`request_info` must stay open to
         Investigators on this same endpoint. The FSM still governs legality:
-        e.g. `TRUE_POSITIVE_SAR` is only reachable from `AWAITING_REVIEW`/
-        `ESCALATED`, so closing a fresh `IN_PROGRESS` case as TP -> 409.
+        e.g. `TRUE_POSITIVE_SAR`/`ENHANCED_MONITORING` are only reachable from
+        `AWAITING_REVIEW`/`ESCALATED`, so closing a fresh `IN_PROGRESS` case as
+        TP or Monitoring -> 409.
 
     `InvalidTransitionError` -> 409. If `note` is present, it's recorded as
     a `Note` after a successful transition. `escalate`/`request_info`

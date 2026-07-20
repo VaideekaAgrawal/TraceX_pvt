@@ -46,12 +46,26 @@ interface CaseTabStore {
   activeTabId: string | null;
   tabState: Record<string, CaseTabState>;
   /**
+   * Which content the center panel shows — `"queue"` (the full case queue
+   * table) or `"tabs"` (the active tab's `CaseTabContent`). Defaults to
+   * `"queue"`: the queue table used to sit permanently in the left column;
+   * it's now a center-panel view you navigate to, same as any case tab, via
+   * the left panel's "Queue" nav entry (`showQueue`) or by opening/focusing
+   * a case (`openCase`/`setActiveTab`, both of which flip this to `"tabs"`).
+   * Switching to `"queue"` never touches `openTabIds`/`activeTabId`/
+   * `tabState` — any open tabs stay open in the background, ready to resume
+   * exactly where they were left.
+   */
+  centerView: "queue" | "tabs";
+  /**
    * If `case_id` is already an open tab, just activates it — never
    * duplicates a tab for a case already open. If it was previously opened
    * and then closed (its `tabState` entry still exists — `closeTab` never
    * deletes it), reopens it with that same draft/scroll/filter state
    * intact, refreshing only the cached `summary` fields. Otherwise
    * initializes a brand-new `tabState` entry with the documented defaults.
+   * Always also sets `centerView: "tabs"` — opening/focusing a case should
+   * switch the center panel to show it.
    */
   openCase: (item: CaseListItem) => void;
   /**
@@ -64,7 +78,13 @@ interface CaseTabStore {
    * the one that was immediately to its right); `null` if no tabs remain.
    */
   closeTab: (caseId: string) => void;
+  /** Also sets `centerView: "tabs"` — clicking an already-open tab in the
+   * rail should switch away from the queue view back to that tab's content. */
   setActiveTab: (caseId: string) => void;
+  /** Switches the center panel to the queue table. Does NOT touch
+   * `openTabIds`/`activeTabId`/`tabState` — open tabs stay open in the
+   * background. */
+  showQueue: () => void;
   updateTabState: (caseId: string, patch: Partial<CaseTabState>) => void;
 }
 
@@ -84,6 +104,7 @@ export const useCaseTabStore = create<CaseTabStore>((set) => ({
   openTabIds: [],
   activeTabId: null,
   tabState: {},
+  centerView: "queue",
 
   openCase: (item) =>
     set((state) => {
@@ -111,13 +132,14 @@ export const useCaseTabStore = create<CaseTabStore>((set) => ({
         // Already open — just refresh the cached summary (e.g. the case's
         // status changed server-side since it was opened) and focus it,
         // rather than leaving stale fields displayed until a close/reopen.
-        return { activeTabId: item.case_id, tabState: nextTabState };
+        return { activeTabId: item.case_id, tabState: nextTabState, centerView: "tabs" };
       }
 
       return {
         openTabIds: [...state.openTabIds, item.case_id],
         activeTabId: item.case_id,
         tabState: nextTabState,
+        centerView: "tabs",
       };
     }),
 
@@ -138,7 +160,11 @@ export const useCaseTabStore = create<CaseTabStore>((set) => ({
     }),
 
   setActiveTab: (caseId) =>
-    set((state) => (state.openTabIds.includes(caseId) ? { activeTabId: caseId } : state)),
+    set((state) =>
+      state.openTabIds.includes(caseId) ? { activeTabId: caseId, centerView: "tabs" } : state,
+    ),
+
+  showQueue: () => set({ centerView: "queue" }),
 
   updateTabState: (caseId, patch) =>
     set((state) => {

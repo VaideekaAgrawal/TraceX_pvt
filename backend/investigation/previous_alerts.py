@@ -62,6 +62,10 @@ def summarize(
                 "alert_id": alert.alert_id,
                 "created_at": alert.created_at,
                 "risk_score": alert.risk_score,
+                # Nullable -- some alerts have no case yet. Lets the frontend
+                # make each prior-alert row clickable through to its case
+                # (`api.routes.cases.RiskTrendPoint`).
+                "case_id": alert.case_id,
             }
         )
         if alert.case_id is None:

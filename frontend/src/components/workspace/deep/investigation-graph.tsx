@@ -1,6 +1,8 @@
 "use client";
 
-import type { Core, ElementDefinition, NodeSingular, StylesheetJsonBlock } from "cytoscape";
+import cytoscape from "cytoscape";
+import dagre from "cytoscape-dagre";
+import type { Core, ElementDefinition, LayoutOptions, StylesheetJsonBlock } from "cytoscape";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
 
@@ -24,6 +26,25 @@ import { CHANNEL_OPTIONS, GRAPH_ROLE_OPTIONS } from "@/lib/workspace/channel-opt
 import { useTriageFetch } from "@/lib/workspace/use-triage-fetch";
 import { FilterField, TriageSection } from "@/components/workspace/triage/triage-section";
 import type { NHopGraphResponse } from "@/lib/api/types";
+
+// Registers the `dagre` layout extension with cytoscape exactly once.
+// `cytoscape.use(...)` throws if the same extension is registered twice —
+// Next.js Fast Refresh re-runs this module's top-level code on every hot
+// reload of this file (or anything that imports it) in dev, so a bare
+// unconditional `cytoscape.use(dagre)` would throw on the second edit even
+// though nothing is actually broken. Guarded by a `globalThis` flag (not a
+// module-scope `let`, which Fast Refresh can reset along with the rest of
+// the module) plus a `try/catch` as a second line of defense.
+const dagreRegistryFlag = globalThis as typeof globalThis & { __cytoscapeDagreRegistered?: boolean };
+if (!dagreRegistryFlag.__cytoscapeDagreRegistered) {
+  try {
+    cytoscape.use(dagre);
+  } catch {
+    // Already registered elsewhere in this same module instance — safe to
+    // ignore.
+  }
+  dagreRegistryFlag.__cytoscapeDagreRegistered = true;
+}
 
 const MAX_RADIUS = 4;
 const MIN_RADIUS = 1;
@@ -212,10 +233,16 @@ function buildStylesheet(theme: GraphTheme): StylesheetJsonBlock[] {
 /**
  * L2 §1 — Complete Investigation Graph. First real `cytoscape` consumer in
  * this app (ROADMAP Phase 17) — N-hop ego-graph around `accountId`, full
- * filter set wired to `GET .../graph`, `concentric` layout keyed on
- * `hop_distance` so the hop structure stays legible (center in the middle,
- * each hop a ring further out) rather than a generic force-directed layout
- * that would hide it.
+ * filter set wired to `GET .../graph`, laid out with `cytoscape-dagre`
+ * (`rankDir: "LR"`) so money flow reads left-to-right (senders left,
+ * receivers right) — the standard hierarchical/layered-digraph layout for
+ * that requirement on an arbitrary multi-hop directed graph (unlike the
+ * single-hop `triage/money-flow.tsx`/`deep/graph-replay.tsx`, a strict
+ * "every sender left of every receiver" total order isn't always possible
+ * here, e.g. across a cycle — dagre ranks by traversal depth instead).
+ * Previously a `concentric` ring layout keyed on `hop_distance`, which kept
+ * the hop structure legible but didn't encode flow direction spatially at
+ * all.
  *
  * `selectedTxnId`/`onSelectTxn` are lifted to `deep-view.tsx` so a timeline
  * click highlights the matching edge here (and, the other direction,
@@ -257,6 +284,46 @@ export function InvestigationGraphSection({
     [data, selectedAccountId],
   );
 
+  // `dagre`'s `rankDir: "LR"` stacks same-rank nodes along the Y axis, and
+  // `fit: true` (below) uniformly scales the ENTIRE computed layout — both
+  // axes — to fit whatever container box it's given. A fixed-height
+  // container was fine for the previous `concentric` layout (rings spread
+  // radially, using both axes), but under `rankDir: "LR"` a busy hub
+  // account with many same-hop siblings all lands in one rank, and `fit`
+  // silently compresses that rank's `nodeSep` spacing down to fit a fixed
+  // box — exactly the "nodes stacked/overlapping" report, not a dagre
+  // misconfiguration. Sizing the container's height to the graph's actual
+  // widest rank (approximated by the largest `hop_distance` bucket — not
+  // dagre's literal internal rank assignment, but a close enough proxy
+  // without re-deriving dagre's own ranking) keeps `fit`'s compression
+  // factor close to 1 for busy graphs instead of forcing every graph into
+  // the same 700px box regardless of how wide it actually is. The
+  // already-scrollable ancestor (`case-tab-content.tsx`'s `max-h-[75vh]
+  // overflow-y-auto`) absorbs any resulting height beyond the viewport —
+  // no separate inner scroll region needed.
+  const graphHeight = useMemo(() => {
+    if (!data || data.nodes.length === 0) return 700;
+    const countsByHop = new Map<number, number>();
+    for (const n of data.nodes) {
+      const hop = n.hop_distance ?? 0;
+      countsByHop.set(hop, (countsByHop.get(hop) ?? 0) + 1);
+    }
+    const maxPerRank = Math.max(1, ...countsByHop.values());
+    // ~130px/node: node diameter (up to 64px, `mapData(risk, 0, 100, 22,
+    // 64)`) + `nodeSep` (70) + label headroom, rounded up for breathing
+    // room. Live-measured against a real case: a hub account's radius-3
+    // ego-graph put 68 nodes in one rank — a real, not hypothetical, case
+    // this needs to handle. Deliberately NOT capped tightly: the ancestor
+    // (`case-tab-content.tsx`'s `max-h-[75vh] overflow-y-auto`) already
+    // scrolls, so a tall canvas is normal, expected scrolling, not broken
+    // layout — and re-compressing a busy rank back down would reintroduce
+    // the exact overlap this height calculation exists to prevent. The
+    // 6000px ceiling is a sanity bound against a truly degenerate rank
+    // (hundreds of nodes), not a routine limit; the existing zoom-out
+    // control is the deliberate way to get an overview beyond that.
+    return Math.min(6000, Math.max(700, maxPerRank * 130));
+  }, [data]);
+
   const cyInstanceRef = useRef<Core | null>(null);
   const onSelectTxnRef = useRef(onSelectTxn);
   const onSelectAccountRef = useRef(onSelectAccount);
@@ -269,10 +336,10 @@ export function InvestigationGraphSection({
     onSelectAccountRef.current = onSelectAccount;
   }, [onSelectAccount]);
 
-  // Re-run the concentric layout only when a fresh graph arrives (new
-  // `data`), not on every selection change — `cy={...}`'s callback fires on
-  // every cytoscape update, so `cyInstanceRef` guards against re-attaching
-  // click listeners more than once for the same instance.
+  // Re-run the layout only when a fresh graph arrives (new `data`), not on
+  // every selection change — `cy={...}`'s callback fires on every cytoscape
+  // update, so `cyInstanceRef` guards against re-attaching click listeners
+  // more than once for the same instance.
   const handleCyInit = useCallback((cy: Core) => {
     if (cyInstanceRef.current === cy) return;
     cyInstanceRef.current = cy;
@@ -288,18 +355,47 @@ export function InvestigationGraphSection({
     });
   }, []);
 
+  // `dagre`, `rankDir: "LR"` — a real hierarchical/layered directed-graph
+  // layout, not a ring layout. This graph is a genuine multi-hop directed
+  // graph (arbitrary `source_account`/`dest_account` edges, possibly with
+  // cycles), so a strict "every sender strictly left of every receiver"
+  // rule is graph-theoretically impossible in general (a cycle A->B->C->A
+  // can't be totally ordered left-to-right) — `dagre` is the standard tool
+  // for "make flow direction read left-to-right" on exactly this shape of
+  // graph: it ranks nodes by traversal depth along edge direction, breaking
+  // cycles internally, so the graph reads left-to-right in aggregate flow
+  // direction even where a literal total order doesn't exist. Reads the
+  // same `source`/`target` fields already on every edge element
+  // (`buildElements`'s `source: e.source_account, target: e.dest_account`)
+  // — no data-shape change needed, this is purely a layout-algorithm swap
+  // from the previous `concentric` (ring) layout.
+  //
+  // `nodeSep`/`rankSep` bumped well past dagre's defaults (50/50) for the
+  // same "illegible clump" reason the previous `concentric` layout's
+  // `minNodeSpacing` was bumped — a busy multi-hop graph needs generous
+  // breathing room to stay legible at this canvas size.
   useEffect(() => {
     const cy = cyInstanceRef.current;
     if (!cy || !data) return;
     cy.layout({
-      name: "concentric",
-      concentric: (node: NodeSingular) => 1000 - (Number(node.data("hop")) || 0) * 100,
-      levelWidth: () => 1,
-      minNodeSpacing: 45,
-      animate: false,
+      name: "dagre",
+      rankDir: "LR",
+      nodeSep: 70,
+      rankSep: 120,
       fit: true,
-    }).run();
+      animate: false,
+    } as unknown as LayoutOptions).run();
   }, [data]);
+
+  function zoomBy(factor: number) {
+    const cy = cyInstanceRef.current;
+    if (!cy) return;
+    cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  }
+
+  function resetView() {
+    cyInstanceRef.current?.fit(undefined, 30);
+  }
 
   function updateFilter<K extends keyof GraphFilterState>(key: K, value: GraphFilterState[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -498,10 +594,25 @@ export function InvestigationGraphSection({
 
         {data && (
           <>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon-sm" onClick={() => zoomBy(1.2)} title="Zoom in">
+                +
+              </Button>
+              <Button variant="outline" size="icon-sm" onClick={() => zoomBy(1 / 1.2)} title="Zoom out">
+                −
+              </Button>
+              <Button variant="outline" size="sm" onClick={resetView}>
+                Reset view
+              </Button>
+            </div>
+
             <CytoscapeComponent
               elements={elements}
               stylesheet={stylesheet}
-              style={{ width: "100%", height: "440px" }}
+              // `graphHeight` (see its own comment above) scales with the
+              // graph's busiest rank so `fit: true` below doesn't compress
+              // same-rank node spacing into overlap for a busy hub account.
+              style={{ width: "100%", height: `${graphHeight}px` }}
               cy={handleCyInit}
               wheelSensitivity={0.2}
             />

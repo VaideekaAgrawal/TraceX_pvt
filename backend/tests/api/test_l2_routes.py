@@ -41,6 +41,7 @@ from db.repositories.reference import AccountRepository, CustomerRepository, Tra
 from db.session import build_engine, get_db
 from foundation.config import Settings
 from foundation.security import hash_password
+from orchestration import graph_explanation
 
 _HASHED_PASSWORD = hash_password("correct-horse")
 TS = datetime(2026, 1, 1, tzinfo=UTC)
@@ -287,6 +288,62 @@ def test_pin_unknown_evidence_id_404s(client: TestClient, seeded: str) -> None:
     assert resp.status_code == 404
 
 
+def test_graph_explanation_second_call_is_cached(
+    client: TestClient, db_sessionmaker: sessionmaker[Session], seeded: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Monkeypatch the actual LLM call (not the route) so this exercises the
+    # real HTTP route + DB round-trip end to end, mirroring `tests/api/
+    # test_cases_routes.py::test_account_explanation_second_call_is_cached`.
+    def _fake_call(prompt: str, *, settings: Settings, max_tokens: int = 300) -> str:
+        return "Fake graph explanation."
+
+    monkeypatch.setattr(graph_explanation, "_call_llm", _fake_call)
+
+    first = client.get(
+        "/cases/CASE1/accounts/SRC/graph-explanation", headers=_auth_headers(seeded)
+    )
+    assert first.status_code == 200
+    assert first.json()["cached"] is False
+    assert first.json()["explanation"] == "Fake graph explanation."
+    assert first.json()["account_id"] == "SRC"
+
+    second = client.get(
+        "/cases/CASE1/accounts/SRC/graph-explanation", headers=_auth_headers(seeded)
+    )
+    assert second.status_code == 200
+    assert second.json()["cached"] is True
+    assert second.json()["explanation"] == first.json()["explanation"]
+
+    with db_sessionmaker() as db:
+        interactions = AiInteractionRepository(db).list_for_case_and_agent(
+            "CASE1", AiAgent.RECOMMENDATION
+        )
+        assert len(interactions) == 1  # cached read did not write a second row
+
+
+def test_graph_explanation_not_configured_is_never_cached(client: TestClient, seeded: str) -> None:
+    # No openrouter_api_key configured on this fixture's client -- must fail
+    # open with the same visible message, cached=False, both times.
+    first = client.get(
+        "/cases/CASE1/accounts/SRC/graph-explanation", headers=_auth_headers(seeded)
+    )
+    second = client.get(
+        "/cases/CASE1/accounts/SRC/graph-explanation", headers=_auth_headers(seeded)
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+
+
+def test_graph_explanation_out_of_scope_account_404s(client: TestClient, seeded: str) -> None:
+    resp = client.get(
+        "/cases/CASE1/accounts/OUTSIDE/graph-explanation", headers=_auth_headers(seeded)
+    )
+    assert resp.status_code == 404
+
+
 def test_transaction_search_invalid_channel_400s(client: TestClient, seeded: str) -> None:
     resp = client.get(
         "/cases/CASE1/transactions/search?channels=NOT_A_REAL_CHANNEL",
@@ -411,9 +468,15 @@ def test_relationships_route_surfaces_hidden_one_hop_customer(
     assert edge["confidence"] == 0.95
 
 
-def test_unassigned_investigator_403_on_every_account_scoped_l2_route(
+def test_unassigned_investigator_can_read_every_account_scoped_l2_route(
     client: TestClient, db_sessionmaker: sessionmaker[Session], seeded: str
 ) -> None:
+    """RBAC read/write split (bug-fix pass, `fix/l1-l2-usability-and-bugs`):
+    every GET route below moved from `require_case_access`/`require_case_
+    scoped_account` to `require_case_read_access`/`require_case_scoped_
+    account_read` -- an unassigned Investigator can now view them. This
+    used to 403 (see git history); it no longer does, by design (see
+    `foundation.auth.require_case_read_access`'s docstring)."""
     _seed_user(db_sessionmaker, user_id="U_OTHER", username="other1")
     other_token = _login(client, "other1")
 
@@ -425,10 +488,36 @@ def test_unassigned_investigator_403_on_every_account_scoped_l2_route(
         "/cases/CASE1/accounts/SRC/timeline",
         "/cases/CASE1/evidence",
         "/cases/CASE1/notes",
+        "/cases/CASE1/relationships",
+        "/cases/CASE1/transactions/search",
+        "/cases/CASE1/alerts/AL1/pattern-explanation",
+        "/cases/CASE1/accounts/SRC/graph-explanation",
     ]
     for path in routes:
         resp = client.get(path, headers=_auth_headers(other_token))
-        assert resp.status_code == 403, f"{path} did not 403 for an unassigned investigator"
+        assert resp.status_code == 200, f"{path} did not 200 for an unassigned investigator"
+
+
+def test_unassigned_investigator_403_on_every_l2_write_route(
+    client: TestClient, db_sessionmaker: sessionmaker[Session], seeded: str
+) -> None:
+    """Write routes remain assignment-gated -- the RBAC read/write split
+    only widened GET access; every mutation route is still `require_case_
+    access`, unchanged."""
+    _seed_user(db_sessionmaker, user_id="U_OTHER", username="other1")
+    other_token = _login(client, "other1")
+
+    resp = client.post(
+        "/cases/CASE1/evidence",
+        json={"type": "TRANSACTION", "ref_id": "T1", "label": "x"},
+        headers=_auth_headers(other_token),
+    )
+    assert resp.status_code == 403
+
+    resp = client.post(
+        "/cases/CASE1/notes", json={"body": "x"}, headers=_auth_headers(other_token)
+    )
+    assert resp.status_code == 403
 
 
 def test_out_of_scope_account_404_on_every_account_scoped_l2_route(
@@ -440,6 +529,7 @@ def test_out_of_scope_account_404_on_every_account_scoped_l2_route(
         "/cases/CASE1/accounts/OUTSIDE/transactions/search",
         "/cases/CASE1/accounts/OUTSIDE/behavior",
         "/cases/CASE1/accounts/OUTSIDE/timeline",
+        "/cases/CASE1/accounts/OUTSIDE/graph-explanation",
     ]
     for path in routes:
         resp = client.get(path, headers=_auth_headers(seeded))

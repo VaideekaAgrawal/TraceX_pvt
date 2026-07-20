@@ -6,9 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/components/dashboard/format";
 import { DeepView } from "@/components/workspace/deep/deep-view";
+import { DecisionPanel } from "@/components/workspace/triage/decision-panel";
+import { NotesPanel } from "@/components/workspace/triage/notes-panel";
 import { TriageView } from "@/components/workspace/triage/triage-view";
+import { useAuth } from "@/lib/auth/auth-provider";
 import { getCaseStageLabel } from "@/lib/workspace/case-stage";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
+import type { CaseListItem } from "@/lib/api/types";
 
 /**
  * A single case tab's body. `workspace-shell.tsx` mounts one of these per
@@ -27,11 +31,23 @@ import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
  * that hasn't been escalated yet, or double-checking the L1 summary on one
  * that has (though Deep Investigation's own collapsed `TriageSummaryCollapsible`
  * already covers most of that second case without switching away).
+ *
+ * `DecisionPanel` and `NotesPanel` are both mounted here, in this same
+ * always-visible zone (with the `<dl>` summary block below), NOT inside
+ * `triage-view.tsx`'s `activeView`-toggled scroll container — they must
+ * stay visible and functional regardless of whether the tab is showing
+ * Triage or Deep Investigation, so switching between them never hides the
+ * only place to act on a case or the one place notes are composed/reviewed.
+ * `NotesPanel` is mounted exactly once, here — it used to live inside
+ * `triage-view.tsx` only, which meant switching to Deep Investigation hid
+ * it; it is NOT also mounted anywhere else (a second live instance sharing
+ * the same Zustand `notesDraft` field would double-fire its autosave debounce).
  */
 export function CaseTabContent({ caseId }: { caseId: string }) {
   const tab = useCaseTabStore((state) => state.tabState[caseId]);
   const activeTabId = useCaseTabStore((state) => state.activeTabId);
   const updateTabState = useCaseTabStore((state) => state.updateTabState);
+  const { user } = useAuth();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasActiveRef = useRef(false);
@@ -49,6 +65,43 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
     }
     wasActiveRef.current = isActive;
   }, [isActive, tab]);
+
+  // Auto-fires `POST .../start` (`ASSIGNED -> IN_PROGRESS`) exactly once
+  // when an Investigator opens their OWN freshly-assigned case — closes the
+  // gap where clicking Escalate on a just-assigned case immediately hit the
+  // FSM-illegal `ASSIGNED -> ESCALATED` transition (the real fix is
+  // `IN_PROGRESS` being reachable at all). Deliberately does NOT fire for
+  // Admin/Compliance browsing someone else's assigned case — only the
+  // assignee's own act of opening it should silently mutate case state.
+  // Guarded by a ref `Set` keyed by `caseId` (same fire-once-per-tab
+  // pattern as `workspace-shell.tsx`'s `resolvedDeepLink` ref) so it never
+  // double-fires across re-renders. Best-effort: a 409 (something else
+  // already transitioned the case) or a network failure is swallowed
+  // silently — the cached tab status catches up on the next real
+  // fetch/decision regardless, nothing else depends on this succeeding.
+  const autoStartedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!tab || !user) return;
+    if (user.role !== "INVESTIGATOR") return;
+    if (tab.summary.status !== "ASSIGNED") return;
+    if (tab.summary.assigned_to !== user.user_id) return;
+    if (autoStartedRef.current.has(caseId)) return;
+    autoStartedRef.current.add(caseId);
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/cases/${encodeURIComponent(caseId)}/start`, { method: "POST" });
+        if (!res.ok) return;
+        const result = (await res.json()) as CaseListItem;
+        const currentSummary = useCaseTabStore.getState().tabState[caseId]?.summary;
+        if (currentSummary) {
+          updateTabState(caseId, { summary: { ...currentSummary, status: result.status } });
+        }
+      } catch {
+        // best-effort only, see docstring above.
+      }
+    })();
+  }, [tab, user, caseId, updateTabState]);
 
   if (!tab) return null;
 
@@ -89,6 +142,9 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
           value={tab.summary.updated_at ? formatDateTime(tab.summary.updated_at) : "—"}
         />
       </dl>
+
+      <DecisionPanel caseId={caseId} />
+      <NotesPanel caseId={caseId} />
 
       <div
         ref={scrollRef}

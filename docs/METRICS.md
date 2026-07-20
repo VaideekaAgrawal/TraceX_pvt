@@ -711,6 +711,29 @@ Branch `demo-data-india-centric`. Motivated by owner review of the running syste
 
 ---
 
+## 26. L1/L2 usability & bugfix pass — `fix/l1-l2-usability-and-bugs` (Session 30)
+
+Not a roadmap phase branch — an ad-hoc usability/bugfix pass across L1/L2 (backend + frontend) built in an earlier, unlogged session; this session's job was to test, code-review, and log it retroactively before push (see `docs/SESSION_LOG.md` Session 30 for the full account, including why it's numbered 30 and this section 26 rather than the 26/25 this branch's own commits reference — a numbering collision with the concurrent backend track, resolved the same way as the earlier Session 21/23/24 collision). Backend: 624/624 tests passing pre-merge (up from 565 at Session 25/23 — this branch adds `test_graph_explanation.py` plus extensions to `test_cases_routes.py`/`test_l2_routes.py`), ruff clean, mypy clean (125 files). Frontend: `npm run lint`/`npm run build` clean, before and after code-review fixes. Post-merge (this branch merged with `origin/main`'s now-complete backend, Phases 0–12): see `docs/SESSION_LOG.md` Session 30 for the reconciliation (the `monitoring` decision value was renamed to `close_monitoring` to match Session 29's independently-built, more complete `close_fp`/`close_tp`/`close_monitoring` design) and the post-merge test count.
+
+**Code review** (`low` effort, inline, no subagents): 4 findings — 2 judgment calls put to the user (kept as-is: the Transaction Explorer's Channel filter removal, and the RBAC read-access loosening — see the session log for the user's decisions and reasoning), 2 confirmed duplication findings fixed (a `handleOpen`-open-case-as-tab flow duplicated verbatim across `previous-alerts.tsx`/`similar-cases.tsx`, extracted to `lib/workspace/use-open-case-tab.ts`; an "is this case assigned to me" check independently reimplemented in `decision-panel.tsx`/`ai-widget.tsx`, extracted to `lib/workspace/case-assignment.ts::isAssignedToUser`). No crash-causing correctness bugs found across the full diff.
+
+**Live-verified directly against the real backend+frontend, pre-merge** (curl + cookie jar, Node 20, 3 throwaway users `verify26inv`/`verify26inv2`/`verify26adm` — no browser/Playwright available this session, same caveat as every frontend session since Phase 16; decision value shown here as `monitoring`, the pre-merge/pre-rename name — see above, it's `close_monitoring` post-merge, same behavior):
+
+| Check | Result |
+|---|---|
+| `POST /cases/{case_id}/start` (`ASSIGNED -> IN_PROGRESS`) | First call: `200`, status `IN_PROGRESS`. Second call: `409` (already past `ASSIGNED`) |
+| RBAC read/write split | Non-assigned investigator: `GET /cases/{id}` → `200`, `GET .../evidence` → `200`; `POST .../decision` → `403` "Not assigned to this case"; `POST .../start` → `403` |
+| `monitoring` decision, FSM-legal path | `IN_PROGRESS -escalate-> ESCALATED` (investigator) then Admin `ESCALATED -monitoring-> MONITORING`/`ENHANCED_MONITORING` — both `200` |
+| `monitoring` decision, FSM-illegal path | Admin attempting `monitoring` directly from `IN_PROGRESS` → `409` |
+| `monitoring` decision, RBAC | Investigator attempting `monitoring` (from any status) → `403` "Only Admin/Compliance may set a case to monitoring" |
+| AI graph-explanation guardrail | No LLM key configured locally → graceful `"AI explanations not configured"` text, `cached: false`; confirmed via direct SQL that **zero** `ai_interactions` rows were persisted for the case (failure-non-persistence contract holds) |
+| AI recommendations widget | `POST .../recommendations` with no LLM key → clean `503` with the same "not configured" message, not a raw error |
+| Previous Alerts `case_id` nullability / open-as-tab | `GET .../previous-alerts` returned real non-null `case_id`s for prior alerts; `GET /cases/{that_case_id}` (as a different investigator) → `200`, confirming the open-any-case-read-only flow end-to-end |
+
+**Not done this session**: a real browser/Playwright pass (curl/API-level only, same as every frontend session since Phase 16) — the dagre graph layout, collapsible queue, vertical tab rail, and floating AI widget's drag/expand behavior were reviewed in code but not visually confirmed. Also not exercised: a real LLM-backed recommendation+challenge round-trip (no API key configured in this environment); a second live-verify pass after the `close_monitoring` rename (covered by the updated test suite instead, per the session log). **Local `data/tracex.db` was mutated** by the pre-merge verify pass (3 new users; 2 alerts assigned into new cases; one walked `ASSIGNED -> IN_PROGRESS -> ESCALATED -> MONITORING`, another to `IN_PROGRESS` only) — local-only, gitignored, adds to the existing cross-machine local-DB-divergence note (Sessions 20/22/23/24/25).
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).

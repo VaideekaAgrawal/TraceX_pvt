@@ -23,6 +23,9 @@ import { parseAuthedJsonResponse } from "@/lib/api/response-mapping";
 import type {
   AlertSummaryItem,
   BehaviorAnalysisResponse,
+  CaseListItem,
+  ChallengeRequest,
+  ChallengeResponse,
   CustomerProfileResponse,
   CustomerSnapshotResponse,
   DecisionRequest,
@@ -31,6 +34,7 @@ import type {
   EvidenceItem,
   ExplanationResponse,
   GeoRiskResponse,
+  GraphExplanationResponse,
   GraphQueryParams,
   MoneyFlowResponse,
   NetworkRiskResponse,
@@ -39,6 +43,7 @@ import type {
   NoteItem,
   PatternExplanationResponse,
   PreviousAlertsResponse,
+  RecommendationsResponse,
   RelationshipGraphResponse,
   SimilarCasesResponse,
   TimelineQueryParams,
@@ -126,6 +131,20 @@ async function patchJson<T>(path: string, fallback: string): Promise<T> {
     throw new BackendApiError(detail, response.status);
   }
   return (await response.json()) as T;
+}
+
+/**
+ * Single-case lookup (`GET /cases/{case_id}`) — reachable for ANY case by
+ * ANY authenticated user (`require_case_read_access`, not the
+ * assignment-gated `require_case_access`), so this is safe to call for a
+ * case the current user doesn't own, e.g. opening a Similar Case / Previous
+ * Investigation History row as a real tab (`similar-cases.tsx`/
+ * `previous-alerts.tsx`) or `workspace-shell.tsx`'s `?case=` deep link.
+ * Returns the same `CaseListItem` shape `GET /cases` returns per row, so
+ * callers can feed the result straight into `useCaseTabStore`'s `openCase`.
+ */
+export async function getCase(caseId: string): Promise<CaseListItem | null> {
+  return getJson<CaseListItem>(`/cases/${encodeURIComponent(caseId)}`);
 }
 
 export async function getAlertSummary(caseId: string): Promise<AlertSummaryItem[] | null> {
@@ -241,6 +260,21 @@ export async function postDecision(
   );
 }
 
+/** `POST /cases/{case_id}/start` — the `ASSIGNED -> IN_PROGRESS` step, no
+ * request body. Assignment-gated (`require_case_access`) server-side, same
+ * as `postDecision` — always throws on non-2xx (including a 409 for an
+ * illegal transition, e.g. the case has already moved past `ASSIGNED`),
+ * never `null`. Callers that treat this as best-effort background UX
+ * polish (`case-tab-content.tsx`'s auto-start effect) catch that
+ * themselves rather than this function swallowing it. */
+export async function startInvestigation(caseId: string): Promise<CaseListItem> {
+  return postJson<CaseListItem>(
+    `/cases/${encodeURIComponent(caseId)}/start`,
+    undefined,
+    "Failed to start investigation",
+  );
+}
+
 // ── L2 Deep Investigation (`backend/api/routes/l2.py`, ROADMAP Phase 17) ──
 
 export async function getAccountGraph(
@@ -307,6 +341,22 @@ export async function getAccountBehavior(
 // ── L2 Deep Investigation, part 2 (`backend/api/routes/l2.py`, ROADMAP
 // Phase 18) — relationships, pattern explanation, evidence ────────────────
 
+/** `GET .../graph-explanation` — AI narrative of the Investigation Graph
+ * (`backend/api/routes/l2.py::get_graph_explanation`), identical shape/
+ * `force` convention to `getAccountExplanation` above (`.../explanation`).
+ * Scoped to `account_id` directly, one explanation per account per case —
+ * unlike `getPatternExplanation` below, which is per-alert. */
+export async function getGraphExplanation(
+  caseId: string,
+  accountId: string,
+  force = false,
+): Promise<GraphExplanationResponse | null> {
+  const qs = toQueryString({ force });
+  return getJson<GraphExplanationResponse>(
+    `/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/graph-explanation${qs ? `?${qs}` : ""}`,
+  );
+}
+
 export async function getCaseRelationships(
   caseId: string,
 ): Promise<RelationshipGraphResponse | null> {
@@ -350,5 +400,42 @@ export async function pinEvidence(caseId: string, evidenceId: string): Promise<E
   return patchJson<EvidenceItem>(
     `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(evidenceId)}/pin`,
     "Failed to pin evidence",
+  );
+}
+
+// ── AI Recommendations widget (`backend/api/routes/recommendations.py`,
+// ROADMAP Phase 19) ────────────────────────────────────────────────────
+//
+// Both routes are `require_case_access` (assignment-gated) server-side, NOT
+// the read-only dependency the rest of this module's GET functions use —
+// this genuinely IS a write (a real, billed LLM call that persists an
+// `ai_interactions` row), matching this module's own POST convention. Both
+// always throw on non-2xx (403 for a case not assigned to the caller, 503
+// if the LLM gateway is unconfigured, 502 if the model failed to produce
+// valid structured output) — never `null`, same as `postDecision`.
+
+/** `POST /cases/{case_id}/recommendations` — a real, billed LLM call, never
+ * auto-fired. `ai-widget/recommendations-panel.tsx` only calls this from an
+ * explicit "Generate" button click. */
+export async function generateRecommendations(caseId: string): Promise<RecommendationsResponse> {
+  return postJson<RecommendationsResponse>(
+    `/cases/${encodeURIComponent(caseId)}/recommendations`,
+    undefined,
+    "Failed to generate recommendations",
+  );
+}
+
+/** `POST /cases/{case_id}/recommendations/challenge` — cross-questions the
+ * most recent generated recommendation set for this case; the engine
+ * defends or concedes with grounded, cited facts appended to the same
+ * audited interaction thread. */
+export async function challengeRecommendation(
+  caseId: string,
+  body: ChallengeRequest,
+): Promise<ChallengeResponse> {
+  return postJson<ChallengeResponse>(
+    `/cases/${encodeURIComponent(caseId)}/recommendations/challenge`,
+    body,
+    "Failed to submit challenge",
   );
 }

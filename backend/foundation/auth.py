@@ -158,6 +158,36 @@ def require_case_access(
     return case
 
 
+def require_case_read_access(
+    case_id: str,
+    user: User = Depends(get_current_user),  # enforces authentication only; role unchecked
+    db: Session = Depends(get_db),
+) -> Case:
+    """Read-only case-detail access -- any authenticated user (both roles)
+    may view any case's L1/L2 detail once they know its case_id (e.g. via
+    Similar Historical Cases or Previous Investigation History, both of
+    which already surface other investigators' case_ids/typologies/outcomes
+    today without any assignment filtering -- this closes the natural next
+    step, letting an investigator actually open what those panels already
+    tell them exists, rather than a new information leak). 404s if the case
+    doesn't exist. Does NOT check assigned_to/role at all -- deliberately a
+    separate function from `require_case_access`, not a modified version of
+    it, so `require_case_access`'s assignment-gated behavior is completely
+    unchanged for every write route AND remains available unmodified for
+    Phase 10's Investigation Copilot, which `SYSTEM_DEVELOPMENT_PLAN.md` §9
+    explicitly designs as "RBAC-scoped to the investigator's own cases" --
+    that Copilot-facing guarantee must not be weakened by this change.
+
+    `user` is still a required dependency (so an unauthenticated request
+    401s exactly as every other route does) even though this function
+    doesn't read anything off it -- only the assignment/role check is
+    removed, not authentication itself."""
+    case = CaseRepository(db).get(case_id)
+    if case is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Case not found")
+    return case
+
+
 def _load_scoped_account(account_id: str, case: Case, db: Session) -> tuple[Account, list[str]]:
     """Shared core of `require_case_scoped_account`/`require_case_scoped_
     account_with_ids` -- computes `case`'s scoped account-id set once,
@@ -207,4 +237,36 @@ def require_case_scoped_account_with_ids(
     account-scoped routes should keep using the plain `require_case_scoped_
     account` — only switch a route to this one when it would otherwise
     re-run `CaseAccountRepository.list_account_ids_for_case` itself."""
+    return _load_scoped_account(account_id, case, db)
+
+
+def require_case_scoped_account_read(
+    account_id: str,
+    case: Case = Depends(require_case_read_access),
+    db: Session = Depends(get_db),
+) -> Account:
+    """Read-only sibling of `require_case_scoped_account` -- identical
+    account-in-case-scope check (still 404s if `account_id` isn't in this
+    case's `case_accounts`), but built on `require_case_read_access` instead
+    of the assignment-gated `require_case_access`, so a GET route using this
+    dependency is reachable by any authenticated user for any case, not just
+    the assigned Investigator. Only ever swap a route to this one alongside
+    the same swap on its `case` dependency (see `api.routes.cases`/`api.
+    routes.l2` module docstrings) -- pairing this with `require_case_access`
+    on the same route would still 403 via the other dependency, and pairing
+    plain `require_case_scoped_account` with `require_case_read_access` on
+    the same route would silently reintroduce the assignment gate through
+    the account dependency's own nested `require_case_access` call."""
+    account, _ = _load_scoped_account(account_id, case, db)
+    return account
+
+
+def require_case_scoped_account_with_ids_read(
+    account_id: str,
+    case: Case = Depends(require_case_read_access),
+    db: Session = Depends(get_db),
+) -> tuple[Account, list[str]]:
+    """Read-only sibling of `require_case_scoped_account_with_ids` -- see
+    `require_case_scoped_account_read`'s docstring for why this is a
+    separate function rather than a parameterized one."""
     return _load_scoped_account(account_id, case, db)

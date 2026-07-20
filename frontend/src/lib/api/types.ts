@@ -293,6 +293,10 @@ export interface RiskTrendPoint {
   alert_id: string;
   created_at: string;
   risk_score: number;
+  // Nullable — some prior alerts never became a case (`investigation/
+  // previous_alerts.py`'s own documented behavior). `null` rows are not
+  // clickable in `previous-alerts.tsx`.
+  case_id: string | null;
 }
 
 export interface PreviousAlertsResponse {
@@ -344,7 +348,29 @@ export interface ExplanationResponse {
   generated_at: string;
 }
 
-export type DecisionValue = "close_fp" | "request_info" | "escalate";
+// `backend/api/routes/l2.py::GraphExplanationResponse` — AI narrative of the
+// Investigation Graph (source/mule/sink roles, cycles, flow concentration),
+// scoped to `account_id` like `ExplanationResponse` above (one explanation
+// per account per case), not per-alert like `PatternExplanationResponse`
+// below.
+export interface GraphExplanationResponse {
+  account_id: string;
+  explanation: string;
+  cached: boolean;
+  model: string;
+  generated_at: string;
+}
+
+// Mirrors `backend/api/routes/cases.py::DecisionRequest.decision` exactly —
+// `close_tp` (Phase 12) has no dedicated UI button yet (no frontend phase
+// has built one), but the type stays in sync with the real backend contract
+// rather than omitting a value the API actually accepts.
+export type DecisionValue =
+  | "close_fp"
+  | "close_tp"
+  | "close_monitoring"
+  | "request_info"
+  | "escalate";
 
 export interface DecisionRequest {
   decision: DecisionValue;
@@ -663,4 +689,60 @@ export interface EvidenceItem {
   pinned: boolean;
   added_by: string;
   added_at: string;
+}
+
+// ── `backend/api/routes/recommendations.py` (ROADMAP Phase 9 backend /
+// Phase 19 frontend — the floating AI Recommendations widget) ────────────
+//
+// Same "backend enum -> plain `string`" convention as the rest of this
+// file. Both routes are on `require_case_access` (assignment-gated), NOT
+// the read-only dependency every other L1/L2 GET route above uses — see
+// `ai-widget/recommendations-panel.tsx`'s docstring for how the widget
+// anticipates the 403 that implies for a case not assigned to the current
+// Investigator.
+
+export interface RegulatoryAnchorModel {
+  fatf: string;
+  india: string;
+}
+
+export interface RecommendationModel {
+  action_id: string;
+  title: string;
+  description: string;
+  narrative: string;
+  confidence: number;
+  rank: number;
+  typologies: string[];
+  regulatory_anchor: RegulatoryAnchorModel;
+  rule_anchor: Record<string, unknown>[];
+  cited_fact_keys: string[];
+}
+
+export interface RejectedModel {
+  action_id: string;
+  reason: string;
+}
+
+export interface RecommendationsResponse {
+  case_id: string;
+  recommendations: RecommendationModel[];
+  rejected: RejectedModel[];
+  interaction_id: number | null;
+  iterations: number;
+  latency_ms: number;
+}
+
+export interface ChallengeRequest {
+  question: string;
+}
+
+export interface ChallengeResponse {
+  case_id: string;
+  answered: boolean;
+  narrative: string;
+  interaction_id: number | null;
+  rejected_reason: string | null;
+  iterations: number;
+  latency_ms: number;
 }
