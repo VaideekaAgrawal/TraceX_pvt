@@ -83,7 +83,12 @@ export function PatternExplanationSection({ caseId }: { caseId: string }) {
               onValueChange={(value) => setSelectedAlertId(String(value))}
             >
               <SelectTrigger size="sm" className="w-64" aria-label="Alert">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string) => {
+                    const alert = sortedAlerts.find((a) => a.alert_id === value);
+                    return alert ? `${alert.alert_id} — ${detectionTypeLabel(alert.detection_type)}` : value;
+                  }}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {sortedAlerts.map((alert) => (

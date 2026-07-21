@@ -127,7 +127,7 @@ export function CaseQueue({ initialData }: { initialData: CaseListResponse }) {
             onValueChange={(value) => setStatus(value === ALL ? "" : String(value))}
           >
             <SelectTrigger size="sm" className="w-40" aria-label="Status">
-              <SelectValue />
+              <SelectValue>{(value: string) => (value === ALL ? "All statuses" : value)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>All statuses</SelectItem>
@@ -146,7 +146,7 @@ export function CaseQueue({ initialData }: { initialData: CaseListResponse }) {
             onValueChange={(value) => setPriority(value === ALL ? "" : String(value))}
           >
             <SelectTrigger size="sm" className="w-28" aria-label="Priority">
-              <SelectValue />
+              <SelectValue>{(value: string) => (value === ALL ? "All priorities" : value)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>All priorities</SelectItem>

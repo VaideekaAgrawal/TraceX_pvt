@@ -185,7 +185,7 @@ export function EvidencePanel({
           <FilterField label="Type">
             <Select value={type} onValueChange={(value) => setType(value as EvidenceType)}>
               <SelectTrigger size="sm" className="w-48" aria-label="Evidence type">
-                <SelectValue />
+                <SelectValue>{(value: EvidenceType) => TYPE_LABELS[value]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {EVIDENCE_TYPES.map((t) => (

@@ -335,7 +335,7 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
               <Label className="text-muted-foreground text-xs font-normal">Speed</Label>
               <Select value={String(speed)} onValueChange={(value) => setSpeed(Number(value))}>
                 <SelectTrigger size="sm" className="w-20" aria-label="Speed">
-                  <SelectValue />
+                  <SelectValue>{(value: string) => `${value}×`}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {SPEED_OPTIONS.map((s) => (

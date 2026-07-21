@@ -160,7 +160,7 @@ export function MonitoringSection({ initialEntries }: { initialEntries: Watchlis
                 onValueChange={(value) => setEntityType(value as WatchEntityTypeValue)}
               >
                 <SelectTrigger size="sm" className="w-40" aria-label="Entity type">
-                  <SelectValue />
+                  <SelectValue>{(value: WatchEntityTypeValue) => ENTITY_TYPE_LABELS[value]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {WATCH_ENTITY_TYPES.map((t) => (

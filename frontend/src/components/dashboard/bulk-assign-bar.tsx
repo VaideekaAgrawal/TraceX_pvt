@@ -109,7 +109,13 @@ export function BulkAssignBar({
             onValueChange={(value) => setInvestigatorId(value ? String(value) : null)}
           >
             <SelectTrigger size="sm" className="w-56" aria-label="Assign selected alerts to">
-              <SelectValue placeholder="Assign to…" />
+              <SelectValue placeholder="Assign to…">
+                {(value: string | null) => {
+                  if (!value) return "Assign to…";
+                  const inv = investigators.find((i) => i.user_id === value);
+                  return inv ? `${inv.full_name} — ${inv.open_case_count} open case${inv.open_case_count === 1 ? "" : "s"}` : value;
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {investigators.map((inv) => (

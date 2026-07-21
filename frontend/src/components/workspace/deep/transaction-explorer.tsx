@@ -186,7 +186,9 @@ export function TransactionExplorerSection({
           <FilterField label="Scope">
             <Select value={scope} onValueChange={(value) => { setScope(value as "account" | "case"); setPage(0); }}>
               <SelectTrigger size="sm" className="w-44" aria-label="Scope">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string) => (value === "account" ? "This account only" : "Whole case (all linked accounts)")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="account">This account only</SelectItem>
@@ -198,7 +200,9 @@ export function TransactionExplorerSection({
           <FilterField label="Sort">
             <Select value={filters.sort} onValueChange={(value) => updateFilter("sort", String(value))}>
               <SelectTrigger size="sm" className="w-40" aria-label="Sort">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string) => SORT_OPTIONS.find((opt) => opt.value === value)?.label ?? value}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {SORT_OPTIONS.map((opt) => (
@@ -216,7 +220,9 @@ export function TransactionExplorerSection({
               onValueChange={(value) => updateFilter("direction", value === ALL ? "" : (String(value) as "in" | "out"))}
             >
               <SelectTrigger size="sm" className="w-28" aria-label="Direction">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string) => (value === ALL ? "Any" : value === "in" ? "Inbound" : "Outbound")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Any</SelectItem>

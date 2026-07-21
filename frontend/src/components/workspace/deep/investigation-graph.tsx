@@ -519,7 +519,9 @@ export function InvestigationGraphSection({
                 }
               >
                 <SelectTrigger size="sm" className="w-28" aria-label="Direction">
-                  <SelectValue />
+                  <SelectValue>
+                    {(value: string) => (value === ALL ? "Any" : value === "in" ? "Inbound" : "Outbound")}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>Any</SelectItem>
