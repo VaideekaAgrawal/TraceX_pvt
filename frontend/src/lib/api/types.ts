@@ -870,3 +870,51 @@ export interface AddWatchlistRequest {
   entity_value: string;
   reason?: string;
 }
+
+// `backend/api/routes/governance.py::ModelMetricsResponse` — `GET
+// /model-metrics` (ROADMAP Phase 12 backend / Phase 22 frontend), Admin/
+// Compliance only server-side (403 for an Investigator).
+export interface ModelInfo {
+  model_name: string;
+  model_type: string;
+  version: string;
+  trained_at: string | null;
+  dataset_hash: string | null;
+  metrics: Record<string, unknown> | null;
+  has_artifact: boolean;
+  active: boolean;
+}
+
+export interface RuleInfo {
+  rule_id: string;
+  name: string;
+  tier: number;
+  confidence: number;
+  enabled: boolean;
+}
+
+export interface FeatureWeight {
+  feature: string;
+  weight: number;
+}
+
+export interface RlInfo {
+  arm_id: string;
+  updated_at: string | null;
+  top_features: FeatureWeight[];
+}
+
+export interface FeedbackSummary {
+  total: number;
+  true_positive: number;
+  false_positive: number;
+  enhanced_monitoring: number;
+  precision: number | null;
+}
+
+export interface ModelMetricsResponse {
+  models: ModelInfo[];
+  rules: RuleInfo[];
+  rl: RlInfo;
+  feedback: FeedbackSummary;
+}

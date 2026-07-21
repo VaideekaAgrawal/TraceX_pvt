@@ -58,11 +58,11 @@ export function TransactionSummarySection({ caseId, accountId }: { caseId: strin
         <div className="flex items-end gap-2">
           <div className="flex flex-col gap-1">
             <Label className="text-muted-foreground text-xs font-normal">From</Label>
-            <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="h-7 w-36 text-xs" />
+            <Input type="date" aria-label="From date" value={start} onChange={(e) => setStart(e.target.value)} className="h-7 w-36 text-xs" />
           </div>
           <div className="flex flex-col gap-1">
             <Label className="text-muted-foreground text-xs font-normal">To</Label>
-            <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="h-7 w-36 text-xs" />
+            <Input type="date" aria-label="To date" value={end} onChange={(e) => setEnd(e.target.value)} className="h-7 w-36 text-xs" />
           </div>
         </div>
       }

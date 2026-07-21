@@ -16,11 +16,23 @@ import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
  *
  * Vertical rail, not a horizontal strip — `workspace-shell.tsx` places this
  * beside the queue in a left column, tabs reading top-to-bottom, so it
- * reads as a case list rather than a browser-style tab strip. Same
- * close-button/active-state/keyboard-nav logic as before, just restacked
- * (`flex-col` instead of `flex-wrap`); no rounded-top/no-bottom-border
- * "physically attached to the content below it" styling either, since that
- * doesn't make sense once the content is beside it, not below it.
+ * reads as a case list rather than a browser-style tab strip; no
+ * rounded-top/no-bottom-border "physically attached to the content below
+ * it" styling either, since that doesn't make sense once the content is
+ * beside it, not below it.
+ *
+ * ROADMAP Phase 22 a11y fix: each tab is a real `<button aria-pressed>`
+ * (native focus/Enter/Space handling, no manual `tabIndex`/`onKeyDown`
+ * needed), not a `role="tab"` element. `role="tablist"`/`role="tab"` was
+ * tried first but doesn't fit this widget: ARIA's "required owned elements"
+ * check requires a `tablist`'s children to be *only* `tab`-role elements,
+ * which this bar's per-row close button structurally can't satisfy no
+ * matter how it's wrapped (a `role="presentation"` wrapper gets "flattened"
+ * for that check, which promotes the close button too, not just the tab —
+ * axe still flags it as an unallowed tablist child). `aria-pressed` on a
+ * plain button conveys the same "this one is currently selected" state
+ * without that structural requirement, and the close button is a normal
+ * sibling.
  *
  * No "+" button: new tabs only ever come from clicking a queue row
  * (`case-queue.tsx`) or the Dashboard `?case=` deep link — there is no
@@ -44,44 +56,38 @@ export function CaseTabBar() {
   }
 
   return (
-    <div className="flex flex-col gap-1 p-2">
+    <div role="group" aria-label="Open cases" className="flex flex-col gap-1 p-2">
       {openTabIds.map((caseId) => {
         const state = tabState[caseId];
         const active = activeTabId === caseId;
         return (
           <div
             key={caseId}
-            role="tab"
-            aria-selected={active}
-            tabIndex={0}
-            onClick={() => setActiveTab(caseId)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setActiveTab(caseId);
-              }
-            }}
             className={cn(
-              "flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
+              "flex w-full items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
               active
                 ? "bg-background font-medium"
                 : "bg-muted/40 text-muted-foreground hover:bg-muted/70",
             )}
           >
-            <span className="min-w-0 flex-1 truncate">{caseId}</span>
-            {state && (
-              <Badge variant="outline" className="text-[10px]">
-                {getCaseStageLabel(state.summary.status)}
-              </Badge>
-            )}
+            <button
+              type="button"
+              aria-pressed={active}
+              onClick={() => setActiveTab(caseId)}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+            >
+              <span className="min-w-0 flex-1 truncate">{caseId}</span>
+              {state && (
+                <Badge variant="outline" className="text-[10px]">
+                  {getCaseStageLabel(state.summary.status)}
+                </Badge>
+              )}
+            </button>
             <button
               type="button"
               aria-label={`Close ${caseId} tab`}
               className="hover:bg-muted shrink-0 rounded p-0.5"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(caseId);
-              }}
+              onClick={() => closeTab(caseId)}
             >
               <X className="size-3" />
             </button>

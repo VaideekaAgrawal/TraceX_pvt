@@ -66,16 +66,21 @@ export function InvestigationTimelineSection({
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
             <Label className="text-muted-foreground text-xs font-normal">From</Label>
-            <Input type="date" className="w-36" value={start} onChange={(e) => setStart(e.target.value)} />
+            <Input type="date" aria-label="From date" className="w-36" value={start} onChange={(e) => setStart(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1">
             <Label className="text-muted-foreground text-xs font-normal">To</Label>
-            <Input type="date" className="w-36" value={end} onChange={(e) => setEnd(e.target.value)} />
+            <Input type="date" aria-label="To date" className="w-36" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
         </div>
 
         {data && data.events.length > 0 && (
-          <div className="max-h-96 overflow-y-auto overflow-x-hidden rounded-lg ring-1 ring-foreground/10">
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label="Timeline events, scrollable"
+            className="max-h-96 overflow-y-auto overflow-x-hidden rounded-lg ring-1 ring-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <Table>
               <TableHeader>
                 <TableRow>

@@ -77,8 +77,8 @@ export function AlertFiltersBar({
           value={filters.status || ALL}
           onValueChange={(value) => set("status", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue />
+          <SelectTrigger size="sm" className="w-32" aria-label="Status">
+            <SelectValue>{(value: string) => (value === ALL ? "All statuses" : value)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All statuses</SelectItem>
@@ -96,8 +96,8 @@ export function AlertFiltersBar({
           value={filters.priority || ALL}
           onValueChange={(value) => set("priority", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-28">
-            <SelectValue />
+          <SelectTrigger size="sm" className="w-28" aria-label="Priority">
+            <SelectValue>{(value: string) => (value === ALL ? "All priorities" : value)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All priorities</SelectItem>
@@ -115,8 +115,8 @@ export function AlertFiltersBar({
           value={filters.severity || ALL}
           onValueChange={(value) => set("severity", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue />
+          <SelectTrigger size="sm" className="w-32" aria-label="Severity">
+            <SelectValue>{(value: string) => (value === ALL ? "All severities" : severityLabel(value))}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All severities</SelectItem>
@@ -134,8 +134,8 @@ export function AlertFiltersBar({
           value={filters.detectionType || ALL}
           onValueChange={(value) => set("detectionType", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-40">
-            <SelectValue />
+          <SelectTrigger size="sm" className="w-40" aria-label="Type">
+            <SelectValue>{(value: string) => (value === ALL ? "All types" : detectionTypeLabel(value))}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All types</SelectItem>
@@ -154,6 +154,7 @@ export function AlertFiltersBar({
           inputMode="decimal"
           min={0}
           max={100}
+          aria-label="Min risk"
           className="w-20"
           value={filters.minRiskScore}
           onChange={(e) => set("minRiskScore", e.target.value)}
@@ -166,6 +167,7 @@ export function AlertFiltersBar({
           inputMode="decimal"
           min={0}
           max={100}
+          aria-label="Max risk"
           className="w-20"
           value={filters.maxRiskScore}
           onChange={(e) => set("maxRiskScore", e.target.value)}
@@ -175,6 +177,7 @@ export function AlertFiltersBar({
       <Field label="From">
         <Input
           type="date"
+          aria-label="From date"
           className="w-36"
           value={filters.start}
           onChange={(e) => set("start", e.target.value)}
@@ -184,6 +187,7 @@ export function AlertFiltersBar({
       <Field label="To">
         <Input
           type="date"
+          aria-label="To date"
           className="w-36"
           value={filters.end}
           onChange={(e) => set("end", e.target.value)}
@@ -200,13 +204,23 @@ export function AlertFiltersBar({
             <SelectTrigger
               size="sm"
               className="w-40"
+              aria-label="Assigned to"
               title={
                 filters.unassignedOnly
                   ? "Unset “Unassigned only” to filter by investigator"
                   : undefined
               }
             >
-              <SelectValue />
+              <SelectValue>
+                {(value: string) =>
+                  value === ALL
+                    ? "Any investigator"
+                    : (() => {
+                        const inv = investigators.find((i) => i.user_id === value);
+                        return inv ? `${inv.full_name} (${inv.open_case_count})` : value;
+                      })()
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>Any investigator</SelectItem>

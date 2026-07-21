@@ -92,8 +92,14 @@ export function AssignDialog({
         </DialogHeader>
 
         <Select value={investigatorId ?? undefined} onValueChange={(value) => setInvestigatorId(value ? String(value) : null)}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select an investigator" />
+          <SelectTrigger className="w-full" aria-label="Investigator">
+            <SelectValue placeholder="Select an investigator">
+              {(value: string | null) => {
+                if (!value) return "Select an investigator";
+                const inv = investigators.find((i) => i.user_id === value);
+                return inv ? `${inv.full_name} — ${inv.open_case_count} open case${inv.open_case_count === 1 ? "" : "s"}` : value;
+              }}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {investigators.map((inv) => (

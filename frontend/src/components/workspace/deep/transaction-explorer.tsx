@@ -185,8 +185,10 @@ export function TransactionExplorerSection({
         <div className="flex flex-wrap items-end gap-4 rounded-lg border p-3">
           <FilterField label="Scope">
             <Select value={scope} onValueChange={(value) => { setScope(value as "account" | "case"); setPage(0); }}>
-              <SelectTrigger size="sm" className="w-44">
-                <SelectValue />
+              <SelectTrigger size="sm" className="w-44" aria-label="Scope">
+                <SelectValue>
+                  {(value: string) => (value === "account" ? "This account only" : "Whole case (all linked accounts)")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="account">This account only</SelectItem>
@@ -197,8 +199,10 @@ export function TransactionExplorerSection({
 
           <FilterField label="Sort">
             <Select value={filters.sort} onValueChange={(value) => updateFilter("sort", String(value))}>
-              <SelectTrigger size="sm" className="w-40">
-                <SelectValue />
+              <SelectTrigger size="sm" className="w-40" aria-label="Sort">
+                <SelectValue>
+                  {(value: string) => SORT_OPTIONS.find((opt) => opt.value === value)?.label ?? value}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {SORT_OPTIONS.map((opt) => (
@@ -215,8 +219,10 @@ export function TransactionExplorerSection({
               value={filters.direction || ALL}
               onValueChange={(value) => updateFilter("direction", value === ALL ? "" : (String(value) as "in" | "out"))}
             >
-              <SelectTrigger size="sm" className="w-28">
-                <SelectValue />
+              <SelectTrigger size="sm" className="w-28" aria-label="Direction">
+                <SelectValue>
+                  {(value: string) => (value === ALL ? "Any" : value === "in" ? "Inbound" : "Outbound")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Any</SelectItem>
@@ -230,6 +236,7 @@ export function TransactionExplorerSection({
             <Input
               type="number"
               inputMode="decimal"
+              aria-label="Min amount"
               className="w-28"
               value={filters.minAmount}
               onChange={(e) => updateFilter("minAmount", e.target.value)}
@@ -239,19 +246,21 @@ export function TransactionExplorerSection({
             <Input
               type="number"
               inputMode="decimal"
+              aria-label="Max amount"
               className="w-28"
               value={filters.maxAmount}
               onChange={(e) => updateFilter("maxAmount", e.target.value)}
             />
           </FilterField>
           <FilterField label="From">
-            <Input type="date" className="w-36" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} />
+            <Input type="date" aria-label="From date" className="w-36" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} />
           </FilterField>
           <FilterField label="To">
-            <Input type="date" className="w-36" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} />
+            <Input type="date" aria-label="To date" className="w-36" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} />
           </FilterField>
           <FilterField label="Transaction type">
             <Input
+              aria-label="Transaction type"
               className="w-36"
               placeholder="e.g. transfer"
               value={filters.txnType}

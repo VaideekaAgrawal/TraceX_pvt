@@ -1,6 +1,7 @@
 import { AiPanel } from "@/components/workspace/triage/ai-panel";
 import { AlertSummarySection } from "@/components/workspace/triage/alert-summary";
 import { CustomerSnapshotSection } from "@/components/workspace/triage/customer-snapshot";
+import { ModelGovernanceIndicator } from "@/components/workspace/model-governance-indicator";
 import { MoneyFlowSection } from "@/components/workspace/triage/money-flow";
 import { NetworkRiskSection } from "@/components/workspace/triage/network-risk";
 import { PreviousAlertsSection } from "@/components/workspace/triage/previous-alerts";
@@ -42,6 +43,7 @@ export function TriageView({ caseId, accountId }: { caseId: string; accountId: s
       <TransactionSummarySection caseId={caseId} accountId={accountId} />
       <PreviousAlertsSection caseId={caseId} accountId={accountId} />
       <NetworkRiskSection caseId={caseId} />
+      <ModelGovernanceIndicator />
       <SimilarCasesSection caseId={caseId} />
     </div>
   );

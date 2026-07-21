@@ -12,7 +12,8 @@ import { CaseTabBar } from "@/components/workspace/case-tab-bar";
 import { CaseTabContent } from "@/components/workspace/case-tab-content";
 import { cn } from "@/lib/utils";
 import { useCaseTabStore } from "@/lib/workspace/case-tab-store";
-import type { CaseListItem, CaseListResponse } from "@/lib/api/types";
+import { useOpenCaseTab } from "@/lib/workspace/use-open-case-tab";
+import type { CaseListResponse } from "@/lib/api/types";
 
 /**
  * Owns the Zustand tab store's two entry points converging: the queue list
@@ -21,21 +22,15 @@ import type { CaseListItem, CaseListResponse } from "@/lib/api/types";
  * mount and calls the exact same `openCase` action for it — per the Phase
  * 15 requirement that both entry points converge on one tab-open path.
  *
- * Judgment call: `GET /cases` (the only case-list endpoint this phase has)
- * is role-scoped server-side and may not include the case a `?case=` link
- * points at (e.g. an Investigator deep-linking to a case not assigned to
- * them, or any case outside the current queue page). There is no
- * `GET /cases/{case_id}` single-case lookup route to fall back to yet — so
- * when the deep-linked case isn't in the initial queue fetch, this opens a
- * placeholder tab with only `case_id` known and the rest of `CaseListItem`
- * left as neutral/empty values. `case-stage.ts::getCaseStageLabel` and this
- * component's own rendering treat an empty/unmapped status as "Unknown"
- * rather than guessing a stage, so the placeholder doesn't assert anything
- * false. (`GET /cases/{case_id}` now exists — `getCase`/`case-detail-
- * client.ts` — and is used by `similar-cases.tsx`/`previous-alerts.tsx` to
- * open an arbitrary case as a tab; this deep-link resolver is untouched
- * here since it's out of this pass's scope and the placeholder-tab fallback
- * still degrades gracefully either way.) `openCase` also flips
+ * `GET /cases` (the queue list) is role-scoped server-side and may not
+ * include the case a `?case=` link points at (e.g. a case outside the
+ * current queue page, or — for Admin/Compliance — one not assigned to
+ * anyone yet). Phase 22: previously this fell back to a local placeholder
+ * tab (`case_id` only, rest of `CaseListItem` left blank, rendered as
+ * "Unknown") because no single-case lookup route existed. `GET
+ * /cases/{case_id}` now exists and is already used by `similar-cases.tsx`/
+ * `previous-alerts.tsx` via `useOpenCaseTab` — reused here instead of a
+ * second, permanently-stale placeholder path. `openCase` also flips
  * `centerView` to `"tabs"` as part of this resolution — a deep link should
  * land you on the case, not the queue.
  *
@@ -58,6 +53,7 @@ export function WorkspaceShell({ initialQueue }: { initialQueue: CaseListRespons
   const searchParams = useSearchParams();
   const openCase = useCaseTabStore((state) => state.openCase);
   const resolvedDeepLink = useRef<string | null>(null);
+  const { openError: deepLinkError, handleOpen: openCaseById } = useOpenCaseTab();
 
   useEffect(() => {
     const caseId = searchParams.get("case");
@@ -70,16 +66,8 @@ export function WorkspaceShell({ initialQueue }: { initialQueue: CaseListRespons
       return;
     }
 
-    const placeholder: CaseListItem = {
-      case_id: caseId,
-      primary_account_id: "",
-      status: "",
-      priority: "",
-      assigned_to: null,
-      updated_at: "",
-    };
-    openCase(placeholder);
-  }, [searchParams, initialQueue, openCase]);
+    void openCaseById(caseId);
+  }, [searchParams, initialQueue, openCase, openCaseById]);
 
   const openTabIds = useCaseTabStore((state) => state.openTabIds);
   const centerView = useCaseTabStore((state) => state.centerView);
@@ -96,6 +84,11 @@ export function WorkspaceShell({ initialQueue }: { initialQueue: CaseListRespons
         <p className="text-muted-foreground text-sm">
           Your case queue — select a case to open it as a tab below.
         </p>
+        {deepLinkError && (
+          <p className="text-destructive mt-1 text-xs" role="alert">
+            Couldn&apos;t open the linked case: {deepLinkError}
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">

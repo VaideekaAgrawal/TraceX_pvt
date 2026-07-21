@@ -159,8 +159,8 @@ export function MonitoringSection({ initialEntries }: { initialEntries: Watchlis
                 value={entityType}
                 onValueChange={(value) => setEntityType(value as WatchEntityTypeValue)}
               >
-                <SelectTrigger size="sm" className="w-40">
-                  <SelectValue />
+                <SelectTrigger size="sm" className="w-40" aria-label="Entity type">
+                  <SelectValue>{(value: WatchEntityTypeValue) => ENTITY_TYPE_LABELS[value]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {WATCH_ENTITY_TYPES.map((t) => (
@@ -173,13 +173,14 @@ export function MonitoringSection({ initialEntries }: { initialEntries: Watchlis
             </FilterField>
             <FilterField label="Customer / account ID">
               <Input
+                aria-label="Customer / account ID"
                 className="w-56"
                 value={entityValue}
                 onChange={(e) => setEntityValue(e.target.value)}
               />
             </FilterField>
             <FilterField label="Reason (optional)">
-              <Input className="w-64" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input aria-label="Reason (optional)" className="w-64" value={reason} onChange={(e) => setReason(e.target.value)} />
             </FilterField>
             <Button type="submit" size="sm" disabled={adding}>
               {adding ? "Adding…" : "Add to watchlist"}

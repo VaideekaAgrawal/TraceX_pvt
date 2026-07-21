@@ -184,8 +184,8 @@ export function EvidencePanel({
         <form onSubmit={handleManualSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-3">
           <FilterField label="Type">
             <Select value={type} onValueChange={(value) => setType(value as EvidenceType)}>
-              <SelectTrigger size="sm" className="w-48">
-                <SelectValue />
+              <SelectTrigger size="sm" className="w-48" aria-label="Evidence type">
+                <SelectValue>{(value: EvidenceType) => TYPE_LABELS[value]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {EVIDENCE_TYPES.map((t) => (
@@ -199,17 +199,18 @@ export function EvidencePanel({
 
           {REF_ID_TYPES.includes(type) && (
             <FilterField label={refIdLabel(type)}>
-              <Input className="w-40" value={refId} onChange={(e) => setRefId(e.target.value)} />
+              <Input aria-label={refIdLabel(type)} className="w-40" value={refId} onChange={(e) => setRefId(e.target.value)} />
             </FilterField>
           )}
 
           <FilterField label="Label (optional)">
-            <Input className="w-48" value={label} onChange={(e) => setLabel(e.target.value)} />
+            <Input aria-label="Label (optional)" className="w-48" value={label} onChange={(e) => setLabel(e.target.value)} />
           </FilterField>
 
           {type === "DOCUMENT" && (
             <FilterField label="Document reference (path/URL text)">
               <Input
+                aria-label="Document reference (path/URL text)"
                 className="w-56"
                 placeholder="e.g. shared-drive/case-123/kyc.pdf"
                 value={filePath}
