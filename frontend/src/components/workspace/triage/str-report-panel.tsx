@@ -235,7 +235,7 @@ export function StrReportPanel({ caseId }: { caseId: string }) {
                       value={reportType}
                       onValueChange={(value) => setReportType(value as ReportTypeValue)}
                     >
-                      <SelectTrigger size="sm" className="w-64">
+                      <SelectTrigger size="sm" className="w-64" aria-label="Report type">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

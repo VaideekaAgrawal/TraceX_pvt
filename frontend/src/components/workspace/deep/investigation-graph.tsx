@@ -442,6 +442,7 @@ export function InvestigationGraphSection({
                   step={1}
                   value={[filters.radius]}
                   onValueChange={(value) => updateFilter("radius", Array.isArray(value) ? value[0] : value)}
+                  aria-label="Radius, in hops"
                   className="flex-1"
                 />
                 <Button
@@ -468,6 +469,7 @@ export function InvestigationGraphSection({
                 onValueChange={(value) =>
                   updateFilter("minRiskScore", String(Array.isArray(value) ? value[0] : value))
                 }
+                aria-label="Minimum risk score"
               />
             </div>
 
@@ -475,6 +477,7 @@ export function InvestigationGraphSection({
               <Input
                 type="number"
                 inputMode="decimal"
+                aria-label="Min amount"
                 className="w-28"
                 value={filters.minAmount}
                 onChange={(e) => updateFilter("minAmount", e.target.value)}
@@ -484,6 +487,7 @@ export function InvestigationGraphSection({
               <Input
                 type="number"
                 inputMode="decimal"
+                aria-label="Max amount"
                 className="w-28"
                 value={filters.maxAmount}
                 onChange={(e) => updateFilter("maxAmount", e.target.value)}
@@ -492,6 +496,7 @@ export function InvestigationGraphSection({
             <FilterField label="From">
               <Input
                 type="date"
+                aria-label="From date"
                 className="w-36"
                 value={filters.start}
                 onChange={(e) => updateFilter("start", e.target.value)}
@@ -500,6 +505,7 @@ export function InvestigationGraphSection({
             <FilterField label="To">
               <Input
                 type="date"
+                aria-label="To date"
                 className="w-36"
                 value={filters.end}
                 onChange={(e) => updateFilter("end", e.target.value)}
@@ -512,7 +518,7 @@ export function InvestigationGraphSection({
                   updateFilter("direction", value === ALL ? "" : (String(value) as "in" | "out"))
                 }
               >
-                <SelectTrigger size="sm" className="w-28">
+                <SelectTrigger size="sm" className="w-28" aria-label="Direction">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

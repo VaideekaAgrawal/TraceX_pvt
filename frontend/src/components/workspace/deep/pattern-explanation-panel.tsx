@@ -82,7 +82,7 @@ export function PatternExplanationSection({ caseId }: { caseId: string }) {
               value={selectedAlertId ?? undefined}
               onValueChange={(value) => setSelectedAlertId(String(value))}
             >
-              <SelectTrigger size="sm" className="w-64">
+              <SelectTrigger size="sm" className="w-64" aria-label="Alert">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

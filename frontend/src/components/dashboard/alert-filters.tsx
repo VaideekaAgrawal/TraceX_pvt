@@ -77,7 +77,7 @@ export function AlertFiltersBar({
           value={filters.status || ALL}
           onValueChange={(value) => set("status", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-32">
+          <SelectTrigger size="sm" className="w-32" aria-label="Status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -96,7 +96,7 @@ export function AlertFiltersBar({
           value={filters.priority || ALL}
           onValueChange={(value) => set("priority", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger size="sm" className="w-28" aria-label="Priority">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -115,7 +115,7 @@ export function AlertFiltersBar({
           value={filters.severity || ALL}
           onValueChange={(value) => set("severity", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-32">
+          <SelectTrigger size="sm" className="w-32" aria-label="Severity">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -134,7 +134,7 @@ export function AlertFiltersBar({
           value={filters.detectionType || ALL}
           onValueChange={(value) => set("detectionType", value === ALL ? "" : String(value))}
         >
-          <SelectTrigger size="sm" className="w-40">
+          <SelectTrigger size="sm" className="w-40" aria-label="Type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -154,6 +154,7 @@ export function AlertFiltersBar({
           inputMode="decimal"
           min={0}
           max={100}
+          aria-label="Min risk"
           className="w-20"
           value={filters.minRiskScore}
           onChange={(e) => set("minRiskScore", e.target.value)}
@@ -166,6 +167,7 @@ export function AlertFiltersBar({
           inputMode="decimal"
           min={0}
           max={100}
+          aria-label="Max risk"
           className="w-20"
           value={filters.maxRiskScore}
           onChange={(e) => set("maxRiskScore", e.target.value)}
@@ -175,6 +177,7 @@ export function AlertFiltersBar({
       <Field label="From">
         <Input
           type="date"
+          aria-label="From date"
           className="w-36"
           value={filters.start}
           onChange={(e) => set("start", e.target.value)}
@@ -184,6 +187,7 @@ export function AlertFiltersBar({
       <Field label="To">
         <Input
           type="date"
+          aria-label="To date"
           className="w-36"
           value={filters.end}
           onChange={(e) => set("end", e.target.value)}
@@ -200,6 +204,7 @@ export function AlertFiltersBar({
             <SelectTrigger
               size="sm"
               className="w-40"
+              aria-label="Assigned to"
               title={
                 filters.unassignedOnly
                   ? "Unset “Unassigned only” to filter by investigator"

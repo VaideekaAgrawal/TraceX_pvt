@@ -108,7 +108,7 @@ export function BulkAssignBar({
             value={investigatorId ?? undefined}
             onValueChange={(value) => setInvestigatorId(value ? String(value) : null)}
           >
-            <SelectTrigger size="sm" className="w-56">
+            <SelectTrigger size="sm" className="w-56" aria-label="Assign selected alerts to">
               <SelectValue placeholder="Assign to…" />
             </SelectTrigger>
             <SelectContent>

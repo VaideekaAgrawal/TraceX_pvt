@@ -326,6 +326,7 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
                   setPlaying(false);
                   setRevealedCount(Array.isArray(value) ? value[0] : value);
                 }}
+                aria-label="Replay scrub position"
                 className="flex-1"
               />
             </div>
@@ -333,7 +334,7 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
             <div className="flex items-center gap-1.5">
               <Label className="text-muted-foreground text-xs font-normal">Speed</Label>
               <Select value={String(speed)} onValueChange={(value) => setSpeed(Number(value))}>
-                <SelectTrigger size="sm" className="w-20">
+                <SelectTrigger size="sm" className="w-20" aria-label="Speed">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

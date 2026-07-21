@@ -92,7 +92,7 @@ export function AssignDialog({
         </DialogHeader>
 
         <Select value={investigatorId ?? undefined} onValueChange={(value) => setInvestigatorId(value ? String(value) : null)}>
-          <SelectTrigger className="w-full">
+          <SelectTrigger className="w-full" aria-label="Investigator">
             <SelectValue placeholder="Select an investigator" />
           </SelectTrigger>
           <SelectContent>
