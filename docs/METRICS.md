@@ -800,6 +800,35 @@ New tests by file: `tests/api/test_reports_routes.py` 12→18 (+6: 409 gating, 4
 
 ---
 
+## 29. Phase 22 — Production polish, accessibility, CI tightening (Session 33) — FRONTEND COMPLETE (Phases 13–22)
+
+First session to run a real browser pass (Playwright + axe-core, set up throwaway in scratch — no Claude-in-Chrome extension available) against this frontend, closing a gap every prior frontend session had flagged as owed.
+
+**CI:** new `.github/workflows/frontend-ci.yml` (npm ci, lint, build, Node 20, no `|| true`) — no frontend CI workflow existed at all post-refactor split (only `backend-ci.yml`); deliberately verified red: introduced a real TS type error in a throwaway file, confirmed `npm run build` exits 1 and reports it, reverted.
+
+**Responsive + accessibility (Playwright + axe-core, 1440p/1920×1080 and 2560×1440, both roles, Login → Dashboard → Workspace → Triage → Deep Investigation → My Center):**
+
+| Pass | Console errors | Axe violations |
+|---|---|---|
+| Initial scan | 0 | button-name (~15 Select/Slider nodes), label (~12 Input nodes), aria-required-parent + nested-interactive (case-tab-bar, 2 nodes), color-contrast (2 nodes/page), scrollable-region-focusable (1 node) |
+| After fixes | 0 | 0, except 1 reviewed-and-accepted false positive (notification-bell badge, `color-contrast` — axe can't resolve effective contrast through a transparent/translucent ancestor chain; screenshot-confirmed legible) |
+
+Root cause of the button-name/label class: `role="combobox"` and range inputs don't get "name from content" credit even when visibly showing text — fixed via `aria-label` (~25 Select/Input/Slider controls across `alert-filters.tsx`, `case-queue.tsx`, `investigation-graph.tsx`, `transaction-explorer.tsx`, `evidence-panel.tsx`, `monitoring-section.tsx`, `graph-replay.tsx`, `pattern-explanation-panel.tsx`, `assign-dialog.tsx`, `bulk-assign-bar.tsx`, `str-report-panel.tsx`, `investigation-timeline.tsx`, `transaction-summary.tsx`), plus threading an `aria-label` prop through the shared `Slider` wrapper via Base UI's `Thumb.getAriaLabel`. `case-tab-bar.tsx`'s `role="tablist"`/`role="tab"` doesn't fit a per-tab close button (axe's required-owned-elements check flags it regardless of wrapper `role="presentation"`) — switched to `role="group"` + `aria-pressed`. `avatar.tsx` fallback-initials contrast (`text-muted-foreground` on `bg-muted`, ~4.3:1) bumped to `text-foreground` (>4.5:1 AA).
+
+**Loading/error/empty-state audit:** all 30+ Phase 14–21 panels checked, no gaps (established `useTriageFetch`/`TriageSection` + local-`useState`/`role="alert"` conventions already cover it). One adjacent real gap found and fixed: `workspace-shell.tsx`'s `?case=` deep-link resolver built a local "Unknown" placeholder tab when the case wasn't in the initial queue page — its blocking dependency (`GET /cases/{case_id}`) has existed since Session 30; switched to the same `useOpenCaseTab` hook already used elsewhere.
+
+**Model governance indicator:** confirmed backend's `GET /model-metrics` (Phase 12) is shipped — this phase's own roadmap dependency line was stale ("not started"). Added `governance-client.ts` + `/api/model-metrics` BFF + `ModelGovernanceIndicator` (`triage-view.tsx`, next to `NetworkRiskSection`). Live-verified via curl+cookie jar: admin `200` with real active-model data, investigator real `403` (not swallowed), unauthenticated `307`.
+
+**Added mid-phase, owner-approved (`AskUserQuestion`), not originally scoped:** every `Select` whose value differs from its label was rendering the raw value (`__all__`, a raw investigator UUID, a bare `alert_id`) instead of the item's text — Base UI's `Select.Value` needs an `items` map or `children` render-prop to resolve a label, which nothing in this codebase wired up. Fixed ~15 Selects with a `children` render-prop each, reusing existing label-lookup functions/arrays per file.
+
+`npm run lint`/`npm run build` (Node 20.20.2) clean throughout, re-verified after every fix batch, not just once.
+
+**Not verified this session:** a live LLM-backed check (no OpenRouter key in this environment, same carried-forward gap as every AI-feature phase since 16).
+
+**🎉 THE FRONTEND IS COMPLETE — Phases 13–22 all done, matching backend's Phases 0–12 completion at Session 29.** Remaining project-wide: the one-time backend-completion `/code-review high` milestone (recommended since Session 29, still not run), and a full manual/exploratory pass before the pitch demo.
+
+---
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
