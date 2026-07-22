@@ -27,8 +27,25 @@ import { TriageSummaryCollapsible } from "@/components/workspace/deep/triage-sum
  *   - the Evidence panel's "bookmark selected transaction/account" quick
  *     actions can read whatever's currently selected in the graph without
  *     any component needing to know about evidence specifically.
+ *
+ * `isActive` (`case-tab-content.tsx`'s `tab.activeView === "deep"`) is
+ * forwarded only to the three cytoscape-based sections (Investigation
+ * Graph, Relationship Explorer, Graph Replay) — this view stays mounted
+ * (keep-alive) even while hidden behind Triage, and each of those graphs'
+ * `fit: true` layout call corrupts computed node positions (not just the
+ * camera) when it runs against a 0-size `display:none` container, so each
+ * one gates/re-runs its layout on this prop rather than running it
+ * unconditionally on mount (see each section's own layout-effect comment).
  */
-export function DeepView({ caseId, accountId }: { caseId: string; accountId: string }) {
+export function DeepView({
+  caseId,
+  accountId,
+  isActive,
+}: {
+  caseId: string;
+  accountId: string;
+  isActive: boolean;
+}) {
   const [selectedTxnId, setSelectedTxnId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
@@ -51,6 +68,7 @@ export function DeepView({ caseId, accountId }: { caseId: string; accountId: str
         onSelectTxn={setSelectedTxnId}
         selectedAccountId={selectedAccountId}
         onSelectAccount={setSelectedAccountId}
+        isActive={isActive}
       />
       <GraphExplanationSection caseId={caseId} accountId={accountId} />
       <InvestigationTimelineSection
@@ -59,8 +77,8 @@ export function DeepView({ caseId, accountId }: { caseId: string; accountId: str
         selectedTxnId={selectedTxnId}
         onSelectTxn={setSelectedTxnId}
       />
-      <GraphReplaySection caseId={caseId} accountId={accountId} />
-      <RelationshipExplorerSection caseId={caseId} />
+      <GraphReplaySection caseId={caseId} accountId={accountId} isActive={isActive} />
+      <RelationshipExplorerSection caseId={caseId} isActive={isActive} />
       <TransactionExplorerSection caseId={caseId} accountId={accountId} />
       <CustomerProfileSection caseId={caseId} accountId={accountId} />
       <BehaviorAnalysisSection caseId={caseId} accountId={accountId} />

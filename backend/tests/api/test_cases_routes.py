@@ -462,6 +462,31 @@ def test_escalate_and_request_info_succeed_for_investigator(
     assert resp.json()["status"] == "AWAITING_REVIEW"
 
 
+def test_request_info_succeeds_from_escalated_for_investigator(
+    client: TestClient, db_sessionmaker: sessionmaker[Session]
+) -> None:
+    """Owner-directed FSM addition (`investigation/fsm.py`'s
+    `ESCALATED -> AWAITING_REVIEW`): an Investigator's own Deep
+    Investigation findings can still produce a recommendation
+    (`request_info`, "Recommend False Positive"/"Recommend Monitoring" in
+    the UI) after escalating a case, not only before -- escalating no
+    longer permanently locks them out of the outcome."""
+    _seed_user(db_sessionmaker, user_id="U_INV", username="inv1")
+    _seed_case(
+        db_sessionmaker, case_id="CASE_ESC_REQ", primary_account_id="A1", account_ids=["A1"],
+        assigned_to="U_INV", status=CaseStatus.ESCALATED,
+    )
+    token = _login(client, "inv1")
+
+    resp = client.post(
+        "/cases/CASE_ESC_REQ/decision",
+        json={"decision": "request_info", "reason": "deep investigation supports FP"},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "AWAITING_REVIEW"
+
+
 def test_network_risk_lazy_fill_then_recompute(
     client: TestClient, db_sessionmaker: sessionmaker[Session]
 ) -> None:
