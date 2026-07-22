@@ -207,7 +207,15 @@ function buildStylesheet(theme: GraphTheme): StylesheetJsonBlock[] {
  * slider manually pauses playback (an explicit seek always wins over the
  * timer).
  */
-export function GraphReplaySection({ caseId, accountId }: { caseId: string; accountId: string }) {
+export function GraphReplaySection({
+  caseId,
+  accountId,
+  isActive,
+}: {
+  caseId: string;
+  accountId: string;
+  isActive: boolean;
+}) {
   const { data, loading, error } = useTriageFetch<TimelineResponse>(
     `/api/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/timeline`,
   );
@@ -263,8 +271,18 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
   }, []);
 
   // Recomputed whenever `revealedEvents` changes — new counterparties can
-  // appear as the scrubber advances, each needing a left/right slot.
+  // appear as the scrubber advances, each needing a left/right slot. Also
+  // gated on/re-run by `isActive` (`case-tab-content.tsx`'s `tab.
+  // activeView === "deep"`, forwarded through `DeepView`) — Triage and
+  // Deep Investigation both stay mounted (keep-alive), so this component
+  // can exist while its container is `display:none` (0x0); `preset`'s own
+  // positions come from `computePositions` (a pure function of the event
+  // data, not the container), but `fit: true` still needs a real container
+  // size to produce a sane camera, so this re-runs once the tab actually
+  // becomes visible rather than relying on whatever `fit` produced against
+  // a 0-size box the first time.
   useEffect(() => {
+    if (!isActive) return;
     const cy = cyInstanceRef.current;
     if (!cy) return;
     cy.layout({
@@ -275,7 +293,7 @@ export function GraphReplaySection({ caseId, accountId }: { caseId: string; acco
       fit: true,
       padding: 30,
     }).run();
-  }, [accountId, revealedEvents]);
+  }, [accountId, revealedEvents, isActive]);
 
   function handlePlayPause() {
     if (!playing && revealedCount >= events.length && events.length > 0) {

@@ -260,6 +260,7 @@ export function InvestigationGraphSection({
   onSelectTxn,
   selectedAccountId,
   onSelectAccount,
+  isActive,
 }: {
   caseId: string;
   accountId: string;
@@ -267,6 +268,7 @@ export function InvestigationGraphSection({
   onSelectTxn: (txnId: string | null) => void;
   selectedAccountId: string | null;
   onSelectAccount: (accountId: string | null) => void;
+  isActive: boolean;
 }) {
   const [filters, setFilters] = useState<GraphFilterState>(DEFAULT_FILTERS);
 
@@ -374,7 +376,23 @@ export function InvestigationGraphSection({
   // same "illegible clump" reason the previous `concentric` layout's
   // `minNodeSpacing` was bumped — a busy multi-hop graph needs generous
   // breathing room to stay legible at this canvas size.
+  // Gated on `isActive` (`case-tab-content.tsx`'s `tab.activeView ===
+  // "deep"`, forwarded through `DeepView`) as well as `data` — Triage and
+  // Deep Investigation are both always mounted (keep-alive `hidden`-class
+  // toggle, not conditional mount), so this component can exist while its
+  // container is `display:none` (0x0). `dagre`'s `fit: true` is baked into
+  // the SAME `.layout().run()` call, not a separate post-hoc camera nicety
+  // — running it against a 0-size container doesn't just mis-fit the
+  // camera, it corrupts the computed node POSITIONS themselves (confirmed
+  // live: every node collapsed onto the same point, rendering as one
+  // oversized blob). Skipping the run entirely until the container is
+  // real, then running it once — not just re-fitting the camera
+  // afterward — is the actual fix; re-running whenever either `data` or
+  // `isActive` changes covers both orderings (data arrives after the tab
+  // is already active, or the tab becomes active after data already
+  // arrived while hidden).
   useEffect(() => {
+    if (!isActive) return;
     const cy = cyInstanceRef.current;
     if (!cy || !data) return;
     cy.layout({
@@ -385,7 +403,7 @@ export function InvestigationGraphSection({
       fit: true,
       animate: false,
     } as unknown as LayoutOptions).run();
-  }, [data]);
+  }, [data, isActive]);
 
   function zoomBy(factor: number) {
     const cy = cyInstanceRef.current;

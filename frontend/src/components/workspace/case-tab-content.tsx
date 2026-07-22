@@ -165,7 +165,7 @@ export function CaseTabContent({ caseId }: { caseId: string }) {
             discard Deep Investigation's own local state (graph filters,
             selected node/edge, transaction explorer scope/pagination, etc.). */}
         <div className={tab.activeView === "deep" ? undefined : "hidden"}>
-          <DeepView caseId={caseId} accountId={tab.summary.primary_account_id} />
+          <DeepView caseId={caseId} accountId={tab.summary.primary_account_id} isActive={tab.activeView === "deep"} />
         </div>
         <div className={tab.activeView === "triage" ? undefined : "hidden"}>
           <TriageView caseId={caseId} accountId={tab.summary.primary_account_id} />

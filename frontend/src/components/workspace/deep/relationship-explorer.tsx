@@ -1,7 +1,7 @@
 "use client";
 
 import type { Core, ElementDefinition, StylesheetJsonBlock } from "cytoscape";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -158,7 +158,13 @@ function nodeName(nodes: RelationshipNode[], customerId: string): string {
  * AND an explicit callout banner above it — deliberately not something an
  * investigator could miss by not noticing one diamond among many circles.
  */
-export function RelationshipExplorerSection({ caseId }: { caseId: string }) {
+export function RelationshipExplorerSection({
+  caseId,
+  isActive,
+}: {
+  caseId: string;
+  isActive: boolean;
+}) {
   const { data, loading, error } = useTriageFetch<RelationshipGraphResponse>(
     `/api/cases/${encodeURIComponent(caseId)}/relationships`,
   );
@@ -179,8 +185,23 @@ export function RelationshipExplorerSection({ caseId }: { caseId: string }) {
     cy.on("tap", (evt) => {
       if (evt.target === cy) setSelectedId(null);
     });
-    cy.layout({ name: "cose", animate: false, fit: true, padding: 30 }).run();
   }, []);
+
+  // Gated on `isActive` (not run inside `handleCyInit` above) for the same
+  // reason as `investigation-graph.tsx`'s identical-shape effect: Triage
+  // and Deep Investigation both stay mounted (keep-alive), so this
+  // component can exist while its container is `display:none` (0x0), and
+  // `fit: true` baked into the SAME `.layout().run()` call corrupts the
+  // computed node positions themselves when run against a 0-size
+  // container, not just the camera — confirmed live as every node
+  // collapsing onto the same point. Re-running whenever either `data` or
+  // `isActive` changes covers both orderings.
+  useEffect(() => {
+    if (!isActive) return;
+    const cy = cyInstanceRef.current;
+    if (!cy || !data) return;
+    cy.layout({ name: "cose", animate: false, fit: true, padding: 30 }).run();
+  }, [data, isActive]);
 
   const outOfScopeNodes = (data?.nodes ?? []).filter((n) => !n.in_case_scope);
   const selectedNode = data?.nodes.find((n) => n.customer_id === selectedId) ?? null;
