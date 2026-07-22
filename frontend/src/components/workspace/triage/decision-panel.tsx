@@ -36,12 +36,21 @@ type SubmitKey =
  * decision value is:
  *
  *   - `escalate` -> `ESCALATED`, legal only from `IN_PROGRESS`, open to any
- *     investigator with case access (or Admin/Compliance).
- *   - `request_info` -> `AWAITING_REVIEW`, legal only from `IN_PROGRESS`.
- *     Not offered as its own literal button — the old "Request More Info"
- *     UI framing was removed entirely. It now only fires under two
- *     Investigator-only UI-framing buttons ("Recommend False Positive" /
- *     "Recommend Monitoring") that submit this same decision value with a
+ *     investigator with case access (or Admin/Compliance). Framed in the UI
+ *     as "Escalate to Compliance for Review" (not "...to Deep
+ *     Investigation" — the Triage/Deep toggle above is already freely
+ *     switchable at any status, escalating was never required to view L2,
+ *     only to hand off final closing authority; the old label misled
+ *     people into thinking they needed it just to look).
+ *   - `request_info` -> `AWAITING_REVIEW`, legal from `IN_PROGRESS` **or**
+ *     `ESCALATED` (`investigation/fsm.py`'s `ESCALATED -> AWAITING_REVIEW`
+ *     addition — owner-directed, found via real usage: an Investigator's
+ *     own Deep Investigation findings should be able to produce a
+ *     recommendation too, not only their pre-escalation read). Not offered
+ *     as its own literal button — the old "Request More Info" UI framing
+ *     was removed entirely. It now only fires under two Investigator-only
+ *     UI-framing buttons ("Recommend False Positive" / "Recommend
+ *     Monitoring") that submit this same decision value with a
  *     distinguishing reason prefix, routing the case into Admin/
  *     Compliance's `AWAITING_REVIEW` queue for a real decision — an
  *     Investigator can never trigger real `close_fp`/`close_monitoring`
@@ -62,13 +71,16 @@ type SubmitKey =
  *     case has reached this exact status.
  *
  * Rendering rules, derived from the above:
- *   - Investigator: "Escalate" / "Recommend False Positive" / "Recommend
- *     Monitoring" shown together only when `status === "IN_PROGRESS"`
- *     (the only status any of their underlying calls are FSM-legal from).
+ *   - Investigator: "Escalate" only when `status === "IN_PROGRESS"` (can't
+ *     escalate an already-escalated case); "Recommend False Positive" /
+ *     "Recommend Monitoring" when `status` is `IN_PROGRESS` **or**
+ *     `ESCALATED` — two independently-gated flags
+ *     (`investigatorCanEscalate`/`investigatorCanRecommend`), not one
+ *     combined flag, so recommending stays available after escalating.
  *     When the case is open but in some other status the investigator
- *     can't act from (`AWAITING_REVIEW`, `ESCALATED`), an informational
- *     message is shown instead of empty/illegal buttons — the case is
- *     legitimately just waiting on someone else right now.
+ *     can't act from at all (`AWAITING_REVIEW`), an informational message
+ *     is shown instead of empty/illegal buttons — the case is legitimately
+ *     just waiting on someone else right now.
  *   - Admin/Compliance: real "Escalate" (`status === "IN_PROGRESS"`, same
  *     as an investigator), real "Monitoring" (`status === "AWAITING_REVIEW"
  *     || "ESCALATED"` — the FSM-legal window, never offered outside it),
@@ -170,7 +182,7 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
       return;
     }
     if (kind === "escalate") {
-      void submit("escalate", trimmedReason, "Case escalated to Deep Investigation.", "escalate");
+      void submit("escalate", trimmedReason, "Case escalated to Compliance for review.", "escalate");
     } else if (kind === "recommend_fp") {
       // UI framing only — still `request_info` under the hood, never
       // `close_fp`, per this panel's docstring.
@@ -210,7 +222,16 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
   }
 
   const canAct = !isClosed && !isReadOnly;
-  const investigatorCanAct = canAct && !isAdmin && status === "IN_PROGRESS";
+  // Split from a single `investigatorCanAct` flag: Escalate only makes
+  // sense from IN_PROGRESS (can't escalate an already-escalated case), but
+  // Recommend False Positive / Recommend Monitoring should also be
+  // available from ESCALATED — see `investigation/fsm.py`'s
+  // `ESCALATED -> AWAITING_REVIEW` addition for why (an Investigator's own
+  // Deep Investigation findings should be able to produce a recommendation
+  // too, not only their pre-escalation L1 read).
+  const investigatorCanEscalate = canAct && !isAdmin && status === "IN_PROGRESS";
+  const investigatorCanRecommend =
+    canAct && !isAdmin && (status === "IN_PROGRESS" || status === "ESCALATED");
   const adminShowEscalate = canAct && isAdmin && status === "IN_PROGRESS";
   const adminShowMonitoring =
     canAct && isAdmin && (status === "AWAITING_REVIEW" || status === "ESCALATED");
@@ -222,7 +243,7 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
     (status === "IN_PROGRESS" || status === "AWAITING_REVIEW" || status === "ESCALATED");
   const adminHasAnyAction =
     adminShowEscalate || adminShowMonitoring || adminShowCloseTp || adminShowCloseFp;
-  const noActionAvailable = canAct && (isAdmin ? !adminHasAnyAction : !investigatorCanAct);
+  const noActionAvailable = canAct && (isAdmin ? !adminHasAnyAction : !investigatorCanRecommend);
 
   return (
     <Card>
@@ -271,15 +292,18 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
             )}
 
             <div className="flex flex-wrap gap-2">
-              {investigatorCanAct && (
+              {investigatorCanEscalate && (
+                <Button
+                  variant="outline"
+                  onClick={() => handleSubmit("escalate")}
+                  disabled={submitting !== null}
+                  title="Hands the case to Admin/Compliance for final sign-off. The Deep Investigation tab above is already viewable any time — you don't need this to look at it."
+                >
+                  {submitting === "escalate" ? "Escalating…" : "Escalate to Compliance for Review"}
+                </Button>
+              )}
+              {investigatorCanRecommend && (
                 <>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleSubmit("escalate")}
-                    disabled={submitting !== null}
-                  >
-                    {submitting === "escalate" ? "Escalating…" : "Escalate to Deep Investigation"}
-                  </Button>
                   <Button
                     variant="outline"
                     onClick={() => handleSubmit("recommend_fp")}
@@ -301,8 +325,9 @@ export function DecisionPanel({ caseId }: { caseId: string }) {
                   variant="outline"
                   onClick={() => handleSubmit("escalate")}
                   disabled={submitting !== null}
+                  title="Hands the case to Admin/Compliance for final sign-off. The Deep Investigation tab above is already viewable any time — you don't need this to look at it."
                 >
-                  {submitting === "escalate" ? "Escalating…" : "Escalate to Deep Investigation"}
+                  {submitting === "escalate" ? "Escalating…" : "Escalate to Compliance for Review"}
                 </Button>
               )}
               {adminShowMonitoring && (

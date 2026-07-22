@@ -39,6 +39,10 @@ def _seed_case(session: Session, *, status: CaseStatus = CaseStatus.NEW) -> str:
         (CaseStatus.ESCALATED, CaseStatus.CLOSED_TP),
         (CaseStatus.ESCALATED, CaseStatus.CLOSED_FP),
         (CaseStatus.ESCALATED, CaseStatus.MONITORING),
+        # Owner-directed addition (see fsm.py's VALID_TRANSITIONS comment):
+        # an Investigator's own Deep Investigation findings can produce a
+        # recommendation (request_info) after escalating, not only before.
+        (CaseStatus.ESCALATED, CaseStatus.AWAITING_REVIEW),
     ],
 )
 def test_every_legal_transition_succeeds(
@@ -68,7 +72,6 @@ def test_every_legal_transition_succeeds(
         (CaseStatus.IN_PROGRESS, CaseStatus.NEW),
         (CaseStatus.AWAITING_REVIEW, CaseStatus.ESCALATED),
         (CaseStatus.ESCALATED, CaseStatus.IN_PROGRESS),
-        (CaseStatus.ESCALATED, CaseStatus.AWAITING_REVIEW),
         (CaseStatus.CLOSED_TP, CaseStatus.IN_PROGRESS),
         (CaseStatus.CLOSED_FP, CaseStatus.MONITORING),
         (CaseStatus.MONITORING, CaseStatus.IN_PROGRESS),

@@ -34,16 +34,30 @@ from db.enums import ActorType, CaseStatus
 from db.models.investigation import Case
 from db.repositories.investigation import CaseRepository, CaseStatusHistoryRepository
 
-#: Legal `from_status -> {to_status, ...}` transitions, taken verbatim from
-#: the ROADMAP Phase 4 plan: "NEW->ASSIGNED->IN_PROGRESS->
+#: Legal `from_status -> {to_status, ...}` transitions, originally taken
+#: verbatim from the ROADMAP Phase 4 plan: "NEW->ASSIGNED->IN_PROGRESS->
 #: {AWAITING_REVIEW,ESCALATED,CLOSED_FP}, AWAITING_REVIEW<->IN_PROGRESS,
-#: AWAITING_REVIEW/ESCALATED->{CLOSED_TP,CLOSED_FP,MONITORING}". Judgment
-#: call: taken literally -- e.g. ESCALATED has no path back to
-#: IN_PROGRESS/AWAITING_REVIEW (escalation is one-directional except to
-#: close/monitor) since the plan doesn't list one, and CLOSED_TP is only
-#: reachable from AWAITING_REVIEW or ESCALATED, not directly from
-#: IN_PROGRESS (a TP verdict implies a review step first) -- not adding
-#: extra transitions beyond what's explicitly specified.
+#: AWAITING_REVIEW/ESCALATED->{CLOSED_TP,CLOSED_FP,MONITORING}". CLOSED_TP
+#: is only reachable from AWAITING_REVIEW or ESCALATED, not directly from
+#: IN_PROGRESS (a TP verdict implies a review step first).
+#:
+#: `ESCALATED -> AWAITING_REVIEW` is a deliberate addition beyond that
+#: original plan (owner-directed, found via real usage): the plan's
+#: literal reading made escalation one-directional except to close/monitor,
+#: which meant an Investigator who escalates a case to unlock Deep
+#: Investigation permanently loses any further say in its outcome the
+#: instant they do -- even though Deep Investigation was always freely
+#: viewable without escalating at all (`workspace`'s Triage/Deep toggle
+#: doesn't gate on status), so escalating was never actually required to
+#: investigate further, only to hand off final authority. This transition
+#: lets an Investigator's `request_info` ("Recommend False Positive" /
+#: "Recommend Monitoring" in the UI) reach Admin/Compliance's review queue
+#: from ESCALATED, not only from IN_PROGRESS -- i.e. after their own deep
+#: investigation, not only before it. Admin/Compliance still has sole
+#: closing authority (`api.routes.cases.make_decision`'s role check on
+#: `close_fp`/`close_tp`/`close_monitoring` is unchanged) -- this only
+#: widens when an Investigator can hand off a recommendation, not who can
+#: act on one.
 VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
     CaseStatus.NEW: {CaseStatus.ASSIGNED},
     CaseStatus.ASSIGNED: {CaseStatus.IN_PROGRESS},
@@ -59,6 +73,7 @@ VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
         CaseStatus.MONITORING,
     },
     CaseStatus.ESCALATED: {
+        CaseStatus.AWAITING_REVIEW,
         CaseStatus.CLOSED_TP,
         CaseStatus.CLOSED_FP,
         CaseStatus.MONITORING,
