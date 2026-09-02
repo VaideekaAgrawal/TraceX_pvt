@@ -1,6 +1,8 @@
 # TraceX — Speaker Notes (5-Minute, 2-Presenter Version)
 
-Companion to the pitch deck (`docs/pptcontent.md` is the *old* pre-refactor hackathon deck — **do not use it**, see the note in `docs/PRESENTATION_PREP_CHECKLIST.md`). This document is for the current **6-slide** deck — compliant with the event's "recommended maximum 6 slides" guideline: Problem → Solution → Architecture → Features & Trust → Results → Impact.
+Companion to the pitch deck (`docs/pptcontent.md` is the *old* pre-refactor hackathon deck — **do not use it**, see the note in `docs/PRESENTATION_PREP_CHECKLIST.md`). This document is for the current **6-slide timed deck** — compliant with the event's "recommended maximum 6 slides" guideline: Problem → Solution → Architecture → Features & Trust → Results → Impact.
+
+**The deck file has 8 slides total, not 6.** Slides 7–8 ("Appendix A1 — Pipeline" and "Appendix A2 — Low-Level Design") are backup material for technical Q&A — a full working-pipeline diagram and a data-model/request-lifecycle diagram — not part of the timed 5-minute run. **Do not present them on stage** unless a judge specifically asks a question deep enough to warrant pulling one up (e.g. "walk me through what happens end to end" → Appendix A1; "what does your data model actually look like" → Appendix A2). Know they exist and roughly what's on them; don't rehearse a script for them.
 
 **Target: finish speaking by 4:14, hard ceiling 5:00.** The architecture slide is dense on purpose — that density is doing work even when you're not narrating every line out loud. Don't try to read the diagram; walk down the five layers top to bottom in one breath, and let the audience *see* the depth. That's what lets a technically rich slide still fit inside 5 minutes.
 
