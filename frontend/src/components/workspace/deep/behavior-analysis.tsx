@@ -49,7 +49,19 @@ function deferredLabel(field: string): string {
  * `customer-profile.tsx`'s `omitted_fields` treatment — one honesty
  * convention across both sections, not two.
  */
-export function BehaviorAnalysisSection({ caseId, accountId }: { caseId: string; accountId: string }) {
+export function BehaviorAnalysisSection({
+  caseId,
+  accountId,
+  isActive,
+}: {
+  caseId: string;
+  accountId: string;
+  /** `false` while this tab's Deep view is CSS-hidden (`display:none`).
+   * Recharts' ResponsiveContainer measures 0x0 in a hidden parent, so the
+   * charts are not mounted until visible — same reason `investigation-
+   * graph.tsx`/`graph-replay.tsx` gate their cytoscape layout on this. */
+  isActive: boolean;
+}) {
   const { data, loading, error } = useTriageFetch<BehaviorAnalysisResponse>(
     `/api/cases/${encodeURIComponent(caseId)}/accounts/${encodeURIComponent(accountId)}/behavior`,
   );
@@ -69,20 +81,22 @@ export function BehaviorAnalysisSection({ caseId, accountId }: { caseId: string;
               <p className="text-muted-foreground text-sm">No monthly activity recorded.</p>
             ) : (
               <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data.monthly_totals} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} width={56} />
-                    <Tooltip
-                      formatter={(value, name) => [`₹${Number(value).toLocaleString()}`, name]}
-                      contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="total_in" name="Total In" fill={IN_COLOR} radius={[2, 2, 0, 0]} />
-                    <Bar dataKey="total_out" name="Total Out" fill={OUT_COLOR} radius={[2, 2, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                {isActive && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data.monthly_totals} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} width={56} />
+                      <Tooltip
+                        formatter={(value, name) => [`₹${Number(value).toLocaleString()}`, name]}
+                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="total_in" name="Total In" fill={IN_COLOR} radius={[2, 2, 0, 0]} />
+                      <Bar dataKey="total_out" name="Total Out" fill={OUT_COLOR} radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             )}
           </div>
@@ -94,18 +108,20 @@ export function BehaviorAnalysisSection({ caseId, accountId }: { caseId: string;
                 <p className="text-muted-foreground text-sm">No branch cash deposits recorded.</p>
               ) : (
                 <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.cash_deposit_trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} width={56} />
-                      <Tooltip
-                        formatter={(value) => [`₹${Number(value).toLocaleString()}`, "Cash deposits"]}
-                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
-                      />
-                      <Bar dataKey="cash_deposit_total" fill={SINGLE_SERIES_COLOR} radius={[2, 2, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {isActive && (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={data.cash_deposit_trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} width={56} />
+                        <Tooltip
+                          formatter={(value) => [`₹${Number(value).toLocaleString()}`, "Cash deposits"]}
+                          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+                        />
+                        <Bar dataKey="cash_deposit_total" fill={SINGLE_SERIES_COLOR} radius={[2, 2, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
               )}
             </div>
@@ -116,18 +132,20 @@ export function BehaviorAnalysisSection({ caseId, accountId }: { caseId: string;
                 <p className="text-muted-foreground text-sm">No transfers recorded.</p>
               ) : (
                 <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.transfer_trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} width={56} />
-                      <Tooltip
-                        formatter={(value) => [`₹${Number(value).toLocaleString()}`, "Transfers"]}
-                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
-                      />
-                      <Bar dataKey="transfer_total" fill={SINGLE_SERIES_COLOR} radius={[2, 2, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {isActive && (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={data.transfer_trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} width={56} />
+                        <Tooltip
+                          formatter={(value) => [`₹${Number(value).toLocaleString()}`, "Transfers"]}
+                          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+                        />
+                        <Bar dataKey="transfer_total" fill={SINGLE_SERIES_COLOR} radius={[2, 2, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
               )}
             </div>
