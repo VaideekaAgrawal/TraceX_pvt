@@ -81,7 +81,7 @@ export function DeepView({
       <RelationshipExplorerSection caseId={caseId} isActive={isActive} />
       <TransactionExplorerSection caseId={caseId} accountId={accountId} />
       <CustomerProfileSection caseId={caseId} accountId={accountId} />
-      <BehaviorAnalysisSection caseId={caseId} accountId={accountId} />
+      <BehaviorAnalysisSection caseId={caseId} accountId={accountId} isActive={isActive} />
       <PatternExplanationSection caseId={caseId} />
       <EvidencePanel caseId={caseId} selectedTxnId={selectedTxnId} selectedAccountId={selectedAccountId} />
     </div>
