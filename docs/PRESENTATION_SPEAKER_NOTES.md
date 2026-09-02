@@ -1,8 +1,8 @@
 # TraceX — Speaker Notes (5-Minute, 2-Presenter Version)
 
-Companion to the pitch deck (`docs/pptcontent.md` is the *old* pre-refactor hackathon deck — **do not use it**, see the note in `docs/PRESENTATION_PREP_CHECKLIST.md`). This document is for the current **7-slide** deck: Problem → Solution → Architecture → Security & Trust → Features → Results → Impact.
+Companion to the pitch deck (`docs/pptcontent.md` is the *old* pre-refactor hackathon deck — **do not use it**, see the note in `docs/PRESENTATION_PREP_CHECKLIST.md`). This document is for the current **6-slide** deck — compliant with the event's "recommended maximum 6 slides" guideline: Problem → Solution → Architecture → Features & Trust → Results → Impact.
 
-**Target: finish speaking by 4:37, hard ceiling 5:00.** The architecture slide is deliberately dense — that density is doing work even when you're not narrating every box out loud. Don't try to read the diagram; say 2–3 sentences while pointing at the numbered path, and let the audience *see* the depth. That's what resolves the tension between "comprehensive" and "5 minutes": the diagram carries more information than you speak.
+**Target: finish speaking by 4:14, hard ceiling 5:00.** The architecture slide is dense on purpose — that density is doing work even when you're not narrating every line out loud. Don't try to read the diagram; walk down the five layers top to bottom in one breath, and let the audience *see* the depth. That's what lets a technically rich slide still fit inside 5 minutes.
 
 This is a **script to internalize, not read verbatim** — say it in your own words once you know the beats.
 
@@ -10,8 +10,8 @@ This is a **script to internalize, not read verbatim** — say it in your own wo
 
 ## Roles for this version
 
-- **Presenter 1** — opens, does Slides 1–2, closes on Slide 7.
-- **Presenter 2** — does Slides 3–6, the technical middle (architecture, security, features, results).
+- **Presenter 1** — opens, does Slides 1–2, closes on Slide 6.
+- **Presenter 2** — does Slides 3–5, the technical middle (architecture, features & trust, results).
 - Whoever is *not* talking drives the deck (arrow keys / dot-nav at the bottom of the artifact).
 
 Fill in real names before you rehearse.
@@ -27,13 +27,12 @@ Fill in real names before you rehearse.
 | 2 | The Solution | 1 | 0:38 | 1:21 |
 | — | Handoff | — | 0:03 | 1:24 |
 | 3 | Architecture | 2 | 0:55 | 2:19 |
-| 4 | Security & Trust | 2 | 0:32 | 2:51 |
-| 5 | Key Features | 2 | 0:28 | 3:19 |
-| 6 | Results | 2 | 0:32 | 3:51 |
-| — | Handoff | — | 0:03 | 3:54 |
-| 7 | Impact + Close | 1 | 0:40 | 4:34 |
+| 4 | Features & Trust | 2 | 0:35 | 2:54 |
+| 5 | Results | 2 | 0:35 | 3:29 |
+| — | Handoff | — | 0:03 | 3:32 |
+| 6 | Impact + Close | 1 | 0:40 | 4:12 |
 
-That lands at 4:34 — inside the event's own 4:30–4:40 guidance, with real margin against the 5:00 hard cap. If you're running long in rehearsal, cut Slide 5 first (see the cut-line at the bottom).
+That lands at 4:12 — comfortably inside the event's 4:30–4:40 guidance, with real margin. Use the slack for breathing room, not extra content — this deck already carries more technical depth per slide than the earlier draft; don't let that tempt you into talking longer.
 
 ---
 
@@ -52,33 +51,28 @@ That lands at 4:34 — inside the event's own 4:30–4:40 guidance, with real ma
 ### Slide 2 — The Solution — Presenter 1
 > "TraceX sits downstream of a bank's existing rules engine — it doesn't replace it, it finishes the job. Three pillars: graph intelligence that traces multi-hop fund flows a flat ledger can't show; dual machine learning, ensemble-scored together; and an AI layer that explains every flagged account in plain language and learns from every investigator decision. A pilot needs nothing more than a CSV export."
 
-*Cue: sweep across the three pillar cards. Note the small proof line under each card — that's your evidence if a judge interrupts here.*
+*Cue: sweep across the three pillar cards. The small proof line under each card is your evidence if a judge interrupts here.*
 
 **Handoff (Presenter 1 → 2):** "I'll hand it over to [Name] to walk through how it's actually built."
 
 ### Slide 3 — Architecture — Presenter 2
-> "Under the hood, this is three domain layers over one shared platform — follow the numbers. A request comes in through our gateway, where authentication and access control are enforced on every one of thirteen route modules — not most, every one. It fans out to Detection — six typology detectors plus our ML ensemble — Investigation, and AI Orchestration, all backed by one audited database. The one thing to remember: our AI layer never invents a number — every claim has to cite a fact our own code computed, or it's dropped before an investigator sees it. And only that AI layer ever leaves the deployment boundary — through a gate we've watched reject bad output live."
+> "This is a layered design, five tiers top to bottom. A request comes in through our gateway, where authentication and access control are enforced on every one of thirteen route modules — not most, every one. That calls into three peer services: Detection, with six typology detectors and our ML ensemble; Investigation, running the case lifecycle end to end; and AI Orchestration. All three sit on one shared platform and one audited database. The one thing to remember: our AI layer never invents a number — every claim has to cite a fact our own code computed, or it's dropped before an investigator sees it. And it's the only layer that ever leaves our Kubernetes deployment boundary — through a gate we've watched reject bad output live."
 
-*Cue: this is your one "serious engineering" beat. Point at badges ①→⑥ in sequence as you go — you don't need to read a single chip in the diagram out loud, the density is doing the convincing.*
+*Cue: trace your hand straight down the stack, layer by layer, as you speak — you don't need to read a single line inside any band out loud. The clean layout is what makes that legible from the back of the room.*
 
-### Slide 4 — Security & Trust — Presenter 2
-> "And this isn't just built to work — it's built to survive scrutiny. Two roles enforced server-side, not just hidden in the UI — we tested a direct API bypass and got back a real permission error. Every AI claim is validated before display, not just prompted to be accurate. And we didn't hope there were no race conditions — we went looking: two simultaneous requests to create the same case both come back successful, and exactly one case row exists in the database."
+### Slide 4 — Features & Trust — Presenter 2
+> "On top of that: a case-scoped graph explorer, one explained network risk score, AI-grounded recommendations anchored to FATF and RBI guidance, a cross-case copilot that never lets personal data reach the model, and one-click STR generation. And this is built to survive scrutiny, not just work in a demo — role-based access enforced server-side, a SHA-256 audit chain, and we went looking for race conditions instead of hoping there weren't any."
 
-*Cue: pick 2–3 of the six tiles to say out loud (RBAC, grounding, concurrency are the strongest); the other three are there for anyone reading the deck afterward, or for Q&A.*
+*Cue: brisk delivery across the first five tiles, then land slightly slower on the sixth ("Security & Audit") — that's your credibility tile, let it breathe for half a second.*
 
-### Slide 5 — Key Features — Presenter 2
-> "On top of that: a case-scoped graph explorer, one explained network risk score, AI-grounded explanations, a thirteen-action recommendation engine anchored to FATF and RBI guidance, a cross-case copilot that never lets personal data reach the model, and one-click STR generation — narrative to a SHA-256-hashed PDF."
-
-*Cue: fast slide, brisk delivery — this is a "we thought of everything" beat.*
-
-### Slide 6 — Results — Presenter 2
+### Slide 5 — Results — Presenter 2
 > "This isn't a mockup. Over five million real transactions ingested, zero skipped. Seven hundred twenty-six tests passing at ninety-seven-point-seven percent coverage. Our model scores point-seven-seven-eight AUC-ROC — real signal on a genuinely hard, imbalanced problem. And we watched the guardrails work live, not just in a test file."
 
 *Cue: if a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
 
 **Handoff (Presenter 2 → 1):** "Back to [Name] to close."
 
-### Slide 7 — Impact + Close — Presenter 1
+### Slide 6 — Impact + Close — Presenter 1
 > "TraceX maps directly onto PMLA, FIU-IND's STR format, RBI's AML and KYC directions, and FATF's recommendations. Built bottom-up from published RBI institution counts, the serviceable Indian market alone is worth about one hundred fourteen crore rupees a year — and because FATF's framework is global, this exports, the same path Clari5 took to fifteen-plus countries before being acquired by Perfios earlier this year. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
 
 *Cue: land on "thank you," stop talking, hold eye contact.*
@@ -87,9 +81,9 @@ That lands at 4:34 — inside the event's own 4:30–4:40 guidance, with real ma
 
 ## If you're running over: the cut order
 
-1. **Cut Slide 5 (Features) first** — say "we've built a full feature set here, happy to walk through it in Q&A" and advance past it. Saves ~30 seconds cleanly.
-2. **Trim Slide 4 (Security) to one sentence** — RBAC + grounding gate only, drop the concurrency line. Saves ~15 seconds.
-3. Do **not** cut Slide 3 (Architecture) or Slide 6 (Results) — those are your two strongest evidence slides for a technical audience.
+1. **Trim Slide 4 (Features & Trust) to three tiles** — say "the rest is on the slide" and move on. Saves ~10 seconds.
+2. **Shorten the architecture walk-through** — name only Gateway, the three services, and the PII gate; skip the platform/database layers verbally (they're still visible on the slide). Saves ~15 seconds.
+3. Do **not** cut Slide 5 (Results) — it's your strongest evidence slide for a technical audience, and it's already the shortest.
 
 ## Delivery reminders (from the event's own guidelines)
 
