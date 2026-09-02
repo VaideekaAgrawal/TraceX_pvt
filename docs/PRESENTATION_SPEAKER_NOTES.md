@@ -44,12 +44,12 @@ That lands at 4:12 — comfortably inside the event's 4:30–4:40 guidance, with
 *Cue: say this while Slide 1 is already up.*
 
 ### Slide 1 — The Problem — Presenter 1
-> "Banks don't have an alert problem — they have a resolution problem. A single detection run on real transaction data produced almost forty-five thousand alerts. Industry-wide, ninety to ninety-five percent of AML alerts turn out to be false positives, so real laundering cases hide inside that noise — and sophisticated launderers know it, structuring transactions just below the ten-lakh reporting threshold to stay invisible."
+> "Static rules can't see the graph, and investigators can't clear what's left. A single detection run of ours on real transaction data found almost forty-five thousand suspicious accounts. Industry-wide, ninety to ninety-five percent of AML alerts turn out to be false positives, so real laundering cases hide inside that noise — and sophisticated launderers know it, structuring transactions just below the ten-lakh reporting threshold specifically because a row-by-row rule engine can't see the pattern across accounts."
 
-*Cue: gesture at the diagram's three boxes converging on "Risk Goes Undetected."*
+*Cue: gesture at the diagram's three boxes converging on "Risk Goes Undetected." Say "a detection run of ours" clearly — this is TraceX's own output, not alerts fed in from somewhere else.*
 
 ### Slide 2 — The Solution — Presenter 1
-> "TraceX sits downstream of a bank's existing rules engine — it doesn't replace it, it finishes the job. Three pillars: graph intelligence that traces multi-hop fund flows a flat ledger can't show; dual machine learning, ensemble-scored together; and an AI layer that explains every flagged account in plain language and learns from every investigator decision. A pilot needs nothing more than a CSV export."
+> "TraceX both detects and investigates. It finds the pattern first — tracing the transaction graph itself to catch multi-hop layering, circular flows and mule networks a flat rule engine can't see — using a dual ML engine underneath. Then it investigates: every AI explanation is cited against a computed fact and validated before display, and a learning queue adapts from every investigator decision. It can run standalone from a raw ledger, or sit alongside a bank's existing rules engine — either way, a pilot needs nothing more than a CSV export."
 
 *Cue: sweep across the three pillar cards. The small proof line under each card is your evidence if a judge interrupts here.*
 
