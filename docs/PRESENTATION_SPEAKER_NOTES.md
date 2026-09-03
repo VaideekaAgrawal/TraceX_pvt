@@ -25,14 +25,16 @@ Fill in real names before you rehearse.
 | # | Slide | Presenter | Target | Cumulative |
 |---|-------|-----------|--------|------------|
 | — | Intro | 1 | 0:10 | 0:10 |
-| 1 | The Problem | 1 | 0:40 | 0:50 |
-| 2 | The Solution | 1 | 0:38 | 1:28 |
-| — | Handoff | — | 0:03 | 1:31 |
-| 3 | Architecture | 2 | 0:55 | 2:26 |
-| 4 | Features & Trust | 2 | 0:35 | 3:01 |
-| 5 | Results | 2 | 0:35 | 3:36 |
-| — | Handoff | — | 0:03 | 3:39 |
-| 6 | Impact + Close | 1 | 0:48 | 4:27 |
+| 1 | The Problem | 1 | 0:38 | 0:48 |
+| 2 | The Solution | 1 | 0:36 | 1:24 |
+| — | Handoff | — | 0:03 | 1:27 |
+| 3 | Architecture | 2 | 0:52 | 2:19 |
+| 4 | Features & Trust | 2 | 0:33 | 2:52 |
+| 5 | Results | 2 | 0:47 | 3:39 |
+| — | Handoff | — | 0:03 | 3:42 |
+| 6 | Impact + Close | 1 | 0:46 | 4:28 |
+
+This version has essentially zero slack (4:28, right at the event's upper bound) — treat the per-slide targets above as firm, not approximate, and rehearse against a stopwatch before assuming it fits. If you're consistently over in rehearsal, use the cut order below rather than speeding up.
 
 That lands at 4:27 — right in the event's 4:30–4:40 target band. There's almost no slack left, so this version needs an actual timed rehearsal, not a guess — if you're consistently over, cut per the "running over" section below rather than trimming on the fly.
 
@@ -68,9 +70,9 @@ That lands at 4:27 — right in the event's 4:30–4:40 target band. There's alm
 *Cue: brisk delivery across the first five tiles, then land slightly slower on the sixth ("Security & Audit") — that's your credibility tile, let it breathe for half a second.*
 
 ### Slide 5 — Results — Presenter 2
-> "Two kinds of proof — technical and business. Technically: fifty-six percent more predictive than random, on the full public IBM benchmark; five million transactions, zero pipeline failures; seven hundred twenty-six tests at ninety-seven-point-seven percent coverage; guardrails verified live. On the business side: AI inference runs seven to ten cents a call, measured — which is why margin holds near ninety-six percent at scale, and a pilot needs nothing more than a CSV export."
+> "Four things prove this actually solves the problem. False positives: an account is only flagged when pattern, graph, and ML signals converge — not one model's opinion — which is why we hit fifty-six percent more predictive than random on the full public benchmark. Time: L1 triage is built around a fifteen-to-thirty-minute decision, with everything pre-assembled on one screen. Coverage: this runs its own six-detector, dual-ML detection engine end to end — it doesn't need an existing AML system to work. And it learns: every investigator verdict updates rule confidence and re-ranks the queue, so it gets sharper with use, not just its explanations."
 
-*Cue: this slide is deliberately split into two labeled columns — say "technical" and "business" out loud as you cross from one to the other, so the split reads as intentional, not just a layout choice. "Fifty-six percent more predictive than random" is still the number to land clearest. If a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
+*Cue: the small chip strip above these four rows (transaction count, test coverage, AUC-ROC, "verified live") is your fallback if you need to cite a raw number fast in Q&A — you don't need to read it aloud here, it's there for the room to see. "Fifty-six percent more predictive than random" is still the number to land clearest. If a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
 
 **Handoff (Presenter 2 → 1):** "Back to [Name] to close."
 
@@ -85,7 +87,7 @@ That lands at 4:27 — right in the event's 4:30–4:40 target band. There's alm
 
 1. **Trim Slide 4 (Features & Trust) to three tiles** — say "the rest is on the slide" and move on. Saves ~10 seconds.
 2. **Shorten the architecture walk-through** — name only Gateway, the three services, and the PII gate; skip the platform/database layers verbally (they're still visible on the slide). Saves ~15 seconds.
-3. Do **not** cut Slide 5 (Results) — it's your strongest evidence slide for a technical audience, and it's already the shortest.
+3. Do **not** cut Slide 5 (Results) — the four rows are your direct answer to "how did this actually solve the problem," which is the hardest question in the room to leave unaddressed.
 
 ## Delivery reminders (from the event's own guidelines)
 
