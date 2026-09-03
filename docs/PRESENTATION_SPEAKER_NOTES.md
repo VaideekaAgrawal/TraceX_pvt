@@ -68,14 +68,14 @@ That lands at 4:27 — right in the event's 4:30–4:40 target band. There's alm
 *Cue: brisk delivery across the first five tiles, then land slightly slower on the sixth ("Security & Audit") — that's your credibility tile, let it breathe for half a second.*
 
 ### Slide 5 — Results — Presenter 2
-> "This isn't a mockup. Over five million real transactions processed end to end, zero skipped, flagging almost forty-five thousand accounts automatically. Seven hundred twenty-six tests passing at ninety-seven-point-seven percent coverage. And our model is fifty-six percent more predictive than random guessing, on a genuinely hard, needle-in-haystack problem. We watched the guardrails work live, too — not just in a test file."
+> "Two kinds of proof — technical and business. Technically: fifty-six percent more predictive than random, on the full public IBM benchmark; five million transactions, zero pipeline failures; seven hundred twenty-six tests at ninety-seven-point-seven percent coverage; guardrails verified live. On the business side: AI inference runs seven to ten cents a call, measured — which is why margin holds near ninety-six percent at scale, and a pilot needs nothing more than a CSV export."
 
-*Cue: "fifty-six percent more predictive than random" is the number to land clearly — it's a much stronger soundbite than the raw 0.778 AUC-ROC on the slide. If a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
+*Cue: this slide is deliberately split into two labeled columns — say "technical" and "business" out loud as you cross from one to the other, so the split reads as intentional, not just a layout choice. "Fifty-six percent more predictive than random" is still the number to land clearest. If a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
 
 **Handoff (Presenter 2 → 1):** "Back to [Name] to close."
 
 ### Slide 6 — Impact + Close — Presenter 1
-> "Four things to take away. Faster investigation — pre-assembled facts and one-click reporting replace hours of manual evidence work. Deeper detection — six typology detectors plus dual ML catch what row-by-row rules miss. A real market — bottom-up from RBI institution counts, about one hundred fourteen crore rupees a year, with an export path Clari5 already proved before its Perfios acquisition. And deployable now — private-cloud SaaS, a three-week pilot from a CSV export. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
+> "Four things to take away. Faster investigation — pre-assembled facts and one-click reporting replace hours of manual evidence work. Deeper detection — six typology detectors plus dual ML catch what row-by-row rules miss. Reduced compliance exposure — this is exactly the gap behind RBI's fifty-four crore rupees in FY25 penalties. And a proven commercial path — a real market, a three-week pilot, and an export precedent Clari5 already proved before its Perfios acquisition. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
 
 *Cue: land on "thank you," stop talking, hold eye contact. If tight on time, drop the "private-cloud SaaS" clause — it's still on the slide for anyone reading afterward.*
 
