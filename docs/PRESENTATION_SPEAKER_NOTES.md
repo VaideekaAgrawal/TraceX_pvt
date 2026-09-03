@@ -25,16 +25,16 @@ Fill in real names before you rehearse.
 | # | Slide | Presenter | Target | Cumulative |
 |---|-------|-----------|--------|------------|
 | — | Intro | 1 | 0:10 | 0:10 |
-| 1 | The Problem | 1 | 0:33 | 0:43 |
-| 2 | The Solution | 1 | 0:38 | 1:21 |
-| — | Handoff | — | 0:03 | 1:24 |
-| 3 | Architecture | 2 | 0:55 | 2:19 |
-| 4 | Features & Trust | 2 | 0:35 | 2:54 |
-| 5 | Results | 2 | 0:35 | 3:29 |
-| — | Handoff | — | 0:03 | 3:32 |
-| 6 | Impact + Close | 1 | 0:40 | 4:12 |
+| 1 | The Problem | 1 | 0:40 | 0:50 |
+| 2 | The Solution | 1 | 0:38 | 1:28 |
+| — | Handoff | — | 0:03 | 1:31 |
+| 3 | Architecture | 2 | 0:55 | 2:26 |
+| 4 | Features & Trust | 2 | 0:35 | 3:01 |
+| 5 | Results | 2 | 0:35 | 3:36 |
+| — | Handoff | — | 0:03 | 3:39 |
+| 6 | Impact + Close | 1 | 0:48 | 4:27 |
 
-That lands at 4:12 — comfortably inside the event's 4:30–4:40 guidance, with real margin. Use the slack for breathing room, not extra content — this deck already carries more technical depth per slide than the earlier draft; don't let that tempt you into talking longer.
+That lands at 4:27 — right in the event's 4:30–4:40 target band. There's almost no slack left, so this version needs an actual timed rehearsal, not a guess — if you're consistently over, cut per the "running over" section below rather than trimming on the fly.
 
 ---
 
@@ -46,12 +46,12 @@ That lands at 4:12 — comfortably inside the event's 4:30–4:40 guidance, with
 *Cue: say this while Slide 1 is already up.*
 
 ### Slide 1 — The Problem — Presenter 1
-> "Static rules can't see the graph, and investigators can't clear what's left. A single detection run of ours on real transaction data found almost forty-five thousand suspicious accounts. Industry-wide, ninety to ninety-five percent of AML alerts turn out to be false positives, so real laundering cases hide inside that noise — and sophisticated launderers know it, structuring transactions just below the ten-lakh reporting threshold specifically because a row-by-row rule engine can't see the pattern across accounts."
+> "Static rules can't see the graph, and investigators can't clear what's left. Banks are legally required under PMLA 2002 to both detect and report suspicious activity — RBI issued fifty-four crore rupees in penalties last year alone. A single detection run of ours on real transaction data found almost forty-five thousand suspicious accounts. Industry-wide, ninety to ninety-five percent of AML alerts turn out to be false positives — and sophisticated launderers know it, structuring transactions just below the ten-lakh threshold specifically because a row-by-row rule engine can't see the pattern across accounts."
 
-*Cue: gesture at the diagram's three boxes converging on "Risk Goes Undetected." Say "a detection run of ours" clearly — this is TraceX's own output, not alerts fed in from somewhere else.*
+*Cue: gesture at the two boxes — Detection Gap, Investigation Gap — converging on "Undetected. Unresolved. Unreported." Say "a detection run of ours" clearly — this is TraceX's own output, not alerts fed in from somewhere else. If tight on time, cut the RBI-penalty clause — the chip row above the diagram carries that stat visually.*
 
 ### Slide 2 — The Solution — Presenter 1
-> "TraceX both detects and investigates. It finds the pattern first — tracing the transaction graph itself to catch multi-hop layering, circular flows and mule networks a flat rule engine can't see — using a dual ML engine underneath. Then it investigates: every AI explanation is cited against a computed fact and validated before display, and a learning queue adapts from every investigator decision. It can run standalone from a raw ledger, or sit alongside a bank's existing rules engine — either way, a pilot needs nothing more than a CSV export."
+> "TraceX both detects and investigates. On detection: six typology detectors — layering, round-trip, structuring, dormancy, profile mismatch, mule networks — plus a dual ML ensemble, reasoning over the live transaction graph. On investigation: a fifteen-to-thirty-minute triage, escalating to full deep-dive exploration when needed. Every AI explanation is cited against a computed fact and validated before display — never invented — with a learning queue that adapts from every verdict. A pilot needs nothing more than a CSV export."
 
 *Cue: sweep across the three pillar cards. The small proof line under each card is your evidence if a judge interrupts here.*
 
@@ -75,9 +75,9 @@ That lands at 4:12 — comfortably inside the event's 4:30–4:40 guidance, with
 **Handoff (Presenter 2 → 1):** "Back to [Name] to close."
 
 ### Slide 6 — Impact + Close — Presenter 1
-> "TraceX maps directly onto PMLA, FIU-IND's STR format, RBI's AML and KYC directions, and FATF's recommendations. Built bottom-up from published RBI institution counts, the serviceable Indian market alone is worth about one hundred fourteen crore rupees a year — and because FATF's framework is global, this exports, the same path Clari5 took to fifteen-plus countries before being acquired by Perfios earlier this year. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
+> "TraceX maps directly onto PMLA, FIU-IND's STR format, RBI's AML and KYC directions, and FATF's recommendations. Built bottom-up from published RBI institution counts, the serviceable Indian market alone is worth about one hundred fourteen crore rupees a year. It deploys as private-cloud SaaS inside a bank's own cloud account — their data never leaves custody — and because FATF's framework is global, this exports, the same path Clari5 took to fifteen-plus countries before being acquired by Perfios earlier this year. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
 
-*Cue: land on "thank you," stop talking, hold eye contact.*
+*Cue: land on "thank you," stop talking, hold eye contact. If tight on time, drop the "private-cloud SaaS" clause — it's still on the slide for anyone reading afterward.*
 
 ---
 
