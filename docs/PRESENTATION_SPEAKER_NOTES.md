@@ -68,14 +68,14 @@ That lands at 4:27 — right in the event's 4:30–4:40 target band. There's alm
 *Cue: brisk delivery across the first five tiles, then land slightly slower on the sixth ("Security & Audit") — that's your credibility tile, let it breathe for half a second.*
 
 ### Slide 5 — Results — Presenter 2
-> "This isn't a mockup. Over five million real transactions ingested, zero skipped. Seven hundred twenty-six tests passing at ninety-seven-point-seven percent coverage. Our model scores point-seven-seven-eight AUC-ROC — real signal on a genuinely hard, imbalanced problem. And we watched the guardrails work live, not just in a test file."
+> "This isn't a mockup. Over five million real transactions processed end to end, zero skipped, flagging almost forty-five thousand accounts automatically. Seven hundred twenty-six tests passing at ninety-seven-point-seven percent coverage. And our model is fifty-six percent more predictive than random guessing, on a genuinely hard, needle-in-haystack problem. We watched the guardrails work live, too — not just in a test file."
 
-*Cue: if a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
+*Cue: "fifty-six percent more predictive than random" is the number to land clearly — it's a much stronger soundbite than the raw 0.778 AUC-ROC on the slide. If a judge later asks "why is your precision only 25%," you already told them the honest framing here first. See `docs/QNA_JUDGES.md`.*
 
 **Handoff (Presenter 2 → 1):** "Back to [Name] to close."
 
 ### Slide 6 — Impact + Close — Presenter 1
-> "TraceX maps directly onto PMLA, FIU-IND's STR format, RBI's AML and KYC directions, and FATF's recommendations. Built bottom-up from published RBI institution counts, the serviceable Indian market alone is worth about one hundred fourteen crore rupees a year. It deploys as private-cloud SaaS inside a bank's own cloud account — their data never leaves custody — and because FATF's framework is global, this exports, the same path Clari5 took to fifteen-plus countries before being acquired by Perfios earlier this year. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
+> "Four things to take away. Faster investigation — pre-assembled facts and one-click reporting replace hours of manual evidence work. Deeper detection — six typology detectors plus dual ML catch what row-by-row rules miss. A real market — bottom-up from RBI institution counts, about one hundred fourteen crore rupees a year, with an export path Clari5 already proved before its Perfios acquisition. And deployable now — private-cloud SaaS, a three-week pilot from a CSV export. TraceX turns a flood of alerts into a trail no launderer can hide from — built end-to-end, tested at scale, and ready to pilot. Thank you."
 
 *Cue: land on "thank you," stop talking, hold eye contact. If tight on time, drop the "private-cloud SaaS" clause — it's still on the slide for anyone reading afterward.*
 
