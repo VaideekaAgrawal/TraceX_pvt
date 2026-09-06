@@ -829,6 +829,57 @@ Root cause of the button-name/label class: `role="combobox"` and range inputs do
 
 ---
 
+## 30. Story-level demo: live-verified AI latencies & grounding-gate rejection rate (Session 34, 2026-09-05)
+
+Measured against a running backend (`uvicorn`, port 8001) on `data/tracex_demo_live.db`
+reset from the committed pitch DB, hero case `CASE-20260718-13F5F994`, model
+`anthropic/claude-sonnet-4.5` via OpenRouter. These are the first end-to-end
+latency numbers recorded for the three AI surfaces on a real case.
+
+| Surface | Endpoint | Result | Latency | Iterations |
+|---|---|---|---|---|
+| Recommendations | `POST /cases/{id}/recommendations` | 200 — 2 accepted, 2 rejected | **126.3s** | 6 |
+| Cross-question | `POST /cases/{id}/recommendations/challenge` | 200 — `answered: false` | **76.2s** | 5 |
+| STR generation | `POST /cases/{id}/reports` | 201 — `DRAFT` | **113.1s** | — |
+| Escalate / close / finalize / submit | `POST /decision`, `/finalize`, `/submit` | 200 | <0.05s | — |
+| Triage read panels | snapshot / money-flow / network-risk / similar-cases | 200 | <0.02s | — |
+
+**These are agentic loops, not single calls** (`orchestration/agent_loop.py`,
+`_DEFAULT_MAX_ITERATIONS = 12`, `_TIMEOUT_SECONDS = 30.0` per call), and **no
+result is cached** — every request re-runs the loop. Consequence recorded in
+`docs/DEMO_SCRIPT.md`: the AI panels cannot be demoed generating live.
+
+### Grounding-gate rejection rate (same case, same model)
+
+| Surface | Attempts | Rejected | Rejection cause |
+|---|---|---|---|
+| Recommendations | 4 produced | **2 (50%)** | ungrounded number not in any cited fact (`137.11`; `4,771,733.37`) |
+| Cross-question | 5 phrasings | **4 (80%)** | ungrounded number (`0.37`, `0.999`, `0.9937`, `11.0`) — all similarity scores or velocity ratios |
+
+Every rejection was the same failure mode: the model volunteering a statistic it
+could not trace to a fact the tool layer computed. The one challenge phrasing that
+passed explicitly forbids statistics ("In plain words, and without quoting any
+statistics or scores…"), which suppresses the behaviour that trips the gate. This
+is the gate working as designed — recorded here because the **rate** matters for
+demo planning, and because an 80% rejection rate on free-text challenges is a real
+usability signal for the Copilot/challenge surface, not just a demo footnote.
+
+Accepted recommendations on this case: `APPLY_ENHANCED_DUE_DILIGENCE`
+(confidence 0.743, 8 cited facts) and `FILE_STR` (confidence 0.743, **14 cited
+facts**, citing risk 87.42, four similar historical cases all closed
+`TRUE_POSITIVE_SAR`, the ₹9,43,912.50 pre-round-trip cash deposit, 38.6% circular
+return, 1 sanctioned entity, network risk 24.0).
+
+### Voiceover render (`scripts/make_voiceover.py`)
+
+| Metric | Value |
+|---|---|
+| Engine / voice | `edge-tts` (free, no key) / `en-IN-PrabhatNeural`, base rate +36% |
+| Script length | 402 words, 12 blocks |
+| Spoken content | **179.6s** against a 180.0s budget |
+| Assembled track | 186.9s (5 blocks overrun their slot by 0.5–1.9s) |
+| Hard-spliced silence | 9.7s (down from 24.1s in the first, robotic-sounding pass) |
+
 ## How to keep this file current
 
 - Any session that trains a model, runs the detection pipeline, changes CI, adds/removes tests, or re-ingests data: add or update the relevant row here before ending the session (part of `/session-end`).
