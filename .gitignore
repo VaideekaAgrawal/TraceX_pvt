@@ -51,3 +51,15 @@ data/reports/
 
 # throwaway demo DB (date-shifted for live demos) — never commit
 data/tracex_demo_live.db
+
+# Rendered demo voiceover audio. The WAVs (~60MB) are a build artifact —
+# regenerate with `scripts/make_voiceover.py`, which holds the script text and
+# is the real source of truth. The MP3s ARE committed (~8MB total): they're the
+# actual take the demo video is cut against, and whoever edits the video needs
+# the exact audio we timed, not a re-render that could drift by a few hundred ms.
+data/voiceover/*.wav
+data/voiceover/.tmp/
+
+# Voiceover TTS tooling venv (edge-tts). Local build tool, not app code —
+# recreate with: python3 -m venv .venv-tts && .venv-tts/bin/pip install edge-tts
+.venv-tts/
