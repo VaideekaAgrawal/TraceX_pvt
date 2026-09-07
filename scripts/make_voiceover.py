@@ -425,7 +425,7 @@ BLOCKS_FULL: list[Block] = [
     ),
 ]
 
-#: INVESTOR cut (`docs/DEMO_VOICEOVER_V2.md`), rendered to a 255s / 4:15 budget.
+#: INVESTOR cut (`docs/DEMO_VOICEOVER_V2.md`), rendered to a 239s / 3:59 budget.
 #:
 #: The V2 markdown's own timing table is an UNRENDERED estimate and is wrong by
 #: roughly 40%: its 1,022 words need ~6:50 at a natural 150wpm, not the 4:45 it
@@ -796,7 +796,7 @@ def main() -> int:
     ap.add_argument("--cut", choices=("full", "story", "v2"), default="full",
                     help="full: every built surface named (12 beats, dense). "
                          "story: the original 10-beat cut, more room to breathe. "
-                         "v2: the investor cut (docs/DEMO_VOICEOVER_V2.md), 14 beats / 255s")
+                         "v2: the investor cut (docs/DEMO_VOICEOVER_V2.md), 12 beats / 239s")
     ap.add_argument("--seg-gap", type=float, default=0.16,
                     help="baseline silence inserted between segments, seconds. "
                          "Segments are silence-trimmed first, so this is the "
