@@ -425,6 +425,156 @@ BLOCKS_FULL: list[Block] = [
     ),
 ]
 
+#: INVESTOR cut (`docs/DEMO_VOICEOVER_V2.md`), rendered to a 255s / 4:15 budget.
+#:
+#: The V2 markdown's own timing table is an UNRENDERED estimate and is wrong by
+#: roughly 40%: its 1,022 words need ~6:50 at a natural 150wpm, not the 4:45 it
+#: claims (it says so itself -- "not yet measured against a rendered track").
+#: These blocks are that script compressed to fit, using V2's own trim-priority
+#: list and honouring its "never cut" set (the contrast, the money, the AI
+#: challenge exchange, the last two lines of the close).
+#:
+#: Three deviations from the V2 markdown, all forced by what the reset database
+#: actually contains -- verified against `data/tracex_demo_live.db`:
+#:   1. The cold open's watchlist SCREEN VISIT is cut (V2 trim option 5). The
+#:      `watchlist` table is empty after `prep_demo_live.py`, so there is no
+#:      panel to cut to. The spoken value beat is kept; nothing claims a screen.
+#:   2. The network-risk `[VERIFY]` number is NOT spoken. The real value is 24.0,
+#:      which lands as an anticlimax straight after "eighty-seven" even though it
+#:      is near the top of this dataset. The panel's actual reasons are narrated
+#:      instead -- 1 sanctioned entity, 1 cycle, 2 high-centrality accounts,
+#:      straight out of `cases.network_risk_reasons`.
+#:   3. The similar-cases line is REWRITTEN. V2 says "one turned out to be
+#:      legitimate"; the real top-5 for this case is 4x TRUE_POSITIVE_SAR plus
+#:      1x ENHANCED_MONITORING, all round_trip, with no false positive anywhere
+#:      in it. The V2 wording would have been a false statement on camera.
+BLOCKS_V2: list[Block] = [
+    Block(
+        "01-cold-open", "0:00", 20.0,
+        "Alert queue, full list, risk/confidence badges. Cursor idle, then the top row",
+        [
+            Seg("Every morning, this ledger throws up thousands of transactions. This queue is what's left.",
+                rate=-2, pitch=5, volume=3),
+            Seg("Not sorted by time — sorted by risk. Then reshuffled by a system that has watched every case my team has closed.", rate=-2, pitch=2, pause=0.47),
+            Seg("False alarms sink. Confirmed frauds rise. And this one was right at the top.", rate=-10, pitch=6, volume=4),
+        ],
+    ),
+    Block(
+        "02-three-systems", "0:20", 29.0,
+        "Click top alert; case opens; Alert Summary + confidence badge, then the network-risk panel beside it",
+        [
+            Seg("A round-trip alert. Risk score: eighty-seven. Confidence... very strong.", rate=-8, pitch=4, pause=0.61),
+            Seg("And that isn't one model's opinion. A machine-learning model, a rules engine, a network analysis engine — all three agreed.", rate=0, pitch=2, pause=0.54),
+            Seg("And a second score asks a different question: not is this account suspicious, but is it inside a suspicious web?", rate=-4, pitch=7, volume=3, pause=0.47),
+            Seg("One sanctioned entity. A closed cycle. Two accounts everything routes through.", rate=-16, pitch=-4, volume=2),
+        ],
+    ),
+    Block(
+        "03-the-contrast", "0:49", 30.0,
+        "Customer Snapshot -- Continental Logistics, then scroll to Suresh Bansal. PROTECTED BEAT -- the emotional core",
+        [
+            Seg("Two accounts.", rate=-16, pitch=5, volume=5, pause=0.68),
+            Seg("The first is Continental Logistics — a corporate customer, four crore declared income, KYC verified, medium risk. Nothing about this account asks for my attention.",
+                rate=6, pitch=-8, volume=-9, pause=2.10),
+            Seg("But the second one... does.", rate=-26, pitch=11, volume=9, pause=1.95),
+            Seg("Suresh Bansal. Retired. Declared income — one lakh, fifty thousand rupees. His KYC was rejected... and he is on a sanctions list.",
+                rate=-16, pitch=6, volume=4),
+        ],
+    ),
+    Block(
+        "04-pattern-explanation", "1:19", 11.0,
+        "Pattern-explanation panel -- the 'why was this flagged' text",
+        [
+            Seg("Before I open a single transaction, the system has already written why it flagged this — in plain words, not a score.",
+                rate=-2, pitch=6, volume=3, pause=0.54),
+            Seg("I didn't need to be a data scientist to trust that.", rate=-12, pitch=-3),
+        ],
+    ),
+    Block(
+        "05-similar-cases", "1:30", 14.0,
+        "Triage panel -> Similar Historical Cases card, top-3 expanded",
+        [
+            Seg("And I'm not looking at this cold. It pulls up the closest cases we've already closed.", rate=-2, pitch=5, volume=3, pause=0.47),
+            Seg("Four of them were filed as confirmed reports. One was kept under monitoring.", rate=-8, pitch=4, pause=0.61),
+            Seg("Not one of them was dismissed.", rate=-24, pitch=-6, volume=4),
+        ],
+    ),
+    Block(
+        "06-the-money", "1:44", 31.0,
+        "Money Flow -- the 2025 seed payment, then the 21 June cluster, then the AI account explanation beside it. PROTECTED BEAT",
+        [
+            Seg("So here's what actually passed between them. Last June, Suresh sent the company fifty thousand rupees. One payment.",
+                rate=-2, pitch=-3, volume=-6, pause=0.47),
+            Seg("Then nothing... for a year.", rate=-22, pitch=-9, volume=-7, pause=2.05),
+            Seg("And then, on the twenty-first of June — in fifteen hours — the company sent it back. Six transfers, five lakh each.",
+                rate=4, pitch=7, volume=3, pause=0.68),
+            Seg("Thirty lakh rupees.", rate=-30, pitch=14, volume=10, pause=1.76),
+            Seg("Sixty times what went out... into the account of a retired man who declares one and a half lakh a year.", rate=-14, pitch=-4, volume=2),
+        ],
+    ),
+    Block(
+        "07-how-it-moved", "2:15", 19.0,
+        "Transaction rows, channel column; then the branch-cash transfers",
+        [
+            Seg("How did it move? N E F T... I M P S... U P I... R T G S.",
+                rate=-12, pitch=4, pause=0.61),
+            Seg("Rotated every three hours — no single rail sees everything.", rate=-6, pitch=7, volume=4, pause=0.54),
+            Seg("And five cash transfers, each just under the ten lakh threshold.", rate=-14, pitch=-4, volume=2),
+        ],
+    ),
+    Block(
+        "08-graph-explanation", "2:34", 13.0,
+        "Toggle to Deep view; Investigation Graph, the cycle visible, replay running",
+        [
+            Seg("The graph makes it visual. Money out, money back — through a sanctioned counterparty.", rate=-6, pitch=6, volume=3, pause=0.61),
+            Seg("And I can replay the whole fifteen hours, in order. This is the timeline a regulator will ask for.", rate=-8, pitch=3),
+        ],
+    ),
+    Block(
+        "09-ai-copilot", "2:47", 29.0,
+        "AI widget -> Recommendations (PRE-GENERATED). Two accepted, open the rejected toggle, then the challenge box. PROTECTED BEAT",
+        [
+            Seg("This is where it stops being a dashboard.",
+                rate=-6, pitch=8, volume=5, pause=0.54),
+            Seg("It tells me what to do next — and which rule says so. F A T F Recommendation ten. The P M L A.", rate=-6, pitch=3, pause=0.61),
+            Seg("And two more it threw away itself — the numbers didn't check out.", rate=-4, pitch=-6, volume=-5, pause=0.81),
+            Seg("And I can argue with it. Why isn't this an ordinary business refund?", rate=-6, pitch=9, volume=5, pause=0.74),
+            Seg("It answers from this case's facts... or not at all. An AI that proves what it says, or says nothing.",
+                rate=-16, pitch=4, volume=3),
+        ],
+    ),
+    Block(
+        "10-escalate", "3:16", 12.0,
+        "Decision panel -> Escalate to Compliance, reason typed, submit",
+        [
+            Seg("I've seen enough. I escalate.", rate=-2, pitch=7, volume=5, pause=0.68),
+            Seg("And here's what a bank asks about first: I cannot close this case. I investigate — someone else decides.",
+                rate=-14, pitch=-4, volume=2),
+        ],
+    ),
+    Block(
+        "11-compliance-str", "3:28", 14.0,
+        "Compliance window; close as true positive; STR generate, finalize, submit",
+        [
+            Seg("Compliance confirms it — and only now does the report unlock.", rate=-4, pitch=6, volume=3, pause=0.54),
+            Seg("F I U India format, written from the case. Every claim cited to a number the system computed.", rate=-6, pitch=2, pause=0.61),
+            Seg("Not one the model invented.", rate=-26, pitch=-7, volume=-2),
+        ],
+    ),
+    Block(
+        "12-close", "3:42", 17.0,
+        "MONTAGE -- the filed report. Hold still, no cursor movement",
+        [
+            Seg("Alert... to filed report. What took half a day across four systems took a fraction of that.",
+                rate=-4, pitch=5, volume=3, pause=0.61),
+            Seg("Fewer false alarms. Faster investigations. And a report that holds up when someone asks how we knew.",
+                rate=-8, pitch=4, volume=3, pause=0.94),
+            Seg("Every rupee leaves a trail.", rate=-28, pitch=-5, volume=5),
+        ],
+    ),
+]
+
+
 #: Which cut `main()` renders; set from --cut.
 BLOCKS: list[Block] = BLOCKS_FULL
 
@@ -531,6 +681,33 @@ def synth_elevenlabs(text: str, out_wav: Path, voice_id: str) -> None:
 # ── assembly ─────────────────────────────────────────────────────────────────
 
 
+def trim_edges(path: Path) -> None:
+    """Strip the leading/trailing near-silence every TTS request wraps its audio
+    in, in place.
+
+    Each `Seg` is its own request, so concatenating them stacks one chunk's
+    trailing pad against the next one's leading pad. That dead air between
+    phrases is what reads as an abrupt stop-start rather than a person
+    breathing: the words end, nothing happens, then a new phrase begins on an
+    unrelated pitch. Trimming both ends lets `render_block` insert the exact
+    gap it wants instead of the exact gap the model happened to leave."""
+    tmp = path.with_suffix(".trim.wav")
+    filt = (
+        "silenceremove=start_periods=1:start_silence=0:start_threshold=-45dB:detection=peak,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_silence=0:start_threshold=-45dB:detection=peak,"
+        "areverse"
+    )
+    _run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
+          "-af", filt, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", str(tmp)])
+    # A segment that trims to nothing means the threshold ate real speech --
+    # keep the original rather than silently dropping a line.
+    if tmp.exists() and tmp.stat().st_size > 2000:
+        tmp.replace(path)
+    else:
+        tmp.unlink(missing_ok=True)
+
+
 def wav_duration(path: Path) -> float:
     with wave.open(str(path)) as w:
         return w.getnframes() / float(w.getframerate())
@@ -567,11 +744,18 @@ def render_block(block: Block, args: argparse.Namespace, tmp: Path) -> Path:
             synth_openai(sg.text, seg, args.voice)
         else:
             synth_elevenlabs(sg.text, seg, args.voice)
+        trim_edges(seg)
         parts.append(seg)
-        if sg.pause > 0:
-            sil = tmp / f"{block.key}_sil{i}.wav"
-            silence(sg.pause, sil)
-            parts.append(sil)
+        # Every join gets a real, deliberate gap. `--seg-gap` is the breath
+        # between phrases of the same thought; `pause` adds the dramatic
+        # silences on top. Without this the trimmed chunks butt together and
+        # the read gabbles.
+        gap = args.seg_gap + sg.pause
+        if i < len(block.parts) - 1 or sg.pause > 0:
+            if gap > 0.01:
+                sil = tmp / f"{block.key}_sil{i}.wav"
+                silence(gap, sil)
+                parts.append(sil)
 
     out = OUT_DIR / f"{block.key}.wav"
     concat(parts, out, tmp)
@@ -609,9 +793,18 @@ def main() -> int:
     ap.add_argument("--rate", type=int, default=155, help="say only: words per minute")
     ap.add_argument("--list-voices", action="store_true", help="list macOS English voices and exit")
     ap.add_argument("--dry-run", action="store_true", help="print the timing budget, synthesize nothing")
-    ap.add_argument("--cut", choices=("full", "story"), default="full",
+    ap.add_argument("--cut", choices=("full", "story", "v2"), default="full",
                     help="full: every built surface named (12 beats, dense). "
-                         "story: the original 10-beat cut, more room to breathe")
+                         "story: the original 10-beat cut, more room to breathe. "
+                         "v2: the investor cut (docs/DEMO_VOICEOVER_V2.md), 14 beats / 255s")
+    ap.add_argument("--seg-gap", type=float, default=0.16,
+                    help="baseline silence inserted between segments, seconds. "
+                         "Segments are silence-trimmed first, so this is the "
+                         "ONLY gap between phrases; `pause` stacks on top.")
+    ap.add_argument("--out-dir", default=None,
+                    help="output directory (default: data/voiceover, or "
+                         "data/voiceover-v2 when --cut v2). Set explicitly to "
+                         "avoid overwriting an existing rendered take.")
     ap.add_argument("--no-pad", action="store_true",
                     help="don't pad blocks to their target length (breaks timecode alignment)")
     args = ap.parse_args()
@@ -625,8 +818,20 @@ def main() -> int:
             subprocess.run("say -v '?' | grep -E 'en_(US|GB|IN|AU)'", shell=True)
         return 0
 
-    global BLOCKS
-    BLOCKS = BLOCKS_FULL if args.cut == "full" else BLOCKS_STORY
+    global BLOCKS, OUT_DIR
+    BLOCKS = {"full": BLOCKS_FULL, "story": BLOCKS_STORY, "v2": BLOCKS_V2}[args.cut]
+
+    # A v2 render defaults to its OWN directory: data/voiceover holds the
+    # verified V1 take, and re-rendering over it would destroy the only audio
+    # that matches a checked script.
+    if args.out_dir:
+        # Must be absolute: `concat()` writes each part's path into an
+        # ffmpeg listing file, and ffmpeg resolves relative entries against
+        # the LISTING's directory, not the cwd -- a relative --out-dir
+        # doubles the prefix and every render fails to open its own parts.
+        OUT_DIR = Path(args.out_dir).resolve()
+    elif args.cut == "v2":
+        OUT_DIR = REPO / "data" / "voiceover-v2"
 
     total_words = sum(b.words for b in BLOCKS)
     total_target = sum(b.target_s for b in BLOCKS)

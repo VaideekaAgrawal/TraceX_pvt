@@ -1,0 +1,23 @@
+Every day, this bank's ledger produces thousands of transactions. This queue is what's left — sorted by risk, then reshuffled by a system that's learned from every case my team has closed. False alarms sink. Confirmed frauds rise. And if an account's already being watched, a new alert on it jumps straight to the top.
+
+And sitting at the top this morning: a round-trip alert. Risk score EIGHTY-SEVEN… confidence VERY strong — three systems agree: a machine-learning model, a rules engine, a network analysis engine. One system flagging something, I can ignore. Three agreeing, I act on — a regulator can't wave that away. There's a second score too — twenty-four out of a hundred, driven by a sanctioned entity and a closed cycle in the network.
+
+Two accounts. The first is Continental Logistics — a corporate customer, four CRORE declared income, KYC verified. Nothing here asks for my attention.
+
+The second one DOES. Suresh Bansal. RETIRED. One lakh fifty thousand rupees a year. KYC REJECTED. On a SANCTIONS list.
+
+Before I open a transaction, the system's already written down why — in plain English, not a score. I didn't need to be a data scientist to trust that — neither will the analyst who inherits this case after me. Similar closed cases were filed as confirmed reports, four out of five. Not ONE was dismissed.
+
+Here's what actually passed between them. Last June, Suresh sent the company fifty thousand rupees… then nothing, for a year. On the twenty-first of June, in FIFTEEN HOURS, the company sent it back — six transfers, five lakh each… THIRTY LAKH rupees. Sixty times what went out. And the system's already written this up in plain English — the same explanation whether it's read by me, a new hire, or an auditor months from now.
+
+And look at how it moved — N. E. F. T. I. M. P. S. U. P. I. R. T. G. S… rotated every three hours so no single rail sees it all — plus five cash transfers, each just under the reporting threshold.
+
+The graph makes it visual — money out, money back, through a sanctioned counterparty. I can replay the same fifteen hours in order — the exact timeline a regulator will ask for.
+
+This is where it stops being a dashboard. It tells me what to do next — and it threw away two other recommendations because the numbers didn't check out. I can question it too — why isn't this a business refund? It answers only from THIS case's facts, or says nothing. For a bank, that's the whole point: proof, not guesses.
+
+I escalate. Here's what a bank asks first: I can't close this case myself — I investigate, someone else decides. Compliance confirms it — only then does the report unlock… every claim cited to a number the system computed, not invented.
+
+Alert… to filed report. One ranked queue that's learned what a false alarm looks like. Three systems agreeing before I ever look. An AI that only speaks when it can prove it. And a trail nobody has to reconstruct by hand.
+What used to take half a day across four systems just took a fraction of that. For a bank, that's not a better dashboard — that's fewer false alarms, faster investigations, and a report that holds up when someone asks how we knew.
+
