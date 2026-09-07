@@ -1,0 +1,370 @@
+Slide 1 — COVER
+
+TraceX
+
+From suspicious signals to defensible decisions.
+
+AI-powered AML Detection & Investigation Intelligence
+
+Union Bank of India × iDEA 2.0
+PSB Hackathon Winner | Global Fintech Festival ’26
+
+Every rupee leaves a trail. TraceX makes it impossible to hide.
+
+Vaideeka Agrawal
+
+⸻
+
+Slide 2 — THE PROBLEM
+
+AML generates alerts. The real challenge is resolving them.
+
+Banks already monitor millions of transactions.
+But sophisticated financial crime can hide across patterns, relationships and multiple hops.
+
+What gets missed?
+
+ISOLATED TRANSACTIONS
+A suspicious transaction can look normal on its own.
+
+HIDDEN NETWORKS
+Layering, mule accounts and circular movement span multiple accounts.
+
+EVOLVING PATTERNS
+New typologies can emerge faster than static rules are updated.
+
+INVESTIGATION OVERLOAD
+Thousands of alerts still require analysts to manually connect the dots.
+
+THE GAP
+
+Detection without context creates alerts.
+Investigation without intelligence creates workload.
+
+⸻
+
+Slide 3 — THE BIG IDEA
+
+What if the AML system could detect, investigate — and learn?
+
+TraceX creates a continuous intelligence loop:
+
+DETECT
+Find suspicious behaviour using rules, ML and graph signals.
+
+↓
+
+PRIORITISE
+Rank alerts based on risk, network context and learned investigator outcomes.
+
+↓
+
+INVESTIGATE
+Trace money flows, relationships and multi-hop activity.
+
+↓
+
+EXPLAIN
+Turn evidence into a clear, grounded investigation narrative.
+
+↓
+
+DECIDE
+Recommend: False Positive • Monitor • Escalate • Report
+
+↓
+
+LEARN
+Investigator feedback improves future prioritisation and helps surface evolving patterns.
+
+Bottom line:
+
+Every investigation makes the next investigation smarter.
+
+⸻
+
+Slide 4 — THE DETECTION ENGINE
+
+Detection that goes beyond rules.
+
+TraceX combines multiple signals to identify suspicious activity:
+
+TRANSACTION INTELLIGENCE
+
+Behavioural anomalies, velocity, amounts, dormancy and structuring patterns.
+
+MACHINE LEARNING
+
+Isolation Forest + XGBoost identify anomalous and risk-bearing behaviour beyond simple thresholds.
+
+GRAPH INTELLIGENCE
+
+Connect accounts, customers and transactions to uncover multi-hop flows, cycles and hidden relationships.
+
+TYPOLOGY SIGNALS
+
+Layering • Structuring • Dormancy • Profile mismatch • Round-trip flows
+
+⸻
+
+THE DIFFERENCE
+
+Rules ask:
+“Did this transaction cross a threshold?”
+
+TraceX asks:
+“Does this behaviour, in this network, form a suspicious pattern?”
+
+⸻
+
+Slide 5 — THE LEARNING LOOP
+
+AML patterns evolve. TraceX evolves with them.
+
+Investigator feedback becomes intelligence.
+
+ALERT
+
+TraceX identifies a suspicious pattern.
+
+↓
+
+INVESTIGATOR REVIEW
+
+True Positive / False Positive / Monitor / Escalate
+
+↓
+
+FEEDBACK SIGNAL
+
+The system learns which signals are producing useful investigations.
+
+↓
+
+ADAPTIVE PRIORITISATION
+
+Future alerts are re-ranked using investigator outcomes.
+
+↓
+
+NEW PATTERNS
+
+Emerging behaviours and network structures can be surfaced for review and future detection logic.
+
+Key message:
+
+The system doesn’t just generate alerts.
+It learns from the people who investigate them.
+
+Investigator feedback is used as a learning signal — not as an automatic replacement for compliance judgment.
+
+⸻
+
+Slide 6 — ONE ALERT. COMPLETE INVESTIGATION.
+
+From a suspicious signal to a defensible case.
+
+01 — DETECT
+
+Identify anomalous behaviour and suspicious patterns.
+
+02 — PRIORITISE
+
+Bring the highest-value cases to investigators first.
+
+03 — TRACE
+
+Follow money across accounts, transactions and relationships.
+
+04 — UNDERSTAND
+
+Combine customer profile, transaction history and network context.
+
+05 — EXPLAIN
+
+AI generates a grounded narrative from verified system facts.
+
+06 — DECIDE
+
+Recommend the next action with supporting evidence.
+
+07 — REPORT
+
+Generate an integrity-protected investigation record.
+
+Closing line:
+
+TraceX connects the entire journey — from signal detection to final decision.
+
+⸻
+
+Slide 7 — THE WOW MOMENT
+
+A transaction is a row. Financial crime is a network.
+
+Traditional view
+
+A → B → C → D
+
+Four transactions.
+Four rows.
+Limited context.
+
+TraceX view
+
+A → B → C → D → A
+
+A connected network revealing:
+
+LAYERING
+Funds moving through multiple hops.
+
+CIRCULAR FLOWS
+Money returning to its origin.
+
+MULE NETWORKS
+Accounts acting as intermediaries.
+
+HIDDEN RELATIONSHIPS
+Customers connected through shared attributes.
+
+Bottom:
+
+The suspicious transaction is often not the crime.
+The network around it is the evidence.
+
+⸻
+
+Slide 8 — TRUSTED AI + BUSINESS VALUE
+
+AI that accelerates investigators — without taking control away.
+
+GROUNDED
+
+AI can only explain verified system facts.
+
+No fact → No claim.
+
+CONTROLLED
+
+Case scope, permissions and PII boundaries are enforced outside the model.
+
+The AI cannot decide what it is allowed to access.
+
+AUDITABLE
+
+Investigation actions and AI interactions leave an auditable trail.
+
+Every decision can be reviewed.
+
+⸻
+
+What this means for the bank
+
+HIGHER PRODUCTIVITY
+Less manual evidence gathering.
+
+BETTER PRIORITISATION
+Investigator feedback continuously improves case ranking.
+
+MORE CONSISTENT INVESTIGATIONS
+Standardised evidence and narratives.
+
+STRONGER CONTROL
+Traceable decisions with role-based access and auditability.
+
+⸻
+
+Slide 9 — PROOF + BUSINESS MODEL
+
+Built beyond the demo.
+
+Scale tested
+
+5.08M
+Benchmark transactions processed
+
+44,790
+Alerts generated
+
+726
+Backend tests passing
+
+97.7%
+Test coverage
+
+⸻
+
+LOW-FRICTION ADOPTION
+
+START
+3-week pilot using anonymised alert + transaction exports
+
+↓
+
+CALIBRATE
+Historical cases + investigator feedback
+
+↓
+
+DEPLOY
+Private cloud / on-premise
+
+↓
+
+EXPAND
+Enterprise AML investigation & intelligence layer
+
+Commercial model
+
+Pilot → Annual platform licence → Enterprise expansion
+
+Complement the existing AML stack.
+Do not force the bank to replace it.
+
+⸻
+
+Slide 10 — DEMO + CLOSE
+
+Let’s follow one alert.
+
+DEMO FLOW
+
+DETECT
+Suspicious pattern identified
+
+→ PRIORITISE
+Why this alert matters
+
+→ INVESTIGATE
+Customer + transactions + network
+
+→ TRACE
+Follow the money across multiple hops
+
+→ EXPLAIN
+AI-generated grounded narrative
+
+→ RECOMMEND
+Suggested investigator action
+
+→ REPORT
+Evidence-backed investigation outcome
+
+→ LEARN
+Investigator feedback improves future prioritisation
+
+⸻
+
+Detection finds the signal.
+
+Investigation finds the story.
+
+Feedback makes the system smarter.
+
+TraceX
+
+Investigate better. Decide faster. Learn continuously.
+
+Union Bank of India × iDEA 2.0
+PSB Hackathon Winner | Global Fintech Festival ’26
